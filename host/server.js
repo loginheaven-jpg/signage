@@ -518,21 +518,53 @@ function broadcastToAdmins(msg) {
 
 function getSiteSchedule(siteId) {
   const now = new Date();
-  const entries = scheduleData.entries.filter(e => {
+  const rawEntries = scheduleData.entries.filter(e => {
     if (e.siteId !== siteId) return false;
     if (!e.enabled) return false;
     if (e.validFrom && new Date(e.validFrom) > now) return false;
     if (e.validTo && new Date(e.validTo) < now) return false;
     return true;
   });
+
+  // 클라이언트 플레이어가 이해할 수 있는 형식으로 변환
+  // 호스트 편성표: file1, file2, file1Mime, file2Mime, layoutType, duration, audio, transition
+  // 클라이언트 기대: entries[].{ url, filename, mimeType, duration, sound, active }
+  const entries = [];
+  for (const e of rawEntries) {
+    if (e.file1) {
+      entries.push({
+        filename: e.file1,
+        url: `/uploads/${e.file1}`,
+        mimeType: e.file1Mime || 'image/jpeg',
+        duration: e.duration || 10,
+        sound: e.audio || 'none',
+        transition: e.transition || 'fade',
+        layoutType: e.layoutType || 'independent',
+        active: true
+      });
+    }
+    // 독립 모드일 때 file2도 별도 항목으로 추가
+    if (e.file2 && e.layoutType === 'independent') {
+      entries.push({
+        filename: e.file2,
+        url: `/uploads/${e.file2}`,
+        mimeType: e.file2Mime || 'image/jpeg',
+        duration: e.duration || 10,
+        sound: e.audio || 'none',
+        transition: e.transition || 'fade',
+        layoutType: 'independent',
+        active: true
+      });
+    }
+  }
   return { version: scheduleData.version, entries };
 }
 
 function pushScheduleToAllClients() {
   let count = 0;
   clients.forEach((info) => {
-    if (info.ws.readyState === WebSocket.OPEN) {
-      const schedule = info.siteId ? getSiteSchedule(info.siteId) : scheduleData;
+    if (info.ws.readyState === WebSocket.OPEN && info.approved) {
+      const schedule = info.siteId ? getSiteSchedule(info.siteId) : { version: scheduleData.version, entries: [] };
       info.ws.send(JSON.stringify({ type: 'schedule_update', schedule }));
       count++;
     }

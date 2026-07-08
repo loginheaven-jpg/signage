@@ -139,7 +139,11 @@ function playNext(entries) {
     }
   }
 
-  const url = entry.url || (entry.filename ? `${hostUrl}/uploads/${entry.filename}` : '');
+  // url이 상대경로(/uploads/...)이면 hostUrl 프리픽스 추가
+  let url = entry.url || (entry.filename ? `/uploads/${entry.filename}` : '');
+  if (url && url.startsWith('/') && hostUrl) {
+    url = hostUrl + url;
+  }
   if (!url) {
     playNext(entries);
     return;
