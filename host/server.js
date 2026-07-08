@@ -213,12 +213,31 @@ app.delete('/api/sites/:id', (req, res) => {
 
 // ─── 클라이언트 API ────────────────────────────────────
 
+// 승인된 클라이언트 목록 (영구 저장)
+const APPROVED_FILE = path.join(DATA_DIR, 'approved-clients.json');
+let approvedClients = {}; // clientId -> { name, siteId, approvedAt }
+
+function loadApproved() {
+  try {
+    if (fs.existsSync(APPROVED_FILE)) {
+      approvedClients = JSON.parse(fs.readFileSync(APPROVED_FILE, 'utf8'));
+      console.log(`[Clients] 승인 목록 로드: ${Object.keys(approvedClients).length}개`);
+    }
+  } catch (e) { approvedClients = {}; }
+}
+function saveApproved() {
+  try { fs.writeFileSync(APPROVED_FILE, JSON.stringify(approvedClients, null, 2)); } catch (e) {}
+}
+loadApproved();
+
 app.get('/api/clients', (req, res) => {
   const list = [];
   clients.forEach((info, id) => {
+    const isApproved = !!approvedClients[id];
     list.push({
       id, name: info.name, monitors: info.monitors,
-      siteId: info.siteId || null,
+      siteId: info.siteId || (approvedClients[id]?.siteId) || null,
+      approved: isApproved,
       status: info.ws.readyState === WebSocket.OPEN ? 'online' : 'offline',
       lastSeen: info.lastSeen,
       scheduleVersion: info.scheduleVersion || 0,
@@ -228,11 +247,58 @@ app.get('/api/clients', (req, res) => {
   res.json(list);
 });
 
+// 클라이언트 승인
+app.post('/api/clients/:id/approve', (req, res) => {
+  const { siteId } = req.body;
+  const client = clients.get(req.params.id);
+  if (!client) return res.status(404).json({ error: '클라이언트를 찾을 수 없습니다.' });
+
+  client.siteId = siteId || null;
+  approvedClients[req.params.id] = {
+    name: client.name,
+    siteId: siteId || null,
+    approvedAt: new Date().toISOString()
+  };
+  saveApproved();
+
+  // 클라이언트에 승인 메시지 전송
+  if (client.ws.readyState === WebSocket.OPEN) {
+    client.ws.send(JSON.stringify({ type: 'approved', siteId: siteId || null }));
+    // 편성표도 즉시 전송
+    if (siteId) {
+      const siteSchedule = getSiteSchedule(siteId);
+      client.ws.send(JSON.stringify({ type: 'schedule_update', schedule: siteSchedule }));
+    }
+  }
+
+  broadcastToAdmins({ type: 'client_update' });
+  console.log(`[Clients] 승인: ${client.name} (${req.params.id}) → 사이트: ${siteId || '미지정'}`);
+  res.json({ success: true });
+});
+
+// 클라이언트 거부 (등록 해제)
+app.post('/api/clients/:id/reject', (req, res) => {
+  const client = clients.get(req.params.id);
+  if (client && client.ws.readyState === WebSocket.OPEN) {
+    client.ws.send(JSON.stringify({ type: 'rejected' }));
+  }
+  delete approvedClients[req.params.id];
+  saveApproved();
+  clients.delete(req.params.id);
+  broadcastToAdmins({ type: 'client_update' });
+  console.log(`[Clients] 거부/삭제: ${req.params.id}`);
+  res.json({ success: true });
+});
+
 app.put('/api/clients/:id/site', (req, res) => {
   const { siteId } = req.body;
   const client = clients.get(req.params.id);
   if (!client) return res.status(404).json({ error: '클라이언트를 찾을 수 없습니다.' });
   client.siteId = siteId;
+  if (approvedClients[req.params.id]) {
+    approvedClients[req.params.id].siteId = siteId;
+    saveApproved();
+  }
   broadcastToAdmins({ type: 'client_update' });
   if (siteId && client.ws.readyState === WebSocket.OPEN) {
     const siteSchedule = getSiteSchedule(siteId);
@@ -367,24 +433,33 @@ wss.on('connection', (ws) => {
         const siteId = msg.siteId || null;
         const scheduleVersion = msg.scheduleVersion || 0;
 
+        // 이전 승인 여부 확인
+        const wasApproved = !!approvedClients[clientId];
+        const assignedSiteId = wasApproved ? (approvedClients[clientId].siteId || siteId) : siteId;
+
         clients.set(clientId, {
-          ws, name: clientName, monitors, siteId,
+          ws, name: clientName, monitors, siteId: assignedSiteId,
           lastSeen: new Date().toISOString(),
-          scheduleVersion, currentPlaying: null
+          scheduleVersion, currentPlaying: null,
+          approved: wasApproved
         });
 
         ws.send(JSON.stringify({ type: 'registered', clientId, name: clientName, message: '호스트에 등록되었습니다.' }));
-        console.log(`[WS] 클라이언트 등록: ${clientName} (${clientId}), 모니터: ${monitors}대, 사이트: ${siteId || '미지정'}`);
+        console.log(`[WS] 클라이언트 등록: ${clientName} (${clientId}), 모니터: ${monitors}대, 사이트: ${assignedSiteId || '미지정'}, 승인: ${wasApproved}`);
 
-        // 편성표 푸시
-        if (siteId) {
-          const siteSchedule = getSiteSchedule(siteId);
-          if (siteSchedule.entries.length > 0 && scheduleVersion < scheduleData.version) {
-            ws.send(JSON.stringify({ type: 'schedule_update', schedule: siteSchedule }));
+        // 승인된 클라이언트면 즉시 approved + 편성표 전송
+        if (wasApproved) {
+          ws.send(JSON.stringify({ type: 'approved', siteId: assignedSiteId }));
+          if (assignedSiteId) {
+            const siteSchedule = getSiteSchedule(assignedSiteId);
+            if (siteSchedule.entries.length > 0) {
+              ws.send(JSON.stringify({ type: 'schedule_update', schedule: siteSchedule }));
+            }
+          } else if (scheduleData.entries.length > 0) {
+            ws.send(JSON.stringify({ type: 'schedule_update', schedule: scheduleData }));
           }
-        } else if (scheduleData.entries.length > 0 && scheduleVersion < scheduleData.version) {
-          ws.send(JSON.stringify({ type: 'schedule_update', schedule: scheduleData }));
         }
+        // 미승인이면 pending 상태 유지 (클라이언트는 대기 화면)
 
         broadcastToAdmins({ type: 'client_update' });
       }

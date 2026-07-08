@@ -659,23 +659,67 @@ function getLastSeen(site) {
 function renderClientList() {
   const el = document.getElementById('clientList');
   if (clientsData.length === 0) {
-    el.innerHTML = '<div style="color:#999; padding:10px;">연결된 클라이언트가 없습니다.</div>';
+    el.innerHTML = '<div style="color:#999; padding:10px;">연결된 클라이언트가 없습니다. 클라이언트 PC에서 앱을 실행하면 여기에 표시됩니다.</div>';
     return;
   }
   el.innerHTML = clientsData.map(c => {
     const siteName = sitesData.find(s => s.id === c.siteId)?.name || '미지정';
-    const badge = c.status === 'online'
+    const statusBadge = c.status === 'online'
       ? '<span style="color:#1b8a2d; font-weight:600;">● 온라인</span>'
       : '<span style="color:#c0392b;">● 오프라인</span>';
-    return `<div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #f0f0f0;">
-      <div><strong>${c.name}</strong> <span style="color:#999; font-size:11px;">(${c.id.slice(0,8)}...)</span></div>
-      <div style="display:flex; gap:12px; align-items:center;">
-        <span style="font-size:11px; color:#666;">사이트: ${siteName}</span>
+
+    let approvalBadge = '';
+    let actions = '';
+    if (!c.approved) {
+      approvalBadge = '<span style="background:#f39c12; color:#fff; font-size:10px; padding:2px 6px; border-radius:4px; margin-left:6px;">대기중</span>';
+      actions = `
+        <select id="approve-site-${c.id}" style="padding:3px 6px; border:1px solid #ddd; border-radius:4px; font-size:11px; margin-right:4px;">
+          <option value="">사이트 선택</option>
+          ${sitesData.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+        </select>
+        <button onclick="approveClient('${c.id}')" style="padding:3px 10px; background:#27ae60; color:#fff; border:none; border-radius:4px; font-size:11px; cursor:pointer;">승인</button>
+        <button onclick="rejectClient('${c.id}')" style="padding:3px 10px; background:#e74c3c; color:#fff; border:none; border-radius:4px; font-size:11px; cursor:pointer; margin-left:4px;">거부</button>
+      `;
+    } else {
+      approvalBadge = '<span style="background:#27ae60; color:#fff; font-size:10px; padding:2px 6px; border-radius:4px; margin-left:6px;">승인됨</span>';
+      actions = `<span style="font-size:11px; color:#666;">사이트: ${siteName}</span>`;
+    }
+
+    return `<div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid #f0f0f0;">
+      <div>
+        <strong>${c.name}</strong>
+        <span style="color:#999; font-size:11px;">(${c.id.slice(0,8)}...)</span>
+        ${approvalBadge}
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        ${actions}
         <span style="font-size:11px; color:#666;">모니터: ${c.monitors}대</span>
-        ${badge}
+        ${statusBadge}
       </div>
     </div>`;
   }).join('');
+}
+
+async function approveClient(clientId) {
+  const siteSelect = document.getElementById(`approve-site-${clientId}`);
+  const siteId = siteSelect ? siteSelect.value : '';
+  const res = await fetch(`/api/clients/${clientId}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ siteId: siteId || null })
+  });
+  const data = await res.json();
+  if (data.success) { showToast('클라이언트 승인 완료'); refreshClients(); refreshSites(); }
+}
+
+async function rejectClient(clientId) {
+  if (!confirm('이 클라이언트를 거부하시겠습니까?')) return;
+  const res = await fetch(`/api/clients/${clientId}/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  });
+  const data = await res.json();
+  if (data.success) { showToast('클라이언트 거부됨'); refreshClients(); refreshSites(); }
 }
 
 // ═══════════════════════════════════════════════════════════
