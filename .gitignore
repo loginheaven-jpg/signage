@@ -5,3 +5,11 @@ credentials/
 .DS_Store
 dist/
 out/
+
+# 클라이언트 로컬 캐시 (편성표/미디어)
+client/cache/
+client/config.json
+
+# 호스트 로컬 상태 (런타임 생성)
+host/data/content.json
+host/data/approved-clients.json

@@ -38,15 +38,19 @@ signage/
 │   └── data/
 │       ├── sites.json       ← 사이트 목록 (동적 생성)
 │       ├── schedule.json    ← 편성표 데이터
+│       ├── content.json     ← 로컬 업로드 콘텐츠 목록 (영속화)
 │       └── approved-clients.json  ← 승인된 클라이언트 목록
 │
 └── client/                  ← Electron 클라이언트 (Windows PC)
-    ├── main.js              ← Electron 메인 프로세스
+    ├── main.js              ← Electron 메인 프로세스 (WS + 로컬 캐시 + 듀얼모니터)
     ├── preload.js           ← IPC 브릿지
     ├── setup.html           ← 최초 설정 화면
     ├── waiting.html         ← 승인 대기 화면
-    ├── player.html          ← 전체화면 플레이어
+    ├── player.html          ← 전체화면 플레이어 (분할/보조화면 지원)
     ├── package.json
+    ├── cache/               ← 오프라인 재생용 로컬 캐시 (자동 생성)
+    │   ├── schedule.json    ←   마지막 수신 편성표
+    │   └── media/           ←   다운로드된 이미지/영상
     ├── install.bat          ← 원클릭 설치 (의존성 + 자동시작 등록)
     ├── start.bat            ← 실행 스크립트 (부팅 시 자동시작용)
     └── uninstall.bat        ← 자동시작 해제
@@ -75,6 +79,10 @@ signage/
 | `PORT` | 서버 포트 | 3000 (Railway는 자동 할당) |
 | `GOOGLE_SERVICE_ACCOUNT_KEY` | 서비스 계정 JSON 전체 | 없음 (로컬 파일 폴백) |
 | `GDRIVE_FOLDER_ID` | 동기화 대상 드라이브 폴더 ID | `1NuQfKkX9nA_Dd8Fd75H9By5osyyQz4sm` |
+| `ADMIN_PASSWORD` | 관리 UI/API HTTP Basic 인증 비밀번호 | 없음 (설정 시 인증 활성) |
+| `ADMIN_USER` | 관리자 사용자명 | `admin` |
+
+> `ADMIN_PASSWORD`가 설정되면 관리 UI(`/`)와 모든 `/api` 호출에 인증이 요구된다. 클라이언트가 사용하는 `/uploads`, `/player.html`, WebSocket은 인증 대상이 아니다. 미설정 시 인증 없이 동작한다.
 
 ### 3.3 REST API 목록
 
@@ -222,6 +230,7 @@ signage/
 | `audio` | `sound` |
 | `enabled` | `active` |
 | 독립 모드: file1+file2 → 2개 항목 | 각각 별도 재생 항목으로 분리 |
+| 분할 모드: file1+file2 → 1개 항목 | `url`/`mimeType`(좌) + `url2`/`mimeType2`(우) 동시 표출 |
 
 ### 3.7 구글 드라이브 동기화
 
@@ -296,6 +305,20 @@ signage/
 - WebSocket 연결 끊김 시 5초 간격으로 자동 재연결
 - 이미 승인된 클라이언트(`approved-clients.json`에 기록)는 재접속 시 자동 승인
 - 30초 간격 heartbeat 전송
+
+### 4.7 오프라인/독립 재생 (로컬 캐시)
+
+Electron 메인 프로세스가 편성표와 미디어를 로컬에 캐시하여, 호스트가 꺼져 있거나 인터넷이 끊겨도 마지막 편성표로 계속 재생한다.
+
+- **편성표 캐시**: `schedule_update` 수신 시 원본 편성표를 `cache/schedule.json`에 저장. 앱 시작 시 이 캐시를 로드하여 호스트 연결 전에도 즉시 재생 시작.
+- **미디어 캐시**: 편성표가 참조하는 이미지/영상을 `cache/media/`에 백그라운드 다운로드. 다운로드 완료 즉시 렌더러에 `file://` 로컬 경로로 재전송하여 로컬 재생으로 전환. 캐시에 없는 항목은 임시로 호스트에서 스트리밍한다.
+- **캐시 정리**: 현재 편성표에 없는 미디어 파일은 자동 삭제.
+
+### 4.8 듀얼 모니터
+
+- `config.monitors >= 2` 이고 물리 디스플레이가 2개 이상이면, 보조(우측) 디스플레이에 전체화면 보조 창을 생성.
+- 분할(split) 편성 항목의 좌측(file1)은 주 창, 우측(file2)은 보조 창으로 전송(IPC `screen2-media`).
+- 물리 디스플레이가 1개이거나 분할 항목이면, 주 창 안에서 좌/우를 나란히(side-by-side) 렌더링.
 
 ---
 
@@ -418,9 +441,11 @@ Railway 배포 환경에서는 파일 시스템이 ephemeral이므로, 재배포
 
 | 항목 | 상태 | 설명 |
 |------|------|------|
-| Railway 파일 영속성 | 제한 | 재배포 시 uploads/ 초기화 → 드라이브 연동 필수 |
-| 분할 모드 재생 | 미구현 | 클라이언트에서 좌/우 분할 레이아웃 미지원 (현재 독립 모드만 동작) |
-| 듀얼 모니터 | 부분 구현 | 모니터 수 설정은 있으나 실제 듀얼 출력 로직 미완성 |
+| Railway 파일 영속성 | 제한 | 재배포 시 uploads/ 초기화 → 드라이브 연동 필수. 로컬 업로드 목록은 data/content.json에 영속화되나 파일 자체는 ephemeral |
+| 분할 모드 재생 | 구현 | 좌/우 분할(side-by-side) 및 듀얼 모니터 분할 출력 지원 (§4.8) |
+| 듀얼 모니터 | 구현 | 물리 디스플레이 2개 시 보조 창 자동 생성 (§4.8). 단일 디스플레이는 창 내 분할로 폴백 |
+| 오프라인 재생 | 구현 | 편성표/미디어 로컬 캐시로 호스트·인터넷 단절 시에도 재생 지속 (§4.7) |
+| 관리자 인증 | 구현 | ADMIN_PASSWORD 설정 시 HTTP Basic 인증. WebSocket 구독(읽기 전용 알림)은 미인증 |
 | 웹 플레이어 | 보조 | host/public/player.html은 테스트용, 실 운영은 Electron 클라이언트 |
 | HTTPS WebSocket | 자동 | Railway가 TLS 처리, 클라이언트는 wss:// 자동 사용 |
 
@@ -458,6 +483,7 @@ npx electron .
 | 2026-07-08 | v3 | 다중 사이트, 확장 편성표(편성유형/소리/전환/유효기간), SPA 관리 UI |
 | 2026-07-08 | v3.1 | 클라이언트 v2 — 설정 UI + 승인 대기 + 원클릭 설치 |
 | 2026-07-08 | v3.2 | 하드코딩 사이트 제거, 승인 기반 동적 사이트 생성, 편성표 형식 변환 수정 |
+| 2026-07-08 | v3.3 | 승인 재푸시 버그 수정, 클라이언트 오프라인/독립 재생(로컬 캐시), 분할·듀얼 모니터 재생, 관리자 인증, 로컬 콘텐츠 영속화 |
 
 ---
 

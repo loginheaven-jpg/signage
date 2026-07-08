@@ -30,10 +30,10 @@
 
 ## 핵심 동작 원리
 
-- **호스트 꺼져도 재생 계속**: 클라이언트가 구글드라이브에서 직접 파일을 동기화하고 로컬에 캐시
+- **호스트 꺼져도 재생 계속**: 클라이언트가 편성표와 미디어를 `cache/`에 로컬 저장하고, 앱 시작 시 캐시로 즉시 재생
 - **편성 변경 즉시 반영**: 호스트에서 편성표 저장 시 WebSocket으로 모든 클라이언트에 즉시 푸시
-- **5분 주기 백그라운드 체크**: 호스트 없이도 드라이브 변경사항 자동 감지
-- **인터넷 끊겨도 재생**: 로컬 캐시 파일로 마지막 편성표 기반 계속 재생
+- **인터넷 끊겨도 재생**: 로컬 캐시 파일(`cache/media/`)로 마지막 편성표 기반 계속 재생
+- **콘텐츠 소스**: 호스트가 구글 드라이브를 3분 주기로 동기화 → 클라이언트는 호스트를 통해 배포받아 캐시
 
 ## 설치 및 실행
 
@@ -55,26 +55,23 @@ npm start
 ```bash
 cd client
 npm install
-```
-
-`config.js` 수정:
-```javascript
-module.exports = {
-  HOST_URL: 'ws://호스트PC의IP:3000',
-  CLIENT_NAME: '현관',
-  GDRIVE_FOLDER_ID: '구글드라이브폴더ID'
-};
-```
-
-`credentials/service-account.json`에 서비스 계정 키 배치 후:
-```bash
 npx electron .
 ```
 
+설정은 `config.js` 파일이 아니라 **최초 실행 시 뜨는 설정 화면(setup.html)** 에서 입력한다:
+1. 클라이언트 이름 (예: 현관, 식당)
+2. 호스트 서버 주소 (예: `https://signage.yebom.org` 또는 `http://호스트IP:3000`)
+3. 모니터 수 (1 / 2)
+
+저장하면 호스트 관리 화면에 "대기중"으로 표시되고, 관리자가 승인하면 자동으로 전체화면 재생이 시작된다. 입력값은 `config.json`에 저장된다. `Ctrl+Shift+S`로 설정을 다시 열 수 있다.
+
+> 클라이언트는 구글 드라이브에 직접 접근하지 않는다. 콘텐츠는 호스트를 통해 배포되며, 클라이언트는 이를 `cache/` 폴더에 로컬 캐시하여 오프라인에서도 재생한다.
+
 ### 부팅 시 자동 실행 (Windows)
 
+`install.bat`을 실행하면 의존성 설치 + 시작프로그램 등록 + 최초 실행이 한 번에 처리된다. 수동 등록도 가능:
 1. `Win+R` → `shell:startup` 입력
-2. 바로가기 생성: 대상 → `cmd /c "cd /d C:\dev\signage\client && npx electron ."`
+2. `start.bat` 바로가기 생성
 
 ## 편성표 사용법
 
@@ -102,21 +99,27 @@ digital-signage/
 │   ├── data/schedule.json  # 편성표 저장
 │   ├── uploads/            # 콘텐츠 파일 (드라이브 동기화)
 │   └── credentials/        # 서비스 계정 키 (git 제외)
-├── client/                  # 클라이언트 플레이어
-│   ├── main.js             # Electron 메인 프로세스
-│   ├── player.html         # 재생 화면 (렌더러)
+├── client/                  # 클라이언트 플레이어 (Electron)
+│   ├── main.js             # 메인 프로세스 (WS + 로컬 캐시 + 듀얼모니터)
 │   ├── preload.js          # IPC 브릿지
-│   ├── gdrive-sync.js      # 드라이브 직접 동기화
-│   ├── schedule.js         # 편성표 로컬 관리
-│   ├── config.js           # 클라이언트 설정
-│   └── credentials/        # 서비스 계정 키 (git 제외)
+│   ├── setup.html          # 최초 설정 화면
+│   ├── waiting.html        # 승인 대기 화면
+│   ├── player.html         # 재생 화면 (분할/보조화면 지원)
+│   ├── config.json         # 클라이언트 설정 (설정 화면에서 생성)
+│   ├── cache/              # 오프라인 재생용 로컬 캐시 (자동 생성)
+│   ├── install.bat / start.bat / uninstall.bat
+│   └── credentials/        # (미사용) 이전 버전 잔여 — 클라이언트는 드라이브 직접 접근 안 함
 └── README.md
 ```
 
-## 향후 확장 계획
+## 구현 현황 / 향후 계획
 
-- [ ] 분할 편성 (3840×1080 파노라마)
-- [ ] 전환 효과 (페이드, 슬라이드)
-- [ ] 소리 제어 (좌/우 중 하나만)
-- [ ] 유효기간 설정 (자동 만료)
+- [x] 분할 편성 (좌/우 side-by-side, 듀얼 모니터 출력)
+- [x] 전환 효과 (페이드)
+- [x] 소리 제어 (좌/우 중 하나만)
+- [x] 유효기간 설정 (자동 만료)
+- [x] 오프라인 재생 (로컬 캐시)
+- [x] 관리자 인증 (ADMIN_PASSWORD)
+- [ ] 슬라이드/기타 전환 효과 세분화
+- [ ] WebSocket 인증 강화
 - [ ] 전용 관리 서버 (Phase 2)

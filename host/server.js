@@ -37,6 +37,39 @@ const SCHEDULE_FILE = path.join(DATA_DIR, 'schedule.json');
 const clients = new Map(); // clientId -> { ws, name, monitors, siteId, lastSeen, scheduleVersion, currentPlaying }
 const contentFiles = []; // { id, originalName, filename, size, mimeType, source, uploadedAt }
 
+// 로컬 업로드 콘텐츠 목록 영속화 (드라이브 콘텐츠는 동기화로 재생성되므로 제외)
+const CONTENT_FILE = path.join(DATA_DIR, 'content.json');
+
+function loadLocalContent() {
+  try {
+    if (fs.existsSync(CONTENT_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(CONTENT_FILE, 'utf8'));
+      let restored = 0;
+      saved.forEach(f => {
+        // 파일이 실제로 남아있는 항목만 복원
+        if (f.source === 'local' && fs.existsSync(path.join(UPLOADS_DIR, f.filename))) {
+          contentFiles.push(f);
+          restored++;
+        }
+      });
+      console.log(`[Content] 로컬 콘텐츠 복원: ${restored}개`);
+    }
+  } catch (e) {
+    console.warn('[Content] 로컬 콘텐츠 로드 실패:', e.message);
+  }
+}
+
+function saveLocalContent() {
+  try {
+    const local = contentFiles.filter(f => f.source === 'local');
+    fs.writeFileSync(CONTENT_FILE, JSON.stringify(local, null, 2));
+  } catch (e) {
+    console.error('[Content] 로컬 콘텐츠 저장 실패:', e.message);
+  }
+}
+
+loadLocalContent();
+
 // ─── 사이트 관리 ────────────────────────────────────────
 let sites = [];
 
@@ -128,8 +161,47 @@ const gdrive = new GDriveSync({
   else console.warn('[Server] 구글 드라이브 연동 실패 — 로컬 업로드만 사용 가능');
 })();
 
+// ─── 관리자 인증 (선택) ──────────────────────────────────
+// ADMIN_PASSWORD 환경변수가 설정되면 관리 UI(/)와 모든 /api 호출에 HTTP Basic 인증을 요구한다.
+// 미설정 시 인증 없이 동작(로컬 개발/기존 배포 호환).
+// 클라이언트가 쓰는 /uploads, /player.html, WebSocket 은 인증 대상이 아니다.
+const ADMIN_USER = process.env.ADMIN_USER || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+
+function checkAuth(req) {
+  if (!ADMIN_PASSWORD) return true;
+  const h = req.headers.authorization || '';
+  const m = h.match(/^Basic (.+)$/);
+  if (!m) return false;
+  const decoded = Buffer.from(m[1], 'base64').toString('utf8');
+  const idx = decoded.indexOf(':');
+  const user = decoded.slice(0, idx);
+  const pass = decoded.slice(idx + 1);
+  return user === ADMIN_USER && pass === ADMIN_PASSWORD;
+}
+
+function requireAuth(req, res, next) {
+  if (checkAuth(req)) return next();
+  res.set('WWW-Authenticate', 'Basic realm="Signage Admin"');
+  return res.status(401).send('인증이 필요합니다.');
+}
+
 // ─── 미들웨어 ────────────────────────────────────────────
 app.use(express.json());
+
+// 관리 UI 는 인증 뒤에서 제공 (정적 미들웨어보다 먼저 등록)
+app.get(['/', '/index.html'], requireAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// 웹 플레이어 — 인증 없이 접근 (확장자 없는 /player 별칭)
+app.get('/player', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'player.html'));
+});
+
+// 모든 API 는 인증 필요
+app.use('/api', requireAuth);
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
@@ -269,6 +341,7 @@ app.post('/api/clients/:id/approve', (req, res) => {
   }
 
   client.siteId = siteId;
+  client.approved = true; // 런타임 승인 플래그 — 이후 편성표 푸시 대상에 포함
   approvedClients[req.params.id] = {
     name: client.name,
     siteId: siteId,
@@ -312,6 +385,7 @@ app.put('/api/clients/:id/site', (req, res) => {
   client.siteId = siteId;
   if (approvedClients[req.params.id]) {
     approvedClients[req.params.id].siteId = siteId;
+    client.approved = true; // 이미 승인된 클라이언트의 사이트 재배정 — 승인 상태 유지
     saveApproved();
   }
   broadcastToAdmins({ type: 'client_update' });
@@ -334,6 +408,7 @@ app.post('/api/upload', upload.array('files', 20), (req, res) => {
     contentFiles.push(entry);
     return entry;
   });
+  saveLocalContent();
   broadcastToAdmins({ type: 'content_update' });
   res.json({ success: true, files: uploaded });
 });
@@ -349,6 +424,7 @@ app.delete('/api/content/:id', (req, res) => {
   if (removed.source === 'local') {
     const filePath = path.join(UPLOADS_DIR, removed.filename);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    saveLocalContent();
   }
   broadcastToAdmins({ type: 'content_update' });
   res.json({ success: true });
@@ -531,30 +607,49 @@ function getSiteSchedule(siteId) {
   // 클라이언트 기대: entries[].{ url, filename, mimeType, duration, sound, active }
   const entries = [];
   for (const e of rawEntries) {
-    if (e.file1) {
-      entries.push({
-        filename: e.file1,
-        url: `/uploads/${e.file1}`,
-        mimeType: e.file1Mime || 'image/jpeg',
-        duration: e.duration || 10,
-        sound: e.audio || 'none',
-        transition: e.transition || 'fade',
-        layoutType: e.layoutType || 'independent',
-        active: true
-      });
-    }
-    // 독립 모드일 때 file2도 별도 항목으로 추가
-    if (e.file2 && e.layoutType === 'independent') {
-      entries.push({
-        filename: e.file2,
-        url: `/uploads/${e.file2}`,
-        mimeType: e.file2Mime || 'image/jpeg',
-        duration: e.duration || 10,
-        sound: e.audio || 'none',
-        transition: e.transition || 'fade',
-        layoutType: 'independent',
-        active: true
-      });
+    if (e.layoutType === 'split') {
+      // 분할 모드: file1(좌) + file2(우)를 한 항목에 담아 동시 표출
+      if (e.file1 || e.file2) {
+        const primary = e.file1 || e.file2;
+        entries.push({
+          filename: primary,
+          url: `/uploads/${primary}`,
+          mimeType: (e.file1 ? e.file1Mime : e.file2Mime) || 'image/jpeg',
+          url2: e.file1 && e.file2 ? `/uploads/${e.file2}` : '',
+          mimeType2: e.file2Mime || 'image/jpeg',
+          duration: e.duration || 10,
+          sound: e.audio || 'none',
+          transition: e.transition || 'fade',
+          layoutType: 'split',
+          active: true
+        });
+      }
+    } else {
+      // 독립 모드: file1, file2를 각각 별도 항목으로 순차 재생
+      if (e.file1) {
+        entries.push({
+          filename: e.file1,
+          url: `/uploads/${e.file1}`,
+          mimeType: e.file1Mime || 'image/jpeg',
+          duration: e.duration || 10,
+          sound: e.audio || 'none',
+          transition: e.transition || 'fade',
+          layoutType: 'independent',
+          active: true
+        });
+      }
+      if (e.file2) {
+        entries.push({
+          filename: e.file2,
+          url: `/uploads/${e.file2}`,
+          mimeType: e.file2Mime || 'image/jpeg',
+          duration: e.duration || 10,
+          sound: e.audio || 'none',
+          transition: e.transition || 'fade',
+          layoutType: 'independent',
+          active: true
+        });
+      }
     }
   }
   return { version: scheduleData.version, entries };

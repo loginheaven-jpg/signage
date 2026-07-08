@@ -20,18 +20,8 @@ body {
   justify-content: center;
   position: relative;
 }
-#player img, #player video {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
-#player img.cover, #player video.cover {
-  object-fit: cover;
-  width: 100%;
-  height: 100%;
-}
 
-/* 전환 효과 */
+/* 미디어 레이어 (전환 효과) */
 .media-element {
   position: absolute;
   top: 0; left: 0;
@@ -42,11 +32,31 @@ body {
   opacity: 0;
   transition: opacity 0.8s ease;
 }
-.media-element.active {
-  opacity: 1;
+.media-element.active { opacity: 1; }
+.media-element.fade-out { opacity: 0; }
+
+/* 분할(split) 레이아웃: 좌/우 나란히 */
+.media-element.split {
+  flex-direction: row;
 }
-.media-element.fade-out {
-  opacity: 0;
+.media-element.split .pane {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.media-element img, .media-element video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.media-element img.cover, .media-element video.cover {
+  object-fit: cover;
+  width: 100%;
+  height: 100%;
 }
 
 /* 대기 화면 */
@@ -74,142 +84,187 @@ body {
 const player = document.getElementById('player');
 const idleScreen = document.getElementById('idle-screen');
 
-let schedule = null;
-let currentIndex = -1;
-let playTimer = null;
+// 이 창이 듀얼 모니터의 보조(우측) 화면인지 판별
+const isSecondary = new URLSearchParams(location.search).get('screen') === '2';
+
 let hostUrl = '';
+let dualMonitor = false;
 
 // 설정 로드
 window.signage.getConfig().then(cfg => {
   hostUrl = cfg.hostUrl || '';
+  dualMonitor = !!cfg.dualMonitor;
 });
 
-// 편성표 수신
-window.signage.onScheduleUpdate((data) => {
-  console.log('[Player] 편성표 수신:', data);
-  schedule = data;
-  if (schedule && schedule.entries && schedule.entries.length > 0) {
-    startPlayback();
-  }
-});
-
-// 재생 명령 수신
-window.signage.onPlayCommand((files) => {
-  console.log('[Player] 재생 명령:', files);
-  // 수동 재생 명령 처리
-  playFiles(files);
-});
-
-// 정지 명령
-window.signage.onStopCommand(() => {
-  stopPlayback();
-});
-
-function startPlayback() {
-  if (!schedule || !schedule.entries || schedule.entries.length === 0) return;
-
-  // 활성 항목만 필터링
-  const activeEntries = schedule.entries.filter(e => e.active !== false);
-  if (activeEntries.length === 0) {
-    showIdle();
-    return;
-  }
-
-  idleScreen.style.display = 'none';
-  currentIndex = -1;
-  playNext(activeEntries);
+// ═══════════════════════════════════════════════════════
+// 보조 화면 모드: 주 창이 보내주는 미디어만 표출
+// ═══════════════════════════════════════════════════════
+if (isSecondary) {
+  idleScreen.querySelector('.text').textContent = '우측 화면 대기 중...';
+  window.signage.onScreen2Media((media) => {
+    if (!media || !media.url) { showIdle(); return; }
+    idleScreen.style.display = 'none';
+    renderSingle(resolveUrl(media.url), media.mimeType, media.fitMode, !media.muted && media.sound === 'right');
+  });
 }
 
-function playNext(entries) {
-  if (!entries || entries.length === 0) return;
+// ═══════════════════════════════════════════════════════
+// 주 화면 모드: 편성표 기반 자동 재생
+// ═══════════════════════════════════════════════════════
+let schedule = null;
+let activeEntries = [];
+let currentIndex = -1;
+let playTimer = null;
 
-  currentIndex = (currentIndex + 1) % entries.length;
-  const entry = entries[currentIndex];
+if (!isSecondary) {
+  window.signage.onScheduleUpdate((data) => {
+    console.log('[Player] 편성표 수신:', data && data.entries ? data.entries.length + '개' : data);
+    schedule = data;
+    startPlayback();
+  });
+
+  window.signage.onPlayCommand((files) => {
+    console.log('[Player] 수동 재생 명령:', files);
+    playFiles(files);
+  });
+
+  window.signage.onStopCommand(() => stopPlayback());
+}
+
+function resolveUrl(u) {
+  // 절대 URL(file://, http://)은 그대로, 상대(/uploads/..)는 호스트 프리픽스
+  if (!u) return '';
+  if (u.startsWith('/') && hostUrl) return hostUrl + u;
+  return u;
+}
+
+function startPlayback() {
+  if (!schedule || !schedule.entries) return;
+  activeEntries = schedule.entries.filter(e => e.active !== false);
+  if (activeEntries.length === 0) { showIdle(); return; }
+  idleScreen.style.display = 'none';
+  currentIndex = -1;
+  playNext();
+}
+
+function playNext() {
+  if (!activeEntries || activeEntries.length === 0) { showIdle(); return; }
+
+  currentIndex = (currentIndex + 1) % activeEntries.length;
+  const entry = activeEntries[currentIndex];
 
   // 유효기간 체크
-  if (entry.validFrom || entry.validTo) {
-    const now = new Date();
-    if (entry.validFrom && new Date(entry.validFrom) > now) {
-      playNext(entries);
-      return;
-    }
-    if (entry.validTo && new Date(entry.validTo) < now) {
-      playNext(entries);
-      return;
-    }
-  }
+  const now = new Date();
+  if (entry.validFrom && new Date(entry.validFrom) > now) return playNext();
+  if (entry.validTo && new Date(entry.validTo) < now) return playNext();
 
-  // url이 상대경로(/uploads/...)이면 hostUrl 프리픽스 추가
-  let url = entry.url || (entry.filename ? `/uploads/${entry.filename}` : '');
-  if (url && url.startsWith('/') && hostUrl) {
-    url = hostUrl + url;
-  }
-  if (!url) {
-    playNext(entries);
-    return;
-  }
+  const url1 = resolveUrl(entry.url || (entry.filename ? `/uploads/${entry.filename}` : ''));
+  if (!url1) return playNext();
 
+  const url2 = resolveUrl(entry.url2 || '');
   const duration = (entry.duration || 10) * 1000;
-  const mimeType = entry.mimeType || '';
   const fitMode = entry.fitMode || 'contain';
+  const isSplit = entry.layoutType === 'split' && !!url2;
 
-  // 기존 미디어 제거
+  if (isSplit && dualMonitor) {
+    // 듀얼 모니터: 좌측은 이 창, 우측은 보조 창으로 전송
+    window.signage.setScreen2Media({ url: entry.url2, mimeType: entry.mimeType2, fitMode, sound: entry.sound });
+    showMedia([{ url: url1, mimeType: entry.mimeType, fitMode, audible: entry.sound === 'left' }], false, entry, duration);
+  } else if (isSplit) {
+    // 단일 창 분할: 좌/우 나란히
+    showMedia([
+      { url: url1, mimeType: entry.mimeType, fitMode, audible: entry.sound === 'left' },
+      { url: url2, mimeType: entry.mimeType2, fitMode, audible: entry.sound === 'right' }
+    ], true, entry, duration);
+  } else {
+    // 일반(독립/단일)
+    showMedia([{ url: url1, mimeType: entry.mimeType, fitMode, audible: entry.sound && entry.sound !== 'none' }], false, entry, duration);
+  }
+}
+
+// panes: [{url, mimeType, fitMode, audible}], split: 좌우 배치 여부
+function showMedia(panes, split, entry, duration) {
+  // 기존 미디어 페이드 아웃
   const existing = player.querySelector('.media-element');
   if (existing) {
     existing.classList.remove('active');
     existing.classList.add('fade-out');
-    setTimeout(() => existing.remove(), 1000);
+    setTimeout(() => existing.remove(), 900);
   }
 
   const container = document.createElement('div');
-  container.className = 'media-element';
+  container.className = 'media-element' + (split ? ' split' : '');
 
-  if (mimeType.startsWith('video/')) {
-    const video = document.createElement('video');
-    video.src = url;
-    video.autoplay = true;
-    video.muted = entry.sound === 'none' || !entry.sound;
-    video.loop = false;
-    video.className = fitMode === 'cover' ? 'cover' : '';
-    video.onended = () => playNext(entries);
-    container.appendChild(video);
-    player.appendChild(container);
-    setTimeout(() => container.classList.add('active'), 50);
-    // 영상은 끝나면 다음으로 (duration 무시 가능)
-    if (playTimer) clearTimeout(playTimer);
+  let videoForEnd = null; // 원본 길이 재생을 담당할 대표 비디오
+  panes.forEach((p, i) => {
+    const el = createMediaEl(p);
+    if (split) {
+      const pane = document.createElement('div');
+      pane.className = 'pane';
+      pane.appendChild(el);
+      container.appendChild(pane);
+    } else {
+      container.appendChild(el);
+    }
+    if (el.tagName === 'VIDEO' && !videoForEnd) videoForEnd = el;
+  });
+
+  player.appendChild(container);
+  setTimeout(() => container.classList.add('active'), 50);
+
+  if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+
+  // 영상 원본 길이 재생: 대표 비디오가 끝나면 다음
+  const primaryIsVideo = panes[0].mimeType && panes[0].mimeType.startsWith('video');
+  if (!split && primaryIsVideo && entry.videoDuration !== 'custom' && videoForEnd) {
+    videoForEnd.onended = () => playNext();
   } else {
-    const img = document.createElement('img');
-    img.src = url;
-    img.className = fitMode === 'cover' ? 'cover' : '';
-    container.appendChild(img);
-    player.appendChild(container);
-    setTimeout(() => container.classList.add('active'), 50);
-    // 이미지는 duration 후 다음
-    if (playTimer) clearTimeout(playTimer);
-    playTimer = setTimeout(() => playNext(entries), duration);
+    playTimer = setTimeout(() => playNext(), duration);
   }
 }
 
+function createMediaEl(p) {
+  if (p.mimeType && p.mimeType.startsWith('video')) {
+    const video = document.createElement('video');
+    video.src = p.url;
+    video.autoplay = true;
+    video.muted = !p.audible;
+    video.loop = false;
+    video.playsInline = true;
+    video.className = p.fitMode === 'cover' ? 'cover' : '';
+    return video;
+  }
+  const img = document.createElement('img');
+  img.src = p.url;
+  img.className = p.fitMode === 'cover' ? 'cover' : '';
+  return img;
+}
+
+// 보조 화면: 단일 미디어 표출
+function renderSingle(url, mimeType, fitMode, audible) {
+  const existing = player.querySelector('.media-element');
+  if (existing) existing.remove();
+  const container = document.createElement('div');
+  container.className = 'media-element active';
+  container.appendChild(createMediaEl({ url, mimeType, fitMode, audible }));
+  player.appendChild(container);
+}
+
+// 수동 재생 명령용
 function playFiles(files) {
-  // 수동 재생 명령용
+  if (!files || !files.length) return;
   idleScreen.style.display = 'none';
-  const entries = files.map(f => ({
-    url: `${hostUrl}${f.url}`,
-    mimeType: f.mimeType,
-    duration: 10,
-    active: true
+  activeEntries = files.map(f => ({
+    url: f.url, mimeType: f.mimeType, duration: 10, active: true, layoutType: 'independent'
   }));
   currentIndex = -1;
-  playNext(entries);
+  playNext();
 }
 
 function stopPlayback() {
-  if (playTimer) {
-    clearTimeout(playTimer);
-    playTimer = null;
-  }
-  const existing = player.querySelectorAll('.media-element');
-  existing.forEach(el => el.remove());
+  if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+  player.querySelectorAll('.media-element').forEach(el => el.remove());
+  if (dualMonitor) window.signage.setScreen2Media(null);
   showIdle();
 }
 

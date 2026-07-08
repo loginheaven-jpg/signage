@@ -125,6 +125,13 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font
     <label>호스트 URL (자동 감지됨)</label>
     <input type="text" id="cfgHost" readonly>
     <button onclick="connectToHost()">▶ 연결 및 재생 시작</button>
+    <a href="/downloads/signage-client.zip" download
+       style="display:block; text-align:center; margin-top:14px; padding:10px; background:rgba(255,255,255,0.08); color:#7fdb8a; text-decoration:none; border:1px solid rgba(127,219,138,0.35); border-radius:6px; font-size:13px;">
+      💻 PC 전용 클라이언트 다운로드 (전체화면 키오스크)
+    </a>
+    <div style="text-align:center; font-size:11px; color:#888; margin-top:8px;">
+      압축 해제 후 install.bat 실행 → 자동 설치·부팅 시 자동 실행
+    </div>
   </div>
 </div>
 
@@ -282,46 +289,37 @@ function playCurrentEntry() {
 
   const entry = playlist[currentIndex % playlist.length];
   const duration = (entry.duration || 10) * 1000;
+  const isSplit = entry.layoutType === 'split' && entry.url2;
 
-  if (monitors >= 2) {
-    // 듀얼 모드: 좌/우 동시
-    loadMedia('screen1', entry.file1, entry.file1Mime);
-    if (entry.file2) {
-      loadMedia('screen2', entry.file2, entry.file2Mime);
-    } else {
-      document.getElementById('screen2').innerHTML = '';
-    }
+  // 분할 항목은 좌/우 나란히 배치
+  const container = document.getElementById('playerContainer');
+  if (isSplit) { container.classList.add('dual'); container.classList.remove('single'); }
+
+  // 좌측(주) 미디어
+  loadMedia('screen1', entry.url, entry.mimeType);
+
+  // 우측 미디어: 분할 항목이면 url2 표출, 아니면 비움
+  const screen2 = document.getElementById('screen2');
+  if (isSplit) {
+    screen2.style.display = 'flex';
+    loadMedia('screen2', entry.url2, entry.mimeType2);
+  } else if (monitors >= 2) {
+    screen2.style.display = 'flex';
+    screen2.innerHTML = '';
   } else {
-    // 싱글 모드: file1만 (file2는 다음 순번으로 처리)
-    loadMedia('screen1', entry.file1, entry.file1Mime);
+    screen2.style.display = 'none';
   }
 
-  showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.file1} (${entry.duration}초)`);
+  showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || entry.url} (${entry.duration}초)`);
 
-  // 동영상인 경우 재생 시간 처리
-  const isVideo = entry.file1Mime && entry.file1Mime.startsWith('video');
-  let actualDuration = duration;
-
-  if (isVideo && entry.videoDuration === 'original') {
-    // 동영상 끝나면 다음으로 (onended 이벤트 사용)
-    const video = document.querySelector('#screen1 video');
-    if (video) {
-      video.onended = () => nextEntry();
-      return; // 타이머 설정하지 않음
-    }
-  }
-
+  // 동영상 원본 길이 재생 처리
+  const isVideo = entry.mimeType && entry.mimeType.startsWith('video');
   clearTimeout(playTimer);
-  playTimer = setTimeout(() => {
-    // 싱글 모드에서 file2가 있으면 file2도 보여주기
-    if (monitors < 2 && entry.file2) {
-      loadMedia('screen1', entry.file2, entry.file2Mime);
-      showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.file2} (${entry.duration}초)`);
-      playTimer = setTimeout(() => nextEntry(), duration);
-    } else {
-      nextEntry();
-    }
-  }, actualDuration);
+  if (isVideo && entry.videoDuration !== 'custom') {
+    const video = document.querySelector('#screen1 video');
+    if (video) { video.onended = () => nextEntry(); return; }
+  }
+  playTimer = setTimeout(() => nextEntry(), duration);
 }
 
 function nextEntry() {
@@ -329,16 +327,16 @@ function nextEntry() {
   playCurrentEntry();
 }
 
-function loadMedia(screenId, filename, mimeType) {
+// url은 절대(http) 또는 상대(/uploads/..). 상대면 호스트 프리픽스.
+function loadMedia(screenId, url, mimeType) {
   const screen = document.getElementById(screenId);
-  if (!filename) { screen.innerHTML = ''; return; }
-
-  const url = `${hostBaseUrl}/uploads/${filename}`;
+  if (!url) { screen.innerHTML = ''; return; }
+  const src = /^https?:\/\//i.test(url) ? url : `${hostBaseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
 
   if (mimeType && mimeType.startsWith('video')) {
-    screen.innerHTML = `<video src="${url}" autoplay muted playsinline style="width:100%;height:100%;object-fit:contain;"></video>`;
+    screen.innerHTML = `<video src="${src}" autoplay muted playsinline style="width:100%;height:100%;object-fit:contain;"></video>`;
   } else {
-    screen.innerHTML = `<img src="${url}" alt="${filename}">`;
+    screen.innerHTML = `<img src="${src}" alt="media">`;
   }
 }
 
