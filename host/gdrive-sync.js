@@ -28,11 +28,30 @@ class GDriveSync {
 
   /**
    * 인증 및 드라이브 클라이언트 초기화
+   * - 환경변수 GOOGLE_SERVICE_ACCOUNT_KEY가 있으면 우선 사용 (Railway 등 클라우드 배포용)
+   * - 없으면 로컬 파일(credentials/service-account.json)에서 읽기
    */
   async initialize() {
     try {
-      const credentials = JSON.parse(fs.readFileSync(this.credentialsPath, 'utf8'));
-      
+      let credentials;
+
+      if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
+        // 환경변수에서 서비스 계정 키 읽기 (Railway, Render 등)
+        credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
+        console.log('[GDrive] 환경변수에서 서비스 계정 키 로드');
+      } else if (fs.existsSync(this.credentialsPath)) {
+        // 로컬 파일에서 읽기
+        credentials = JSON.parse(fs.readFileSync(this.credentialsPath, 'utf8'));
+        console.log('[GDrive] 로컬 파일에서 서비스 계정 키 로드');
+      } else {
+        throw new Error('서비스 계정 키를 찾을 수 없습니다. GOOGLE_SERVICE_ACCOUNT_KEY 환경변수 또는 credentials/service-account.json 파일이 필요합니다.');
+      }
+
+      // 환경변수 GDRIVE_FOLDER_ID가 있으면 덮어쓰기
+      if (process.env.GDRIVE_FOLDER_ID) {
+        this.folderId = process.env.GDRIVE_FOLDER_ID;
+      }
+
       const auth = new google.auth.GoogleAuth({
         credentials,
         scopes: ['https://www.googleapis.com/auth/drive.readonly']
