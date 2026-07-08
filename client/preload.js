@@ -15,5 +15,8 @@ contextBridge.exposeInMainWorld('signage', {
 
   // 듀얼 모니터: 주 창(screen1)이 보조 창(screen2)에 표출할 미디어를 전달
   setScreen2Media: (media) => ipcRenderer.send('screen2-media', media),
-  onScreen2Media: (callback) => ipcRenderer.on('screen2-media', (e, data) => callback(data))
+  onScreen2Media: (callback) => ipcRenderer.on('screen2-media', (e, data) => callback(data)),
+
+  // 현재 재생 중 콘텐츠를 호스트 대시보드에 보고
+  reportPlaying: (playing) => ipcRenderer.send('report-playing', playing)
 });

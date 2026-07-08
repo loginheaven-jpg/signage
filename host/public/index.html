@@ -635,10 +635,23 @@ function renderSiteCards() {
   el.innerHTML = sitesData.map(site => {
     const statusClass = site.online ? 'badge-online' : (site.clientCount > 0 ? 'badge-offline' : 'badge-unassigned');
     const statusText = site.online ? '온라인' : (site.clientCount > 0 ? '오프라인' : '미연결');
+    // 이 사이트에서 재생 중인 온라인 클라이언트의 현재 콘텐츠
+    const playingClient = (site.clients || []).find(c => c.online && c.currentPlaying);
+    const cp = playingClient ? playingClient.currentPlaying : null;
     const monitors = [];
     for (let i = 0; i < site.monitors; i++) {
       const label = site.monitors === 1 ? '모니터' : (i === 0 ? '좌' : '우');
-      monitors.push(`<div class="monitor-frame"><span class="monitor-content-text">대기 중</span><span class="monitor-label">${label}</span></div>`);
+      const s = cp ? (i === 0 ? cp.screen1 : cp.screen2) : null;
+      let inner;
+      if (s && s.url) {
+        const isVideo = s.mimeType && s.mimeType.startsWith('video');
+        inner = isVideo
+          ? `<span class="monitor-content-text">🎬 ${escapeHtml(s.filename || '영상')}</span>`
+          : `<img src="${s.url}" alt="" onerror="this.style.display='none'">`;
+      } else {
+        inner = `<span class="monitor-content-text">${site.online ? '—' : '대기 중'}</span>`;
+      }
+      monitors.push(`<div class="monitor-frame">${inner}<span class="monitor-label">${label}</span></div>`);
     }
     const entryCount = scheduleEntries.filter(e => e.siteId === site.id).length;
     const activeCount = scheduleEntries.filter(e => e.siteId === site.id && e.enabled).length;
@@ -1098,6 +1111,12 @@ async function manualSync() {
 // ═══════════════════════════════════════════════════════════
 // Utilities
 // ═══════════════════════════════════════════════════════════
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
 function formatSize(bytes) {
   if (!bytes || isNaN(bytes)) return '';
   if (bytes < 1024) return bytes + ' B';

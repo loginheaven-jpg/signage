@@ -560,7 +560,12 @@ wss.on('connection', (ws) => {
         if (client) {
           client.lastSeen = new Date().toISOString();
           client.scheduleVersion = msg.scheduleVersion || 0;
-          if (msg.currentPlaying !== undefined) client.currentPlaying = msg.currentPlaying;
+          if (msg.currentPlaying !== undefined) {
+            const changed = JSON.stringify(client.currentPlaying) !== JSON.stringify(msg.currentPlaying);
+            client.currentPlaying = msg.currentPlaying;
+            // 재생 콘텐츠가 바뀌면 관리자 대시보드가 즉시 갱신되도록 알림
+            if (changed) broadcastToAdmins({ type: 'client_update' });
+          }
         }
       }
 
@@ -605,52 +610,31 @@ function getSiteSchedule(siteId) {
   // 클라이언트 플레이어가 이해할 수 있는 형식으로 변환
   // 호스트 편성표: file1, file2, file1Mime, file2Mime, layoutType, duration, audio, transition
   // 클라이언트 기대: entries[].{ url, filename, mimeType, duration, sound, active }
+  // 각 편성 항목은 file1(좌)+file2(우)를 쌍으로 유지한다.
+  // 실제 표출 방식(동시/순차/분할)은 클라이언트가 모니터 수와 layoutType으로 결정:
+  //  - 모니터 2대: file1 → 좌 화면, file2 → 우 화면 동시 표출
+  //  - 모니터 1대 + 독립(independent): file1 → file2 순차 표출
+  //  - 모니터 1대 + 분할(split): 한 화면에 좌/우 나란히
   const entries = [];
   for (const e of rawEntries) {
-    if (e.layoutType === 'split') {
-      // 분할 모드: file1(좌) + file2(우)를 한 항목에 담아 동시 표출
-      if (e.file1 || e.file2) {
-        const primary = e.file1 || e.file2;
-        entries.push({
-          filename: primary,
-          url: `/uploads/${primary}`,
-          mimeType: (e.file1 ? e.file1Mime : e.file2Mime) || 'image/jpeg',
-          url2: e.file1 && e.file2 ? `/uploads/${e.file2}` : '',
-          mimeType2: e.file2Mime || 'image/jpeg',
-          duration: e.duration || 10,
-          sound: e.audio || 'none',
-          transition: e.transition || 'fade',
-          layoutType: 'split',
-          active: true
-        });
-      }
-    } else {
-      // 독립 모드: file1, file2를 각각 별도 항목으로 순차 재생
-      if (e.file1) {
-        entries.push({
-          filename: e.file1,
-          url: `/uploads/${e.file1}`,
-          mimeType: e.file1Mime || 'image/jpeg',
-          duration: e.duration || 10,
-          sound: e.audio || 'none',
-          transition: e.transition || 'fade',
-          layoutType: 'independent',
-          active: true
-        });
-      }
-      if (e.file2) {
-        entries.push({
-          filename: e.file2,
-          url: `/uploads/${e.file2}`,
-          mimeType: e.file2Mime || 'image/jpeg',
-          duration: e.duration || 10,
-          sound: e.audio || 'none',
-          transition: e.transition || 'fade',
-          layoutType: 'independent',
-          active: true
-        });
-      }
-    }
+    if (!e.file1 && !e.file2) continue;
+    const primary = e.file1 || e.file2;
+    const primaryMime = (e.file1 ? e.file1Mime : e.file2Mime) || 'image/jpeg';
+    const secondary = (e.file1 && e.file2) ? e.file2 : '';
+    entries.push({
+      filename: primary,
+      url: `/uploads/${primary}`,
+      mimeType: primaryMime,
+      filename2: secondary || '',
+      url2: secondary ? `/uploads/${secondary}` : '',
+      mimeType2: e.file2Mime || 'image/jpeg',
+      duration: e.duration || 10,
+      videoDuration: e.videoDuration || 'original',
+      sound: e.audio || 'none',
+      transition: e.transition || 'fade',
+      layoutType: e.layoutType || 'independent',
+      active: true
+    });
   }
   return { version: scheduleData.version, entries };
 }

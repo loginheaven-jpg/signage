@@ -125,6 +125,8 @@ function resolveSchedule(raw) {
       resolved[key] = isCached(rel)
         ? pathToFileURL(localFileFor(rel)).href
         : remoteUrlFor(rel);
+      // 호스트 대시보드 썸네일용 원본(상대) 경로 보존
+      resolved[key === 'url' ? 'srcUrl' : 'srcUrl2'] = rel;
     }
     return resolved;
   });
@@ -332,6 +334,12 @@ ipcMain.on('screen2-media', (event, media) => {
   }
 });
 
+// 플레이어가 현재 재생 중인 콘텐츠를 보고 → 대시보드 표시용으로 호스트에 즉시 전달
+ipcMain.on('report-playing', (event, playing) => {
+  lastPlaying = playing;
+  sendHeartbeat();
+});
+
 // 현재 상태 조회
 ipcMain.handle('get-status', async () => {
   return {
@@ -467,17 +475,22 @@ function handleMessage(msg) {
   }
 }
 
+let lastPlaying = null; // 현재 재생 중 콘텐츠 (대시보드 보고용)
+
+function sendHeartbeat() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'heartbeat',
+      clientId: config.clientId,
+      scheduleVersion: currentRawSchedule ? (currentRawSchedule.version || 0) : 0,
+      currentPlaying: lastPlaying
+    }));
+  }
+}
+
 function startHeartbeat() {
   stopHeartbeat();
-  heartbeatTimer = setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'heartbeat',
-        clientId: config.clientId,
-        scheduleVersion: 0
-      }));
-    }
-  }, 30000);
+  heartbeatTimer = setInterval(sendHeartbeat, 30000);
 }
 
 function stopHeartbeat() {

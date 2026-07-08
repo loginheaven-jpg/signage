@@ -289,37 +289,48 @@ function playCurrentEntry() {
 
   const entry = playlist[currentIndex % playlist.length];
   const duration = (entry.duration || 10) * 1000;
-  const isSplit = entry.layoutType === 'split' && entry.url2;
-
-  // 분할 항목은 좌/우 나란히 배치
+  const hasSecond = !!entry.url2;
+  const wantBoth = monitors >= 2 || entry.layoutType === 'split';
   const container = document.getElementById('playerContainer');
-  if (isSplit) { container.classList.add('dual'); container.classList.remove('single'); }
-
-  // 좌측(주) 미디어
-  loadMedia('screen1', entry.url, entry.mimeType);
-
-  // 우측 미디어: 분할 항목이면 url2 표출, 아니면 비움
   const screen2 = document.getElementById('screen2');
-  if (isSplit) {
+
+  if (hasSecond && wantBoth) {
+    // 좌/우 동시 표출 (듀얼 모니터 또는 분할)
+    container.classList.add('dual'); container.classList.remove('single');
     screen2.style.display = 'flex';
+    loadMedia('screen1', entry.url, entry.mimeType);
     loadMedia('screen2', entry.url2, entry.mimeType2);
-  } else if (monitors >= 2) {
-    screen2.style.display = 'flex';
-    screen2.innerHTML = '';
-  } else {
+    showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || ''} + ${entry.filename2 || ''}`);
+    advanceAfter(entry, entry.mimeType, duration, nextEntry);
+  } else if (hasSecond) {
+    // 독립 + 단일 모니터: url1 → url2 순차
+    container.classList.add('single'); container.classList.remove('dual');
     screen2.style.display = 'none';
+    loadMedia('screen1', entry.url, entry.mimeType);
+    showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || entry.url}`);
+    advanceAfter(entry, entry.mimeType, duration, () => {
+      loadMedia('screen1', entry.url2, entry.mimeType2);
+      showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename2 || entry.url2}`);
+      advanceAfter(entry, entry.mimeType2, duration, nextEntry);
+    });
+  } else {
+    container.classList.add('single'); container.classList.remove('dual');
+    screen2.style.display = 'none';
+    loadMedia('screen1', entry.url, entry.mimeType);
+    showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || entry.url} (${entry.duration}초)`);
+    advanceAfter(entry, entry.mimeType, duration, nextEntry);
   }
+}
 
-  showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || entry.url} (${entry.duration}초)`);
-
-  // 동영상 원본 길이 재생 처리
-  const isVideo = entry.mimeType && entry.mimeType.startsWith('video');
+// 영상(원본 길이)이면 재생 종료 시, 아니면 duration 후 onDone 호출
+function advanceAfter(entry, mimeType, duration, onDone) {
   clearTimeout(playTimer);
+  const isVideo = mimeType && mimeType.startsWith('video');
   if (isVideo && entry.videoDuration !== 'custom') {
     const video = document.querySelector('#screen1 video');
-    if (video) { video.onended = () => nextEntry(); return; }
+    if (video) { video.onended = () => onDone(); return; }
   }
-  playTimer = setTimeout(() => nextEntry(), duration);
+  playTimer = setTimeout(() => onDone(), duration);
 }
 
 function nextEntry() {
