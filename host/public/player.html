@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>디지털 게시판 — 클라이언트 플레이어</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+
+/* 대기 화면 */
+.standby {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  color: white;
+  z-index: 100;
+  transition: opacity 0.5s;
+}
+.standby.hidden { opacity: 0; pointer-events: none; }
+.standby .logo { font-size: 64px; margin-bottom: 16px; }
+.standby h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+.standby .status { font-size: 14px; color: #aaa; margin-bottom: 20px; }
+.standby .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+.dot-green { background: #7fdb8a; }
+.dot-yellow { background: #f5a623; }
+.dot-red { background: #e74c3c; }
+
+/* 설정 패널 */
+.config-panel {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  padding: 20px;
+  width: 320px;
+}
+.config-panel label { display: block; font-size: 12px; color: #aaa; margin-bottom: 4px; }
+.config-panel input, .config-panel select {
+  width: 100%; padding: 8px 12px;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 6px; color: white; font-size: 14px;
+  margin-bottom: 12px;
+}
+.config-panel button {
+  width: 100%; padding: 10px;
+  background: #1a73e8; color: white; border: none;
+  border-radius: 6px; font-size: 14px; font-weight: 600;
+  cursor: pointer;
+}
+.config-panel button:hover { background: #1557b0; }
+
+/* 플레이어 영역 */
+.player-container {
+  position: fixed; inset: 0;
+  display: none;
+  background: #000;
+}
+.player-container.active { display: flex; }
+.player-container.single { flex-direction: column; }
+.player-container.dual { flex-direction: row; }
+
+.screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+.screen img, .screen video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* 오버레이 정보 (좌상단) */
+.info-overlay {
+  position: fixed;
+  top: 10px; left: 10px;
+  background: rgba(0,0,0,0.7);
+  color: #7fdb8a;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  z-index: 200;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.info-overlay.visible { opacity: 1; }
+
+/* 전체화면 버튼 */
+.fullscreen-btn {
+  position: fixed;
+  top: 10px; right: 10px;
+  background: rgba(0,0,0,0.7);
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  z-index: 200;
+}
+.fullscreen-btn:hover { background: rgba(255,255,255,0.2); }
+</style>
+</head>
+<body>
+
+<!-- 대기/설정 화면 -->
+<div class="standby" id="standby">
+  <div class="logo">📺</div>
+  <h1>디지털 게시판</h1>
+  <div class="status" id="statusText">
+    <span class="dot dot-yellow"></span> 설정 대기 중
+  </div>
+  <div class="config-panel">
+    <label>클라이언트 이름</label>
+    <input type="text" id="cfgName" value="웹테스트" placeholder="예: 현관, 식당">
+    <label>모니터 모드</label>
+    <select id="cfgMonitors">
+      <option value="1">1대 (순차 재생)</option>
+      <option value="2">2대 (좌/우 동시)</option>
+    </select>
+    <label>호스트 URL (자동 감지됨)</label>
+    <input type="text" id="cfgHost" readonly>
+    <button onclick="connectToHost()">▶ 연결 및 재생 시작</button>
+  </div>
+</div>
+
+<!-- 플레이어 -->
+<div class="player-container" id="playerContainer">
+  <div class="screen" id="screen1"></div>
+  <div class="screen" id="screen2" style="display:none;"></div>
+</div>
+
+<!-- 오버레이 -->
+<div class="info-overlay" id="infoOverlay"></div>
+<button class="fullscreen-btn" id="fsBtn" style="display:none;" onclick="toggleFullscreen()">⛶ 전체화면</button>
+
+<script>
+// ─── 상태 ────────────────────────────────────────────────
+let ws = null;
+let clientId = localStorage.getItem('web_client_id') || crypto.randomUUID();
+localStorage.setItem('web_client_id', clientId);
+
+let monitors = 1;
+let playlist = [];
+let currentIndex = 0;
+let playTimer = null;
+let isPlaying = false;
+let hostBaseUrl = '';
+
+// URL 파라미터에서 이름 가져오기
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get('name')) {
+  document.getElementById('cfgName').value = urlParams.get('name');
+}
+if (urlParams.get('monitors')) {
+  document.getElementById('cfgMonitors').value = urlParams.get('monitors');
+}
+
+// 호스트 URL 자동 감지
+const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const autoHostUrl = `${wsProtocol}//${location.host}`;
+document.getElementById('cfgHost').value = autoHostUrl;
+
+// URL 파라미터에 auto=1이면 자동 연결
+if (urlParams.get('auto') === '1') {
+  setTimeout(() => connectToHost(), 500);
+}
+
+// ─── 호스트 연결 ────────────────────────────────────────
+function connectToHost() {
+  const name = document.getElementById('cfgName').value || '웹테스트';
+  monitors = parseInt(document.getElementById('cfgMonitors').value) || 1;
+  hostBaseUrl = location.origin;
+
+  updateStatus('연결 중...', 'yellow');
+
+  ws = new WebSocket(autoHostUrl);
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      type: 'register',
+      clientId: clientId,
+      name: name,
+      monitors: monitors,
+      scheduleVersion: 0
+    }));
+    updateStatus('호스트 연결됨 — 재생 대기 중', 'green');
+  };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    handleMessage(msg);
+  };
+
+  ws.onclose = () => {
+    updateStatus('연결 끊김 — 재연결 시도 중...', 'red');
+    setTimeout(() => connectToHost(), 5000);
+  };
+
+  ws.onerror = () => {
+    updateStatus('연결 오류', 'red');
+  };
+
+  // 하트비트
+  setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'heartbeat',
+        clientId: clientId,
+        scheduleVersion: playlist.length > 0 ? Date.now() : 0
+      }));
+    }
+  }, 30000);
+}
+
+// ─── 메시지 처리 ────────────────────────────────────────
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'registered':
+      clientId = msg.clientId;
+      localStorage.setItem('web_client_id', clientId);
+      break;
+
+    case 'schedule_update':
+      if (msg.schedule && msg.schedule.entries && msg.schedule.entries.length > 0) {
+        applySchedule(msg.schedule);
+      }
+      break;
+
+    case 'play':
+      playManual(msg.files);
+      break;
+
+    case 'stop':
+      stopPlayback();
+      break;
+
+    case 'sync_now':
+      showInfo('🔄 동기화 명령 수신');
+      break;
+  }
+}
+
+// ─── 편성표 적용 ────────────────────────────────────────
+function applySchedule(schedule) {
+  playlist = schedule.entries;
+  currentIndex = 0;
+  showInfo(`📋 편성표 수신: ${playlist.length}개 항목`);
+  startPlayback();
+}
+
+// ─── 재생 엔진 ──────────────────────────────────────────
+function startPlayback() {
+  if (playlist.length === 0) return;
+  isPlaying = true;
+
+  // UI 전환
+  document.getElementById('standby').classList.add('hidden');
+  const container = document.getElementById('playerContainer');
+  container.classList.add('active');
+  document.getElementById('fsBtn').style.display = 'block';
+
+  if (monitors >= 2) {
+    container.classList.remove('single');
+    container.classList.add('dual');
+    document.getElementById('screen2').style.display = 'flex';
+  } else {
+    container.classList.remove('dual');
+    container.classList.add('single');
+    document.getElementById('screen2').style.display = 'none';
+  }
+
+  playCurrentEntry();
+}
+
+function playCurrentEntry() {
+  if (!isPlaying || playlist.length === 0) return;
+
+  const entry = playlist[currentIndex % playlist.length];
+  const duration = (entry.duration || 10) * 1000;
+
+  if (monitors >= 2) {
+    // 듀얼 모드: 좌/우 동시
+    loadMedia('screen1', entry.file1, entry.file1Mime);
+    if (entry.file2) {
+      loadMedia('screen2', entry.file2, entry.file2Mime);
+    } else {
+      document.getElementById('screen2').innerHTML = '';
+    }
+  } else {
+    // 싱글 모드: file1만 (file2는 다음 순번으로 처리)
+    loadMedia('screen1', entry.file1, entry.file1Mime);
+  }
+
+  showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.file1} (${entry.duration}초)`);
+
+  // 동영상인 경우 재생 시간 처리
+  const isVideo = entry.file1Mime && entry.file1Mime.startsWith('video');
+  let actualDuration = duration;
+
+  if (isVideo && entry.videoDuration === 'original') {
+    // 동영상 끝나면 다음으로 (onended 이벤트 사용)
+    const video = document.querySelector('#screen1 video');
+    if (video) {
+      video.onended = () => nextEntry();
+      return; // 타이머 설정하지 않음
+    }
+  }
+
+  clearTimeout(playTimer);
+  playTimer = setTimeout(() => {
+    // 싱글 모드에서 file2가 있으면 file2도 보여주기
+    if (monitors < 2 && entry.file2) {
+      loadMedia('screen1', entry.file2, entry.file2Mime);
+      showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.file2} (${entry.duration}초)`);
+      playTimer = setTimeout(() => nextEntry(), duration);
+    } else {
+      nextEntry();
+    }
+  }, actualDuration);
+}
+
+function nextEntry() {
+  currentIndex = (currentIndex + 1) % playlist.length;
+  playCurrentEntry();
+}
+
+function loadMedia(screenId, filename, mimeType) {
+  const screen = document.getElementById(screenId);
+  if (!filename) { screen.innerHTML = ''; return; }
+
+  const url = `${hostBaseUrl}/uploads/${filename}`;
+
+  if (mimeType && mimeType.startsWith('video')) {
+    screen.innerHTML = `<video src="${url}" autoplay muted playsinline style="width:100%;height:100%;object-fit:contain;"></video>`;
+  } else {
+    screen.innerHTML = `<img src="${url}" alt="${filename}">`;
+  }
+}
+
+// ─── 수동 재생 (호스트에서 직접 명령) ───────────────────
+function playManual(files) {
+  // 편성표 재생 중단하고 수동 재생
+  clearTimeout(playTimer);
+  isPlaying = false;
+
+  document.getElementById('standby').classList.add('hidden');
+  const container = document.getElementById('playerContainer');
+  container.classList.add('active');
+  document.getElementById('fsBtn').style.display = 'block';
+
+  if (files.length >= 2 && monitors >= 2) {
+    container.classList.remove('single');
+    container.classList.add('dual');
+    document.getElementById('screen2').style.display = 'flex';
+    loadMediaDirect('screen1', files[0]);
+    loadMediaDirect('screen2', files[1]);
+  } else {
+    container.classList.remove('dual');
+    container.classList.add('single');
+    document.getElementById('screen2').style.display = 'none';
+    loadMediaDirect('screen1', files[0]);
+  }
+
+  showInfo(`▶ 수동 재생: ${files[0].originalName}`);
+}
+
+function loadMediaDirect(screenId, file) {
+  const screen = document.getElementById(screenId);
+  const url = `${hostBaseUrl}${file.url}`;
+
+  if (file.mimeType && file.mimeType.startsWith('video')) {
+    screen.innerHTML = `<video src="${url}" autoplay muted playsinline loop style="width:100%;height:100%;object-fit:contain;"></video>`;
+  } else {
+    screen.innerHTML = `<img src="${url}" alt="${file.originalName}">`;
+  }
+}
+
+function stopPlayback() {
+  clearTimeout(playTimer);
+  isPlaying = false;
+  document.getElementById('playerContainer').classList.remove('active');
+  document.getElementById('standby').classList.remove('hidden');
+  document.getElementById('fsBtn').style.display = 'none';
+  updateStatus('호스트 연결됨 — 재생 대기 중', 'green');
+  showInfo('⏹ 정지');
+}
+
+// ─── UI 헬퍼 ────────────────────────────────────────────
+function updateStatus(text, color) {
+  const el = document.getElementById('statusText');
+  el.innerHTML = `<span class="dot dot-${color}"></span> ${text}`;
+}
+
+function showInfo(text) {
+  const el = document.getElementById('infoOverlay');
+  el.textContent = text;
+  el.classList.add('visible');
+  setTimeout(() => el.classList.remove('visible'), 3000);
+}
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen();
+  } else {
+    document.exitFullscreen();
+  }
+}
+
+// 키보드 단축키
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (document.fullscreenElement) document.exitFullscreen();
+  }
+  if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+  if (e.key === 'i' || e.key === 'I') {
+    const el = document.getElementById('infoOverlay');
+    el.classList.toggle('visible');
+  }
+});
+
+// 마우스 움직임으로 오버레이 표시
+let mouseTimer;
+document.addEventListener('mousemove', () => {
+  document.getElementById('fsBtn').style.opacity = '1';
+  clearTimeout(mouseTimer);
+  mouseTimer = setTimeout(() => {
+    document.getElementById('fsBtn').style.opacity = '0';
+  }, 3000);
+});
+</script>
+</body>
+</html>
