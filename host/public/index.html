@@ -72,11 +72,11 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 .upload-area .icon { font-size: 32px; margin-bottom: 8px; }
 
 /* 콘텐츠 목록 */
-.content-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.content-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
 .content-item {
   border: 1px solid #e8e8e8;
   border-radius: 8px;
-  padding: 10px;
+  padding: 8px;
   cursor: pointer;
   transition: all 0.15s;
   position: relative;
@@ -92,35 +92,49 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
   align-items: center;
   justify-content: center;
   font-size: 24px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   overflow: hidden;
 }
 .content-item .thumb img { width: 100%; height: 100%; object-fit: cover; }
-.content-item .fname { font-size: 12px; font-weight: 500; word-break: break-all; }
-.content-item .fsize { font-size: 11px; color: #999; }
-.content-item .delete-btn {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  background: rgba(192,57,43,0.8);
-  color: white;
-  border: none;
-  border-radius: 50%;
-  width: 20px;
-  height: 20px;
-  font-size: 12px;
-  cursor: pointer;
-  display: none;
-}
-.content-item:hover .delete-btn { display: block; }
+.content-item .fname { font-size: 11px; font-weight: 500; word-break: break-all; }
+.content-item .fsize { font-size: 10px; color: #999; }
 
-/* 재생 제어 */
-.play-controls {
+/* 편성표 */
+.schedule-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.schedule-table th {
+  background: #f8f9fa;
+  padding: 10px 8px;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 2px solid #e0e0e0;
+}
+.schedule-table td {
+  padding: 8px;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: middle;
+}
+.schedule-table tr:hover { background: #f8fbff; }
+.schedule-table select, .schedule-table input {
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+  width: 100%;
+}
+.schedule-table input[type="number"] { width: 60px; }
+
+.schedule-actions {
   display: flex;
   gap: 10px;
-  align-items: center;
+  margin-bottom: 16px;
   flex-wrap: wrap;
+  align-items: center;
 }
+
 .btn {
   padding: 10px 20px;
   border-radius: 8px;
@@ -130,12 +144,19 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
   border: none;
   transition: all 0.15s;
 }
+.btn-sm { padding: 6px 12px; font-size: 12px; }
 .btn-play { background: #1a73e8; color: white; }
 .btn-play:hover { background: #1557b0; }
 .btn-play:disabled { background: #ccc; cursor: not-allowed; }
 .btn-stop { background: #c0392b; color: white; }
 .btn-stop:hover { background: #96281b; }
-.btn-stop:disabled { background: #ccc; cursor: not-allowed; }
+.btn-apply { background: #34a853; color: white; }
+.btn-apply:hover { background: #2d8f47; }
+.btn-add { background: #1a73e8; color: white; }
+.btn-danger { background: #e74c3c; color: white; }
+.btn-danger:hover { background: #c0392b; }
+.btn-secondary { background: #6c757d; color: white; }
+.btn-secondary:hover { background: #5a6268; }
 
 .status-bar {
   margin-top: 12px;
@@ -162,6 +183,9 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
   z-index: 1000;
 }
 .toast.show { opacity: 1; transform: translateY(0); }
+
+.drag-handle { cursor: grab; user-select: none; }
+.drag-handle:active { cursor: grabbing; }
 </style>
 </head>
 <body>
@@ -186,11 +210,11 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
     <h2>☁️ 구글 드라이브</h2>
     <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
       <span id="gdriveStatus" style="font-size:13px; color:#666;">상태 확인 중...</span>
-      <button class="btn" style="background:#34a853; color:white; padding:8px 16px; font-size:13px;" onclick="manualSync()">🔄 지금 동기화</button>
+      <button class="btn btn-sm" style="background:#34a853; color:white;" onclick="manualSync()">🔄 지금 동기화</button>
     </div>
   </div>
 
-  <!-- 3. 콘텐츠 -->
+  <!-- 3. 콘텐츠 라이브러리 -->
   <div class="section">
     <h2>📁 콘텐츠</h2>
     <div class="upload-area" id="uploadArea">
@@ -202,15 +226,45 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
     <div class="content-list" id="contentList"></div>
   </div>
 
-  <!-- 3. 재생 제어 -->
+  <!-- 4. 편성표 -->
   <div class="section">
-    <h2>▶️ 재생 제어</h2>
-    <div class="play-controls">
-      <button class="btn btn-play" id="btnPlay" disabled>▶ 선택한 콘텐츠 재생</button>
-      <button class="btn btn-stop" id="btnStop" disabled>⏹ 정지</button>
+    <h2>📋 편성표 (큐시트)</h2>
+    <div class="schedule-actions">
+      <button class="btn btn-sm btn-add" onclick="addScheduleEntry()">+ 항목 추가</button>
+      <button class="btn btn-sm btn-apply" onclick="saveAndApplySchedule()">✓ 저장 및 적용</button>
+      <span style="font-size:12px; color:#888;" id="scheduleInfo">항목 0개</span>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="schedule-table" id="scheduleTable">
+        <thead>
+          <tr>
+            <th style="width:30px"></th>
+            <th>순번</th>
+            <th>좌측 파일 (Screen 1)</th>
+            <th>우측 파일 (Screen 2)</th>
+            <th style="width:80px">표출시간(초)</th>
+            <th style="width:100px">영상 기준</th>
+            <th style="width:60px">삭제</th>
+          </tr>
+        </thead>
+        <tbody id="scheduleBody">
+        </tbody>
+      </table>
+    </div>
+    <div class="status-bar" id="scheduleStatus">
+      편성표를 작성하고 "저장 및 적용"을 누르면 모든 클라이언트에 즉시 반영됩니다.
+    </div>
+  </div>
+
+  <!-- 5. 수동 재생 제어 -->
+  <div class="section">
+    <h2>▶️ 수동 재생 제어</h2>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="btn btn-sm btn-play" id="btnPlay" disabled onclick="playManual()">▶ 선택한 콘텐츠 재생</button>
+      <button class="btn btn-sm btn-stop" id="btnStop" disabled onclick="stopManual()">⏹ 정지</button>
     </div>
     <div class="status-bar" id="statusBar">
-      클라이언트를 선택하고, 재생할 콘텐츠를 선택한 후 재생 버튼을 누르세요.
+      클라이언트를 선택하고, 콘텐츠를 선택한 후 재생 버튼을 누르세요. (편성표와 별개로 즉시 재생)
     </div>
   </div>
 
@@ -221,9 +275,10 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 <script>
 // ─── 상태 ────────────────────────────────────────────────
 let selectedClientId = null;
-let selectedContent = []; // 최대 2개 (듀얼 모니터용)
+let selectedContent = [];
 let clients = [];
 let contentFiles = [];
+let scheduleEntries = [];
 
 // ─── WebSocket (관리자 실시간 업데이트) ──────────────────
 const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -233,71 +288,52 @@ ws.onopen = () => {
   ws.send(JSON.stringify({ type: 'admin_subscribe' }));
   refreshClients();
   refreshContent();
+  refreshSchedule();
 };
 
 ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
-  if (msg.type === 'client_update') {
-    refreshClients();
-  }
-  if (msg.type === 'content_update') {
-    refreshContent();
-    refreshGdriveStatus();
-  }
+  if (msg.type === 'client_update') refreshClients();
+  if (msg.type === 'content_update') { refreshContent(); refreshGdriveStatus(); }
+  if (msg.type === 'schedule_update') refreshSchedule();
 };
 
-ws.onclose = () => {
-  setTimeout(() => location.reload(), 3000);
-};
+ws.onclose = () => { setTimeout(() => location.reload(), 3000); };
 
-// 구글 드라이브 상태
+// ─── 구글 드라이브 ──────────────────────────────────────
 async function refreshGdriveStatus() {
   try {
     const res = await fetch('/api/gdrive/status');
     const st = await res.json();
     const el = document.getElementById('gdriveStatus');
     if (!st.initialized) {
-      el.innerHTML = '❌ 연결 안됨 (서비스 계정 키 확인 필요)';
+      el.innerHTML = '❌ 연결 안됨';
       el.style.color = '#c0392b';
     } else {
       const lastSync = st.lastSync ? new Date(st.lastSync).toLocaleTimeString('ko-KR') : '없음';
-      el.innerHTML = `✅ 연결됨 | 파일: ${st.fileCount}개 | 마지막 동기화: ${lastSync}${st.syncInProgress ? ' | 🔄 동기화 중...' : ''}`;
+      el.innerHTML = `✅ 연결됨 | 파일: ${st.fileCount}개 | 마지막 동기화: ${lastSync}`;
       el.style.color = '#1b8a2d';
     }
-  } catch(e) {
-    document.getElementById('gdriveStatus').textContent = '상태 확인 실패';
-  }
+  } catch(e) {}
 }
 
 async function manualSync() {
-  document.getElementById('gdriveStatus').textContent = '🔄 동기화 중...';
-  showToast('☁️ 구글 드라이브 동기화 시작...');
+  showToast('☁️ 동기화 시작...');
   const res = await fetch('/api/gdrive/sync', { method: 'POST' });
   const data = await res.json();
-  if (data.success) {
-    showToast('✓ 동기화 완료');
-    refreshGdriveStatus();
-    refreshContent();
-  }
+  if (data.success) { showToast('✓ 동기화 완료 (클라이언트에도 전파됨)'); refreshGdriveStatus(); refreshContent(); }
 }
 
 refreshGdriveStatus();
 setInterval(refreshGdriveStatus, 30000);
 
-// ─── API 호출 ────────────────────────────────────────────
+// ─── 클라이언트 ─────────────────────────────────────────
 async function refreshClients() {
   const res = await fetch('/api/clients');
   clients = await res.json();
   renderClients();
 }
 
-async function refreshContent() {
-  const res = await fetch('/api/content');
-  contentFiles = await res.json();
-  renderContent();
-}
-
-// ─── 렌더링 ─────────────────────────────────────────────
 function renderClients() {
   const el = document.getElementById('clientList');
   if (clients.length === 0) {
@@ -315,12 +351,23 @@ function renderClients() {
   `).join('');
 }
 
+function selectClient(id) {
+  selectedClientId = id;
+  renderClients();
+  updatePlayButton();
+}
+
+// ─── 콘텐츠 ─────────────────────────────────────────────
+async function refreshContent() {
+  const res = await fetch('/api/content');
+  contentFiles = await res.json();
+  renderContent();
+  renderSchedule(); // 편성표 드롭다운 갱신
+}
+
 function renderContent() {
   const el = document.getElementById('contentList');
-  if (contentFiles.length === 0) {
-    el.innerHTML = '';
-    return;
-  }
+  if (contentFiles.length === 0) { el.innerHTML = ''; return; }
   el.innerHTML = contentFiles.map(f => {
     const isVideo = f.mimeType && f.mimeType.startsWith('video');
     const isSelected = selectedContent.some(s => s.id === f.id);
@@ -332,27 +379,16 @@ function renderContent() {
         <div class="thumb">${thumbContent}</div>
         <div class="fname">${f.originalName}</div>
         <div class="fsize">${formatSize(f.size)}</div>
-        <button class="delete-btn" onclick="event.stopPropagation(); deleteContent('${f.id}')">✕</button>
       </div>
     `;
   }).join('');
 }
 
-// ─── 이벤트 핸들러 ──────────────────────────────────────
-function selectClient(id) {
-  selectedClientId = id;
-  renderClients();
-  updatePlayButton();
-}
-
 function toggleContent(id) {
   const idx = selectedContent.findIndex(s => s.id === id);
-  if (idx >= 0) {
-    selectedContent.splice(idx, 1);
-  } else {
-    if (selectedContent.length >= 2) {
-      selectedContent.shift(); // 최대 2개, 오래된 것 제거
-    }
+  if (idx >= 0) { selectedContent.splice(idx, 1); }
+  else {
+    if (selectedContent.length >= 2) selectedContent.shift();
     selectedContent.push(contentFiles.find(f => f.id === id));
   }
   renderContent();
@@ -360,49 +396,142 @@ function toggleContent(id) {
 }
 
 function updatePlayButton() {
-  const btnPlay = document.getElementById('btnPlay');
-  const btnStop = document.getElementById('btnStop');
-  btnPlay.disabled = !selectedClientId || selectedContent.length === 0;
-  btnStop.disabled = !selectedClientId;
+  document.getElementById('btnPlay').disabled = !selectedClientId || selectedContent.length === 0;
+  document.getElementById('btnStop').disabled = !selectedClientId;
+}
 
-  const status = document.getElementById('statusBar');
-  if (!selectedClientId) {
-    status.textContent = '① 먼저 클라이언트를 선택하세요.';
-  } else if (selectedContent.length === 0) {
-    status.textContent = '② 재생할 콘텐츠를 선택하세요. (1~2개)';
-  } else {
-    const names = selectedContent.map(c => c.originalName).join(', ');
-    const client = clients.find(c => c.id === selectedClientId);
-    status.textContent = `✓ ${client?.name}에 [${names}] 재생 준비 완료`;
+// ─── 편성표 ─────────────────────────────────────────────
+async function refreshSchedule() {
+  const res = await fetch('/api/schedule');
+  const data = await res.json();
+  scheduleEntries = data.entries || [];
+  renderSchedule();
+}
+
+function renderSchedule() {
+  const tbody = document.getElementById('scheduleBody');
+  const info = document.getElementById('scheduleInfo');
+  info.textContent = `항목 ${scheduleEntries.length}개`;
+
+  if (scheduleEntries.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#999; padding:20px;">편성표가 비어있습니다. "항목 추가"를 눌러 콘텐츠를 편성하세요.</td></tr>';
+    return;
+  }
+
+  const fileOptions = contentFiles.map(f => `<option value="${f.filename}">${f.originalName}</option>`).join('');
+
+  tbody.innerHTML = scheduleEntries.map((entry, i) => `
+    <tr data-index="${i}">
+      <td class="drag-handle">⠿</td>
+      <td>${i + 1}</td>
+      <td>
+        <select onchange="updateEntry(${i}, 'file1', this.value)">
+          <option value="">-- 선택 --</option>
+          ${fileOptions}
+        </select>
+      </td>
+      <td>
+        <select onchange="updateEntry(${i}, 'file2', this.value)">
+          <option value="">-- 없음 (1대용) --</option>
+          ${fileOptions}
+        </select>
+      </td>
+      <td><input type="number" min="3" max="300" value="${entry.duration || 10}" onchange="updateEntry(${i}, 'duration', parseInt(this.value))"></td>
+      <td>
+        <select onchange="updateEntry(${i}, 'videoDuration', this.value)">
+          <option value="original" ${entry.videoDuration === 'original' ? 'selected' : ''}>원본 길이</option>
+          <option value="custom" ${entry.videoDuration === 'custom' ? 'selected' : ''}>지정 시간</option>
+        </select>
+      </td>
+      <td><button class="btn btn-sm btn-danger" onclick="removeEntry(${i})">✕</button></td>
+    </tr>
+  `).join('');
+
+  // 드롭다운 값 설정
+  setTimeout(() => {
+    scheduleEntries.forEach((entry, i) => {
+      const row = tbody.children[i];
+      if (!row) return;
+      const selects = row.querySelectorAll('select');
+      if (selects[0] && entry.file1) selects[0].value = entry.file1;
+      if (selects[1] && entry.file2) selects[1].value = entry.file2;
+    });
+  }, 0);
+}
+
+function addScheduleEntry() {
+  scheduleEntries.push({
+    file1: '',
+    file2: '',
+    duration: 10,
+    videoDuration: 'original'
+  });
+  renderSchedule();
+}
+
+function removeEntry(index) {
+  scheduleEntries.splice(index, 1);
+  renderSchedule();
+}
+
+function updateEntry(index, field, value) {
+  if (scheduleEntries[index]) {
+    scheduleEntries[index][field] = value;
   }
 }
 
-// 재생 버튼
-document.getElementById('btnPlay').addEventListener('click', async () => {
-  if (!selectedClientId || selectedContent.length === 0) return;
+async function saveAndApplySchedule() {
+  // 빈 항목 필터링
+  const validEntries = scheduleEntries.filter(e => e.file1);
 
+  if (validEntries.length === 0) {
+    showToast('⚠️ 최소 1개 이상의 콘텐츠를 편성하세요.');
+    return;
+  }
+
+  // 파일명으로부터 mimeType 매핑
+  validEntries.forEach(entry => {
+    const f1 = contentFiles.find(f => f.filename === entry.file1);
+    const f2 = contentFiles.find(f => f.filename === entry.file2);
+    if (f1) entry.file1Mime = f1.mimeType;
+    if (f2) entry.file2Mime = f2.mimeType;
+  });
+
+  showToast('💾 편성표 저장 중...');
+
+  const res = await fetch('/api/schedule', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entries: validEntries })
+  });
+  const data = await res.json();
+
+  if (data.success) {
+    showToast('✓ 편성표 저장 및 클라이언트 적용 완료!');
+    document.getElementById('scheduleStatus').textContent =
+      `✓ 편성표 적용됨 (버전: ${new Date(data.version).toLocaleTimeString('ko-KR')})`;
+  } else {
+    showToast('✕ 저장 실패');
+  }
+}
+
+// ─── 수동 재생 ──────────────────────────────────────────
+async function playManual() {
+  if (!selectedClientId || selectedContent.length === 0) return;
   const res = await fetch('/api/play', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       clientId: selectedClientId,
-      files: selectedContent.map(f => ({
-        filename: f.filename,
-        originalName: f.originalName,
-        mimeType: f.mimeType
-      }))
+      files: selectedContent.map(f => ({ filename: f.filename, originalName: f.originalName, mimeType: f.mimeType }))
     })
   });
   const data = await res.json();
-  if (data.success) {
-    showToast('✓ 재생 명령 전송 완료');
-  } else {
-    showToast('✕ 오류: ' + (data.error || '전송 실패'));
-  }
-});
+  if (data.success) showToast('✓ 재생 명령 전송');
+  else showToast('✕ ' + (data.error || '전송 실패'));
+}
 
-// 정지 버튼
-document.getElementById('btnStop').addEventListener('click', async () => {
+async function stopManual() {
   if (!selectedClientId) return;
   const res = await fetch('/api/stop', {
     method: 'POST',
@@ -411,9 +540,9 @@ document.getElementById('btnStop').addEventListener('click', async () => {
   });
   const data = await res.json();
   if (data.success) showToast('⏹ 정지 명령 전송');
-});
+}
 
-// 파일 업로드
+// ─── 파일 업로드 ────────────────────────────────────────
 const uploadArea = document.getElementById('uploadArea');
 const fileInput = document.getElementById('fileInput');
 
@@ -431,25 +560,15 @@ async function uploadFiles(files) {
   if (!files.length) return;
   const formData = new FormData();
   for (const f of files) formData.append('files', f);
-
   showToast('📤 업로드 중...');
   const res = await fetch('/api/upload', { method: 'POST', body: formData });
   const data = await res.json();
-  if (data.success) {
-    showToast(`✓ ${data.files.length}개 파일 업로드 완료`);
-    refreshContent();
-  }
-}
-
-async function deleteContent(id) {
-  await fetch(`/api/content/${id}`, { method: 'DELETE' });
-  selectedContent = selectedContent.filter(s => s.id !== id);
-  refreshContent();
-  updatePlayButton();
+  if (data.success) { showToast(`✓ ${data.files.length}개 파일 업로드 완료`); refreshContent(); }
 }
 
 // ─── 유틸 ────────────────────────────────────────────────
 function formatSize(bytes) {
+  if (!bytes || isNaN(bytes)) return '';
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
   return (bytes/1024/1024).toFixed(1) + ' MB';

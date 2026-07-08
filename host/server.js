@@ -1,8 +1,9 @@
 /**
- * 디지털 게시판 호스트 서버 (MVP + 구글 드라이브 연동)
+ * 디지털 게시판 호스트 서버 (v2 — 편성표 + 푸시)
  * - 클라이언트 플레이어 등록/인식 (WebSocket 핸드셰이크)
  * - 콘텐츠 파일 업로드 (로컬 + 구글 드라이브 자동 동기화)
- * - 특정 클라이언트에 재생 명령 전송
+ * - 편성표(큐시트) 관리 및 클라이언트 푸시
+ * - 즉시 동기화 명령 (sync_now)
  */
 
 const express = require('express');
@@ -20,15 +21,45 @@ const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const SCHEDULE_FILE = path.join(__dirname, 'data', 'schedule.json');
 
 // 업로드 디렉토리 확인
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
+// 데이터 디렉토리 확인
+const dataDir = path.join(__dirname, 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
 
 // ─── 상태 관리 ───────────────────────────────────────────
-const clients = new Map(); // clientId -> { ws, name, monitors, status, lastSeen }
+const clients = new Map(); // clientId -> { ws, name, monitors, status, lastSeen, scheduleVersion }
 const contentFiles = []; // { id, originalName, filename, size, mimeType, source, uploadedAt }
+
+// ─── 편성표 관리 ────────────────────────────────────────
+let scheduleData = { version: 0, entries: [] };
+
+function loadSchedule() {
+  try {
+    if (fs.existsSync(SCHEDULE_FILE)) {
+      scheduleData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8'));
+      console.log(`[Schedule] 로드: 버전 ${scheduleData.version}, ${scheduleData.entries.length}개 항목`);
+    }
+  } catch (e) {
+    console.warn('[Schedule] 로드 실패:', e.message);
+  }
+}
+
+function saveSchedule() {
+  try {
+    fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(scheduleData, null, 2));
+  } catch (e) {
+    console.error('[Schedule] 저장 실패:', e.message);
+  }
+}
+
+loadSchedule();
 
 // ─── 구글 드라이브 동기화 ────────────────────────────────
 const gdrive = new GDriveSync({
@@ -38,13 +69,11 @@ const gdrive = new GDriveSync({
   syncInterval: 3 * 60 * 1000, // 3분
   onSyncComplete: (driveFiles) => {
     // 드라이브 파일 목록을 contentFiles에 반영
-    // 기존 gdrive 소스 파일 제거
     for (let i = contentFiles.length - 1; i >= 0; i--) {
       if (contentFiles[i].source === 'gdrive') {
         contentFiles.splice(i, 1);
       }
     }
-    // 새로 추가
     driveFiles.forEach(f => {
       contentFiles.push({
         id: f.driveId,
@@ -56,7 +85,6 @@ const gdrive = new GDriveSync({
         uploadedAt: f.modifiedTime
       });
     });
-    // 관리자 UI에 알림
     broadcastToAdmins({ type: 'content_update' });
     console.log(`[Server] 콘텐츠 목록 갱신: 로컬 ${contentFiles.filter(f => f.source !== 'gdrive').length}개 + 드라이브 ${driveFiles.length}개`);
   }
@@ -102,7 +130,8 @@ app.get('/api/clients', (req, res) => {
       name: info.name,
       monitors: info.monitors,
       status: info.ws.readyState === WebSocket.OPEN ? 'online' : 'offline',
-      lastSeen: info.lastSeen
+      lastSeen: info.lastSeen,
+      scheduleVersion: info.scheduleVersion || 0
     });
   });
   res.json(list);
@@ -137,7 +166,6 @@ app.delete('/api/content/:id', (req, res) => {
   const idx = contentFiles.findIndex(f => f.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Not found' });
   const [removed] = contentFiles.splice(idx, 1);
-  // 로컬 파일만 삭제 (드라이브 파일은 드라이브에서 삭제해야 함)
   if (removed.source === 'local') {
     const filePath = path.join(UPLOADS_DIR, removed.filename);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
@@ -146,10 +174,44 @@ app.delete('/api/content/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// 재생 명령 전송
+// ─── 편성표 API ─────────────────────────────────────────
+
+// 편성표 조회
+app.get('/api/schedule', (req, res) => {
+  res.json(scheduleData);
+});
+
+// 편성표 저장 (전체 교체)
+app.put('/api/schedule', (req, res) => {
+  const { entries } = req.body;
+  if (!Array.isArray(entries)) {
+    return res.status(400).json({ error: 'entries 배열이 필요합니다.' });
+  }
+
+  scheduleData.entries = entries;
+  scheduleData.version = Date.now();
+  saveSchedule();
+
+  console.log(`[Schedule] 저장: 버전 ${scheduleData.version}, ${entries.length}개 항목`);
+
+  // 모든 연결된 클라이언트에 편성표 푸시
+  pushScheduleToClients();
+
+  broadcastToAdmins({ type: 'schedule_update', schedule: scheduleData });
+  res.json({ success: true, version: scheduleData.version });
+});
+
+// 편성표 적용 (클라이언트에 푸시)
+app.post('/api/schedule/apply', (req, res) => {
+  pushScheduleToClients();
+  // 동시에 드라이브 동기화 명령도 전송
+  pushSyncNowToClients();
+  res.json({ success: true, message: '편성표 및 동기화 명령 전송 완료' });
+});
+
+// ─── 재생 명령 전송 (수동 제어) ─────────────────────────
 app.post('/api/play', (req, res) => {
   const { clientId, files } = req.body;
-  // files: [{ filename, originalName, mimeType }] — 1개 또는 2개(듀얼)
 
   if (!clientId || !files || files.length === 0) {
     return res.status(400).json({ error: 'clientId와 files가 필요합니다.' });
@@ -192,6 +254,8 @@ app.get('/api/gdrive/status', (req, res) => {
 // 구글 드라이브 수동 동기화 트리거
 app.post('/api/gdrive/sync', async (req, res) => {
   await gdrive.sync();
+  // 클라이언트에도 동기화 명령 전송
+  pushSyncNowToClients();
   res.json({ success: true, status: gdrive.getStatus() });
 });
 
@@ -204,16 +268,17 @@ wss.on('connection', (ws, req) => {
       const msg = JSON.parse(data);
 
       if (msg.type === 'register') {
-        // 클라이언트 등록 (핸드셰이크)
         const clientId = msg.clientId || uuidv4();
         const clientName = msg.name || `Player-${clientId.slice(0, 6)}`;
         const monitors = msg.monitors || 1;
+        const scheduleVersion = msg.scheduleVersion || 0;
 
         clients.set(clientId, {
           ws,
           name: clientName,
           monitors,
-          lastSeen: new Date().toISOString()
+          lastSeen: new Date().toISOString(),
+          scheduleVersion
         });
 
         // 등록 확인 응답
@@ -226,7 +291,15 @@ wss.on('connection', (ws, req) => {
 
         console.log(`[WS] 클라이언트 등록: ${clientName} (${clientId}), 모니터: ${monitors}대`);
 
-        // 관리자 UI에 알림
+        // 편성표가 있고, 클라이언트 버전이 낮으면 즉시 푸시
+        if (scheduleData.entries.length > 0 && scheduleVersion < scheduleData.version) {
+          ws.send(JSON.stringify({
+            type: 'schedule_update',
+            schedule: scheduleData
+          }));
+          console.log(`[WS] 편성표 푸시 → ${clientName} (v${scheduleData.version})`);
+        }
+
         broadcastToAdmins({ type: 'client_update' });
       }
 
@@ -234,6 +307,7 @@ wss.on('connection', (ws, req) => {
         const client = clients.get(msg.clientId);
         if (client) {
           client.lastSeen = new Date().toISOString();
+          client.scheduleVersion = msg.scheduleVersion || 0;
         }
       }
 
@@ -256,6 +330,8 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+// ─── 헬퍼 함수 ──────────────────────────────────────────
+
 function broadcastToAdmins(msg) {
   const data = JSON.stringify(msg);
   wss.clients.forEach(client => {
@@ -265,10 +341,43 @@ function broadcastToAdmins(msg) {
   });
 }
 
+/**
+ * 모든 연결된 클라이언트에 편성표 푸시
+ */
+function pushScheduleToClients() {
+  const msg = JSON.stringify({
+    type: 'schedule_update',
+    schedule: scheduleData
+  });
+
+  let count = 0;
+  clients.forEach((info, id) => {
+    if (info.ws.readyState === WebSocket.OPEN) {
+      info.ws.send(msg);
+      count++;
+    }
+  });
+  console.log(`[Schedule] 편성표 푸시 → ${count}개 클라이언트`);
+}
+
+/**
+ * 모든 연결된 클라이언트에 즉시 동기화 명령 전송
+ */
+function pushSyncNowToClients() {
+  const msg = JSON.stringify({ type: 'sync_now' });
+
+  clients.forEach((info, id) => {
+    if (info.ws.readyState === WebSocket.OPEN) {
+      info.ws.send(msg);
+    }
+  });
+  console.log('[Sync] 즉시 동기화 명령 전송');
+}
+
 // ─── 서버 시작 ───────────────────────────────────────────
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n╔══════════════════════════════════════════╗`);
-  console.log(`║  디지털 게시판 호스트 서버 시작           ║`);
+  console.log(`║  디지털 게시판 호스트 서버 v2 시작        ║`);
   console.log(`║  http://localhost:${PORT}                  ║`);
   console.log(`╚══════════════════════════════════════════╝\n`);
 });

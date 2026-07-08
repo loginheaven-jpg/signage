@@ -13,6 +13,28 @@ html, body {
   cursor: none;
 }
 
+/* 미디어 레이어 (더블 버퍼링) */
+.media-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  opacity: 0;
+  transition: opacity 0.8s ease;
+  z-index: 1;
+}
+.media-layer.active {
+  opacity: 1;
+  z-index: 2;
+}
+.media-layer img, .media-layer video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 /* 대기 화면 */
 #standby {
   position: absolute;
@@ -25,130 +47,289 @@ html, body {
   color: white;
   z-index: 10;
 }
+#standby.hidden { display: none; }
 #standby .icon { font-size: 64px; margin-bottom: 16px; }
 #standby .title { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
 #standby .subtitle { font-size: 14px; color: #aaa; }
-#standby .pulse {
+#standby .status-dot {
   margin-top: 24px;
   width: 12px;
   height: 12px;
-  background: #7fdb8a;
   border-radius: 50%;
   animation: pulse 2s infinite;
 }
+.status-dot.connected { background: #4caf50; }
+.status-dot.disconnected { background: #ff9800; }
+
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(1.5); }
-}
-
-/* 콘텐츠 영역 */
-#content {
-  position: absolute;
-  inset: 0;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  background: #000;
-}
-#content img, #content video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
 }
 </style>
 </head>
 <body>
 
+<!-- 더블 버퍼링: 두 레이어를 교대로 사용하여 부드러운 전환 -->
+<div class="media-layer" id="layer0"></div>
+<div class="media-layer" id="layer1"></div>
+
+<!-- 대기 화면 -->
 <div id="standby">
   <div class="icon">📺</div>
   <div class="title">디지털 게시판</div>
-  <div class="subtitle" id="standbyInfo">호스트 연결 대기 중...</div>
-  <div class="pulse"></div>
+  <div class="subtitle" id="standbyText">초기화 중...</div>
+  <div class="status-dot disconnected" id="statusDot"></div>
 </div>
 
-<div id="content"></div>
-
 <script>
+// ─── 상태 ────────────────────────────────────────────────
+let playlist = [];
+let currentIndex = -1;
+let activeLayer = 0;
+let playTimer = null;
+let isPlaying = false;
+let monitorCount = 1;
+let myMonitorIndex = 0;
+let hostConnected = false;
+
+const layer0 = document.getElementById('layer0');
+const layer1 = document.getElementById('layer1');
 const standbyEl = document.getElementById('standby');
-const contentEl = document.getElementById('content');
-const standbyInfo = document.getElementById('standbyInfo');
+const standbyText = document.getElementById('standbyText');
+const statusDot = document.getElementById('statusDot');
 
-let currentFiles = [];
-let currentIndex = 0;
-let slideTimer = null;
+// ─── IPC 수신 ───────────────────────────────────────────
 
-// ─── 대기 화면 ───────────────────────────────────────────
-window.signage.onStandby((data) => {
-  standbyInfo.textContent = `${data.name} | 호스트 연결됨 — 재생 대기 중`;
-  showStandby();
-});
+// 편성표 업데이트 (자동 재생 모드)
+window.signage.onUpdatePlaylist((data) => {
+  playlist = data.playlist || [];
+  monitorCount = data.monitorCount || 1;
+  console.log(`[Player] 편성표 수신: ${playlist.length}개 항목, 모니터: ${monitorCount}대`);
 
-// ─── 재생 ────────────────────────────────────────────────
-window.signage.onPlay((data) => {
-  currentFiles = data.files;
-  currentIndex = 0;
-
-  if (data.mode === 'sequential' && currentFiles.length > 1) {
-    // 순차 재생 (모니터 1대, 파일 여러 개)
-    playFile(currentFiles[0]);
-    // 이미지: 10초 후 다음, 영상: 영상 끝나면 다음
-  } else {
-    // 단일 파일 재생
-    playFile(currentFiles[0]);
+  if (playlist.length > 0 && !isPlaying) {
+    startPlayback();
+  } else if (playlist.length > 0 && isPlaying) {
+    // 편성표 변경 시 현재 위치 유지하되 목록 갱신
+    if (currentIndex >= playlist.length) {
+      currentIndex = 0;
+      playCurrentItem();
+    }
+  } else if (playlist.length === 0) {
+    stopPlayback();
+    showStandby('편성표가 비어있습니다');
   }
 });
 
-// ─── 정지 ────────────────────────────────────────────────
-window.signage.onStop(() => {
-  stopPlayback();
-  showStandby();
+// 호스트 연결 상태
+window.signage.onHostStatus((data) => {
+  hostConnected = data.connected;
+  statusDot.className = `status-dot ${hostConnected ? 'connected' : 'disconnected'}`;
+  if (!isPlaying) {
+    standbyText.textContent = hostConnected
+      ? '호스트 연결됨 — 재생 대기 중'
+      : '독립 재생 모드 (호스트 미연결)';
+  }
 });
 
-function showStandby() {
-  standbyEl.style.display = 'flex';
-  contentEl.style.display = 'none';
+// 호스트 직접 재생 명령 (수동 제어)
+window.signage.onPlay((data) => {
   stopPlayback();
+  standbyEl.classList.add('hidden');
+  playDirectFiles(data.files, data.mode);
+});
+
+// 정지 명령
+window.signage.onStop(() => {
+  stopPlayback();
+  showStandby('정지됨');
+});
+
+// 대기 화면 표시
+window.signage.onStandby((data) => {
+  showStandby(`${data.name} | 호스트 연결됨 — 재생 대기 중`);
+});
+
+// ─── 재생 엔진 ──────────────────────────────────────────
+
+function startPlayback() {
+  if (playlist.length === 0) return;
+  isPlaying = true;
+  currentIndex = 0;
+  standbyEl.classList.add('hidden');
+  playCurrentItem();
 }
 
-function playFile(file) {
-  standbyEl.style.display = 'none';
-  contentEl.style.display = 'flex';
-  contentEl.innerHTML = '';
+function stopPlayback() {
+  isPlaying = false;
+  if (playTimer) {
+    clearTimeout(playTimer);
+    playTimer = null;
+  }
+  // 비디오 정지
+  document.querySelectorAll('video').forEach(v => { v.pause(); v.src = ''; });
+  layer0.innerHTML = '';
+  layer1.innerHTML = '';
+  layer0.classList.remove('active');
+  layer1.classList.remove('active');
+}
+
+function playCurrentItem() {
+  if (!isPlaying || playlist.length === 0) return;
+
+  const entry = playlist[currentIndex];
+  if (!entry) {
+    currentIndex = 0;
+    if (playlist.length > 0) playCurrentItem();
+    return;
+  }
+
+  // 모니터 인덱스에 따라 file1 또는 file2 선택
+  let filePath, mimeType;
+  if (monitorCount >= 2) {
+    if (myMonitorIndex === 0) {
+      filePath = entry.file1Path;
+      mimeType = entry.file1Mime;
+    } else {
+      filePath = entry.file2Path || entry.file1Path;
+      mimeType = entry.file2Mime || entry.file1Mime;
+    }
+  } else {
+    filePath = entry.file1Path;
+    mimeType = entry.file1Mime;
+  }
+
+  if (!filePath) {
+    advanceToNext();
+    return;
+  }
+
+  // 더블 버퍼링으로 부드러운 전환
+  const nextLayer = activeLayer === 0 ? 1 : 0;
+  const nextEl = nextLayer === 0 ? layer0 : layer1;
+  const currEl = activeLayer === 0 ? layer0 : layer1;
+
+  const fileUrl = `file://${filePath.replace(/\\/g, '/')}`;
+
+  if (mimeType && mimeType.startsWith('video')) {
+    loadVideo(nextEl, fileUrl, entry, () => {
+      nextEl.classList.add('active');
+      currEl.classList.remove('active');
+      // 이전 레이어 정리
+      setTimeout(() => { currEl.innerHTML = ''; }, 1000);
+      activeLayer = nextLayer;
+    });
+  } else {
+    loadImage(nextEl, fileUrl, entry, () => {
+      nextEl.classList.add('active');
+      currEl.classList.remove('active');
+      setTimeout(() => { currEl.innerHTML = ''; }, 1000);
+      activeLayer = nextLayer;
+
+      // 이미지: duration 후 다음으로
+      playTimer = setTimeout(() => advanceToNext(), (entry.duration || 10) * 1000);
+    });
+  }
+}
+
+function loadImage(layerEl, url, entry, onReady) {
+  layerEl.innerHTML = '';
+  const img = document.createElement('img');
+  img.onload = () => onReady();
+  img.onerror = () => {
+    console.warn('[Player] 이미지 로드 실패:', url);
+    setTimeout(() => advanceToNext(), 500);
+  };
+  img.src = url;
+  layerEl.appendChild(img);
+}
+
+function loadVideo(layerEl, url, entry, onReady) {
+  layerEl.innerHTML = '';
+  const video = document.createElement('video');
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+
+  video.onloadeddata = () => onReady();
+
+  video.onended = () => {
+    if (entry.videoDuration === 'original' || !entry.videoDuration) {
+      advanceToNext();
+    }
+  };
+
+  // custom 모드: 지정 시간 후 다음으로
+  if (entry.videoDuration === 'custom') {
+    video.loop = true;
+    playTimer = setTimeout(() => {
+      video.pause();
+      advanceToNext();
+    }, (entry.duration || 10) * 1000);
+  }
+
+  video.onerror = () => {
+    console.warn('[Player] 동영상 로드 실패:', url);
+    setTimeout(() => advanceToNext(), 500);
+  };
+
+  video.src = url;
+  layerEl.appendChild(video);
+}
+
+function advanceToNext() {
+  if (playTimer) {
+    clearTimeout(playTimer);
+    playTimer = null;
+  }
+
+  currentIndex++;
+  if (currentIndex >= playlist.length) {
+    currentIndex = 0;
+  }
+
+  playCurrentItem();
+}
+
+// ─── 호스트 직접 재생 (수동 제어) ────────────────────────
+function playDirectFiles(files, mode) {
+  if (!files || files.length === 0) return;
+
+  const file = files[0];
+  const nextLayer = activeLayer === 0 ? 1 : 0;
+  const nextEl = nextLayer === 0 ? layer0 : layer1;
+  const currEl = activeLayer === 0 ? layer0 : layer1;
+
+  nextEl.innerHTML = '';
 
   if (file.mimeType && file.mimeType.startsWith('video')) {
     const video = document.createElement('video');
     video.src = file.url;
     video.autoplay = true;
-    video.muted = true; // 기본 음소거
+    video.muted = true;
     video.playsInline = true;
-    video.onended = () => nextSlide();
-    video.onerror = () => nextSlide();
-    contentEl.appendChild(video);
+    nextEl.appendChild(video);
   } else {
     const img = document.createElement('img');
     img.src = file.url;
-    img.onerror = () => nextSlide();
-    contentEl.appendChild(img);
-
-    // 이미지: 10초 후 다음
-    if (currentFiles.length > 1) {
-      slideTimer = setTimeout(() => nextSlide(), 10000);
-    }
+    nextEl.appendChild(img);
   }
+
+  nextEl.classList.add('active');
+  currEl.classList.remove('active');
+  activeLayer = nextLayer;
 }
 
-function nextSlide() {
-  if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
-  if (currentFiles.length <= 1) return; // 단일 파일이면 유지
-
-  currentIndex = (currentIndex + 1) % currentFiles.length;
-  playFile(currentFiles[currentIndex]);
+// ─── 대기 화면 ──────────────────────────────────────────
+function showStandby(text) {
+  standbyEl.classList.remove('hidden');
+  standbyText.textContent = text || '재생 대기 중';
 }
 
-function stopPlayback() {
-  if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
-  contentEl.innerHTML = '';
-}
+// ─── 초기화 ─────────────────────────────────────────────
+const urlParams = new URLSearchParams(window.location.search);
+myMonitorIndex = parseInt(urlParams.get('monitor')) || 0;
+
+showStandby('초기화 중...');
 </script>
 </body>
 </html>

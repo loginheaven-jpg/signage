@@ -5,5 +5,6 @@
  */
 module.exports = {
   HOST_URL: 'ws://localhost:3000',
-  CLIENT_NAME: '현관'  // 이 PC의 이름 (호스트에서 식별용)
+  CLIENT_NAME: '현관',  // 이 PC의 이름 (호스트에서 식별용)
+  GDRIVE_FOLDER_ID: '1NuQfKkX9nA_Dd8Fd75H9By5osyyQz4sm'  // 구글 드라이브 콘텐츠 폴더 ID
 };
