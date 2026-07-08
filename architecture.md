@@ -99,8 +99,9 @@ signage/
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | GET | `/api/clients` | 연결된 클라이언트 목록 |
-| POST | `/api/clients/:id/approve` | 클라이언트 승인 `{ siteId }` (미지정 시 자동 생성) |
+| POST | `/api/clients/:id/approve` | 클라이언트 승인 `{ siteId }` (미지정 시 같은 이름 사이트 재사용, 없으면 자동 생성) |
 | POST | `/api/clients/:id/reject` | 클라이언트 거부/삭제 |
+| POST | `/api/clients/:id/quit` | 클라이언트 앱 원격 종료 (온라인 클라이언트만) |
 | PUT | `/api/clients/:id/site` | 클라이언트 사이트 재배정 `{ siteId }` |
 
 #### 편성표 (큐시트)
@@ -156,6 +157,7 @@ signage/
 { "type": "schedule_update", "schedule": { "version": 1720000000000, "entries": [...] } }
 { "type": "play", "files": [...] }
 { "type": "stop" }
+{ "type": "quit" }
 { "type": "sync_now" }
 ```
 

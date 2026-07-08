@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>디지털 게시판 관리자 - 메인화면</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; color: #1a1a2e; }
+
+/* Header */
+.header {
+  background: #1a1a2e;
+  color: white;
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.header h1 { font-size: 18px; font-weight: 600; }
+.header .subtitle { font-size: 12px; color: #a0a0b0; margin-top: 2px; }
+.header-right { display: flex; align-items: center; gap: 16px; }
+.sync-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #7fdb8a; }
+.sync-dot { width: 8px; height: 8px; background: #7fdb8a; border-radius: 50%; animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+/* Main Layout */
+.main { display: grid; grid-template-columns: 240px 1fr; min-height: calc(100vh - 56px); }
+
+/* Sidebar */
+.sidebar {
+  background: white;
+  border-right: 1px solid #e0e0e0;
+  padding: 16px 0;
+}
+.sidebar-section { margin-bottom: 24px; }
+.sidebar-title { font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; padding: 0 16px; margin-bottom: 8px; letter-spacing: 0.5px; }
+.sidebar-item {
+  padding: 10px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: background 0.15s;
+}
+.sidebar-item:hover { background: #f5f5f5; }
+.sidebar-item.active { background: #e8f0fe; color: #1a73e8; font-weight: 600; border-right: 3px solid #1a73e8; }
+.sidebar-icon { width: 18px; text-align: center; }
+
+/* Content Area */
+.content { padding: 24px; }
+
+/* Site Cards */
+.site-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 20px; margin-bottom: 28px; }
+.site-card {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  border: 1px solid #e8e8e8;
+}
+.site-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.site-name { font-size: 16px; font-weight: 700; }
+.site-badge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+.badge-online { background: #e6f9e8; color: #1b8a2d; }
+.badge-offline { background: #fde8e8; color: #c0392b; }
+
+/* Monitor Preview */
+.monitor-preview {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.monitor-frame {
+  flex: 1;
+  aspect-ratio: 16/9;
+  background: #1a1a2e;
+  border-radius: 6px;
+  border: 2px solid #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+.monitor-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.monitor-label {
+  position: absolute;
+  bottom: 4px;
+  left: 6px;
+  font-size: 9px;
+  color: #aaa;
+  background: rgba(0,0,0,0.6);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.monitor-content-text {
+  color: #666;
+  font-size: 11px;
+  text-align: center;
+}
+
+/* Site Meta */
+.site-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-size: 12px;
+  color: #555;
+}
+.site-meta-item { display: flex; align-items: center; gap: 6px; }
+.meta-label { color: #999; }
+
+/* Playlist Table */
+.playlist-section {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  border: 1px solid #e8e8e8;
+}
+.playlist-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.playlist-title { font-size: 16px; font-weight: 700; }
+.playlist-controls { display: flex; gap: 8px; }
+.btn {
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+}
+.btn-primary { background: #1a73e8; color: white; }
+.btn-primary:hover { background: #1557b0; }
+.btn-secondary { background: #f0f0f0; color: #333; border: 1px solid #ddd; }
+.btn-secondary:hover { background: #e0e0e0; }
+
+/* Filter Tabs */
+.filter-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 0;
+}
+.filter-tab {
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  color: #666;
+  transition: all 0.15s;
+}
+.filter-tab.active { color: #1a73e8; border-bottom-color: #1a73e8; font-weight: 600; }
+.filter-tab:hover { color: #1a73e8; }
+
+/* Table */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th {
+  text-align: left;
+  padding: 10px 12px;
+  background: #f8f9fa;
+  font-weight: 600;
+  color: #555;
+  border-bottom: 1px solid #e0e0e0;
+}
+tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: middle;
+}
+tbody tr:hover { background: #f8f9ff; }
+.file-cell { display: flex; align-items: center; gap: 8px; }
+.file-thumb {
+  width: 40px;
+  height: 24px;
+  background: #eee;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: #999;
+}
+.file-thumb.video { background: #ffe8e8; color: #c0392b; }
+.file-thumb.image { background: #e8f4ff; color: #2980b9; }
+.status-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.status-active { background: #e6f9e8; color: #1b8a2d; }
+.status-inactive { background: #f5f5f5; color: #999; }
+.drag-handle { cursor: grab; color: #ccc; font-size: 16px; }
+.drag-handle:hover { color: #666; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .main { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .site-cards { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div>
+    <h1>📺 디지털 게시판 관리 시스템</h1>
+    <div class="subtitle">교회 디지털 사이니지 중앙 제어</div>
+  </div>
+  <div class="header-right">
+    <div class="sync-status">
+      <span class="sync-dot"></span>
+      마지막 동기화: 2분 전
+    </div>
+  </div>
+</div>
+
+<!-- Main Layout -->
+<div class="main">
+  
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">대시보드</div>
+      <div class="sidebar-item active">
+        <span class="sidebar-icon">🏠</span> 메인 현황
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">사이트 관리</div>
+      <div class="sidebar-item">
+        <span class="sidebar-icon">🚪</span> 현관 (1대)
+      </div>
+      <div class="sidebar-item">
+        <span class="sidebar-icon">🍽️</span> 식당 (2대)
+      </div>
+      <div class="sidebar-item">
+        <span class="sidebar-icon">＋</span> 사이트 추가...
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">편성</div>
+      <div class="sidebar-item">
+        <span class="sidebar-icon">📋</span> 큐시트 편집
+      </div>
+      <div class="sidebar-item">
+        <span class="sidebar-icon">📁</span> 콘텐츠 라이브러리
+      </div>
+      <div class="sidebar-item">
+        <span class="sidebar-icon">📅</span> 재생목록 관리
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">시스템</div>
+      <div class="sidebar-item">
+        <span class="sidebar-icon">⚙️</span> 설정
+      </div>
+      <div class="sidebar-item">
+        <span class="sidebar-icon">📊</span> 로그
+      </div>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="content">
+    
+    <!-- Site Status Cards -->
+    <div class="site-cards">
+      
+      <!-- 현관 Card -->
+      <div class="site-card">
+        <div class="site-card-header">
+          <span class="site-name">🚪 현관</span>
+          <span class="site-badge badge-online">● 온라인</span>
+        </div>
+        <div class="monitor-preview">
+          <div class="monitor-frame">
+            <span class="monitor-content-text">주일예배 안내<br>(img1.jpg)</span>
+            <span class="monitor-label">모니터 1</span>
+          </div>
+        </div>
+        <div class="site-meta">
+          <div class="site-meta-item"><span class="meta-label">모니터:</span> 1대</div>
+          <div class="site-meta-item"><span class="meta-label">현재 재생:</span> 3/5번째</div>
+          <div class="site-meta-item"><span class="meta-label">목록:</span> 주일</div>
+          <div class="site-meta-item"><span class="meta-label">마지막 응답:</span> 30초 전</div>
+        </div>
+      </div>
+
+      <!-- 식당 Card -->
+      <div class="site-card">
+        <div class="site-card-header">
+          <span class="site-name">🍽️ 식당</span>
+          <span class="site-badge badge-online">● 온라인</span>
+        </div>
+        <div class="monitor-preview">
+          <div class="monitor-frame">
+            <span class="monitor-content-text">식단표 좌<br>(menu_left.jpg)</span>
+            <span class="monitor-label">좌</span>
+          </div>
+          <div class="monitor-frame">
+            <span class="monitor-content-text">식단표 우<br>(menu_right.jpg)</span>
+            <span class="monitor-label">우</span>
+          </div>
+        </div>
+        <div class="site-meta">
+          <div class="site-meta-item"><span class="meta-label">모니터:</span> 2대 (듀얼)</div>
+          <div class="site-meta-item"><span class="meta-label">현재 재생:</span> 1/4번째</div>
+          <div class="site-meta-item"><span class="meta-label">목록:</span> 주일</div>
+          <div class="site-meta-item"><span class="meta-label">마지막 응답:</span> 15초 전</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Playlist Table -->
+    <div class="playlist-section">
+      <div class="playlist-header">
+        <span class="playlist-title">📋 큐시트 (편성표)</span>
+        <div class="playlist-controls">
+          <button class="btn btn-secondary">⬇ 구글시트에서 가져오기</button>
+          <button class="btn btn-primary">＋ 항목 추가</button>
+        </div>
+      </div>
+
+      <!-- Filter Tabs (사이트별) -->
+      <div class="filter-tabs">
+        <div class="filter-tab active">전체</div>
+        <div class="filter-tab">현관</div>
+        <div class="filter-tab">식당</div>
+      </div>
+
+      <!-- Table -->
+      <table>
+        <thead>
+          <tr>
+            <th style="width:30px"></th>
+            <th>사이트</th>
+            <th>순번</th>
+            <th>좌측 파일</th>
+            <th>우측 파일</th>
+            <th>편성</th>
+            <th>시간</th>
+            <th>영상기준</th>
+            <th>소리</th>
+            <th>전환</th>
+            <th>상태</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="drag-handle">⠿</span></td>
+            <td>현관</td>
+            <td>1</td>
+            <td>
+              <div class="file-cell">
+                <span class="file-thumb image">IMG</span>
+                welcome.jpg
+              </div>
+            </td>
+            <td style="color:#aaa">—</td>
+            <td>독립</td>
+            <td>10초</td>
+            <td>—</td>
+            <td>없음</td>
+            <td>페이드</td>
+            <td><span class="status-badge status-active">사용</span></td>
+          </tr>
+          <tr>
+            <td><span class="drag-handle">⠿</span></td>
+            <td>현관</td>
+            <td>2</td>
+            <td>
+              <div class="file-cell">
+                <span class="file-thumb video">VID</span>
+                notice_video.mp4
+              </div>
+            </td>
+            <td style="color:#aaa">—</td>
+            <td>독립</td>
+            <td>30초</td>
+            <td>원본</td>
+            <td>좌</td>
+            <td>컷</td>
+            <td><span class="status-badge status-active">사용</span></td>
+          </tr>
+          <tr>
+            <td><span class="drag-handle">⠿</span></td>
+            <td>현관</td>
+            <td>3</td>
+            <td>
+              <div class="file-cell">
+                <span class="file-thumb image">IMG</span>
+                schedule.jpg
+              </div>
+            </td>
+            <td style="color:#aaa">—</td>
+            <td>독립</td>
+            <td>15초</td>
+            <td>—</td>
+            <td>없음</td>
+            <td>페이드</td>
+            <td><span class="status-badge status-active">사용</span></td>
+          </tr>
+          <tr style="background:#fafcff">
+            <td><span class="drag-handle">⠿</span></td>
+            <td>식당</td>
+            <td>1</td>
+            <td>
+              <div class="file-cell">
+                <span class="file-thumb image">IMG</span>
+                menu_left.jpg
+              </div>
+            </td>
+            <td>
+              <div class="file-cell">
+                <span class="file-thumb image">IMG</span>
+                menu_right.jpg
+              </div>
+            </td>
+            <td>독립</td>
+            <td>20초</td>
+            <td>—</td>
+            <td>없음</td>
+            <td>페이드</td>
+            <td><span class="status-badge status-active">사용</span></td>
+          </tr>
+          <tr style="background:#fafcff">
+            <td><span class="drag-handle">⠿</span></td>
+            <td>식당</td>
+            <td>2</td>
+            <td>
+              <div class="file-cell">
+                <span class="file-thumb image">IMG</span>
+                panorama_wide.jpg
+              </div>
+            </td>
+            <td style="color:#aaa; font-style:italic; font-size:11px">← 분할 (3840×1080)</td>
+            <td>분할</td>
+            <td>15초</td>
+            <td>—</td>
+            <td>없음</td>
+            <td>컷</td>
+            <td><span class="status-badge status-active">사용</span></td>
+          </tr>
+          <tr style="background:#fafcff">
+            <td><span class="drag-handle">⠿</span></td>
+            <td>식당</td>
+            <td>3</td>
+            <td>
+              <div class="file-cell">
+                <span class="file-thumb video">VID</span>
+                promo_left.mp4
+              </div>
+            </td>
+            <td>
+              <div class="file-cell">
+                <span class="file-thumb image">IMG</span>
+                promo_right.jpg
+              </div>
+            </td>
+            <td>독립</td>
+            <td>60초</td>
+            <td>고정</td>
+            <td>좌</td>
+            <td>페이드</td>
+            <td><span class="status-badge status-active">사용</span></td>
+          </tr>
+          <tr style="opacity:0.5">
+            <td><span class="drag-handle">⠿</span></td>
+            <td>식당</td>
+            <td>4</td>
+            <td>
+              <div class="file-cell">
+                <span class="file-thumb image">IMG</span>
+                event_old.jpg
+              </div>
+            </td>
+            <td>
+              <div class="file-cell">
+                <span class="file-thumb image">IMG</span>
+                event_old_r.jpg
+              </div>
+            </td>
+            <td>독립</td>
+            <td>10초</td>
+            <td>—</td>
+            <td>없음</td>
+            <td>페이드</td>
+            <td><span class="status-badge status-inactive">중지</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

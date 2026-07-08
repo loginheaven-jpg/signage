@@ -326,6 +326,12 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
       </div>
     </div>
     <div class="sidebar-section">
+      <div class="sidebar-title">작업</div>
+      <div class="sidebar-item" onclick="manualSync()">
+        <span class="sidebar-icon">☁️</span> 드라이브 동기화
+      </div>
+    </div>
+    <div class="sidebar-section">
       <div class="sidebar-title">시스템</div>
       <div class="sidebar-item" data-page="settings">
         <span class="sidebar-icon">⚙️</span> 설정
@@ -338,27 +344,19 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 
     <!-- ═══ PAGE: Dashboard ═══ -->
     <div class="page active" id="page-dashboard">
-      <div class="site-cards" id="siteCards"></div>
-
-      <!-- Quick Actions -->
-      <div class="panel">
-        <div class="panel-header">
-          <span class="panel-title">빠른 작업</span>
-        </div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap;">
-          <button class="btn btn-success" onclick="manualSync()">☁️ 드라이브 동기화</button>
-          <button class="btn btn-primary" onclick="navigateTo('schedule')">📋 편성표 편집</button>
-          <button class="btn btn-secondary" onclick="navigateTo('content')">📁 콘텐츠 관리</button>
-        </div>
-      </div>
-
-      <!-- Connected Clients -->
+      <!-- Connected Clients (맨 위) -->
       <div class="panel">
         <div class="panel-header">
           <span class="panel-title">연결된 클라이언트</span>
         </div>
         <div id="clientList" style="font-size:13px; color:#666;">로딩 중...</div>
       </div>
+
+      <!-- Monitoring (사이트별 모니터 현황) -->
+      <div class="panel-header" style="margin-bottom:12px;">
+        <span class="panel-title">모니터링</span>
+      </div>
+      <div class="site-cards" id="siteCards"></div>
     </div>
 
     <!-- ═══ PAGE: Schedule ═══ -->
@@ -713,7 +711,10 @@ function renderClientList() {
       `;
     } else {
       approvalBadge = '<span style="background:#27ae60; color:#fff; font-size:10px; padding:2px 6px; border-radius:4px; margin-left:6px;">승인됨</span>';
-      actions = `<span style="font-size:11px; color:#666;">사이트: ${siteName}</span>`;
+      const quitBtn = c.status === 'online'
+        ? `<button onclick="quitClient('${c.id}', '${c.name.replace(/'/g, "\\'")}')" style="padding:3px 10px; background:#e67e22; color:#fff; border:none; border-radius:4px; font-size:11px; cursor:pointer; margin-left:8px;">종료</button>`
+        : '';
+      actions = `<span style="font-size:11px; color:#666;">사이트: ${siteName}</span>${quitBtn}`;
     }
 
     return `<div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid #f0f0f0;">
@@ -741,6 +742,14 @@ async function approveClient(clientId) {
   });
   const data = await res.json();
   if (data.success) { showToast('클라이언트 승인 완료'); refreshClients(); refreshSites(); }
+}
+
+async function quitClient(clientId, name) {
+  if (!confirm(`"${name}" 클라이언트 앱을 종료하시겠습니까?\n종료 후에는 해당 PC를 재부팅하거나 수동 실행하기 전까지 재생되지 않습니다.`)) return;
+  const res = await fetch(`/api/clients/${clientId}/quit`, { method: 'POST' });
+  const data = await res.json();
+  if (data.success) { showToast('종료 명령을 전송했습니다.'); }
+  else { showToast(data.error || '종료 실패'); }
 }
 
 async function rejectClient(clientId) {
@@ -1049,6 +1058,8 @@ async function addSite() {
     document.getElementById('newSiteName').value = '';
     document.getElementById('newSiteDesc').value = '';
     refreshSites();
+  } else {
+    showToast(data.error || '사이트 추가 실패');
   }
 }
 

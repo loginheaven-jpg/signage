@@ -516,6 +516,12 @@ function handleMessage(msg) {
     case 'sync_now':
       console.log('[WS] 동기화 명령 수신');
       break;
+
+    case 'quit':
+      // 호스트에서 원격 종료 명령
+      console.log('[WS] 호스트 원격 종료 명령 수신 — 앱 종료');
+      app.quit();
+      break;
   }
 }
 

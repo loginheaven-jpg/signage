@@ -247,6 +247,10 @@ app.get('/api/sites', (req, res) => {
 app.post('/api/sites', (req, res) => {
   const { name, icon, monitors, description } = req.body;
   if (!name) return res.status(400).json({ error: '사이트 이름이 필요합니다.' });
+  // 같은 이름의 사이트 중복 생성 방지
+  if (sites.some(s => s.name === name.trim())) {
+    return res.status(409).json({ error: '같은 이름의 사이트가 이미 있습니다.' });
+  }
   const id = name.toLowerCase().replace(/[^a-z0-9가-힣]/g, '_') + '_' + Date.now().toString(36);
   const newSite = { id, name, icon: icon || '📺', monitors: monitors || 1, description: description || '' };
   sites.push(newSite);
@@ -322,22 +326,27 @@ app.post('/api/clients/:id/approve', (req, res) => {
   const client = clients.get(req.params.id);
   if (!client) return res.status(404).json({ error: '클라이언트를 찾을 수 없습니다.' });
 
-  // 사이트 미선택 시 클라이언트 이름으로 사이트 자동 생성
+  // 사이트 미선택 시: 같은 이름의 사이트가 있으면 재사용, 없으면 자동 생성
+  // (관리자가 미리 만든 사이트와 클라이언트 자동생성 사이트가 중복되지 않도록)
   if (!siteId) {
-    const autoSiteId = `site_${req.params.id.slice(0, 8)}`;
-    const existing = sites.find(s => s.id === autoSiteId);
-    if (!existing) {
-      sites.push({
-        id: autoSiteId,
-        name: client.name,
-        icon: '📺',
-        monitors: client.monitors || 1,
-        description: `${client.name} 클라이언트 자동 생성`
-      });
-      saveSites();
-      broadcastToAdmins({ type: 'sites_update' });
+    const existingByName = sites.find(s => s.name === client.name);
+    if (existingByName) {
+      siteId = existingByName.id;
+    } else {
+      const autoSiteId = `site_${req.params.id.slice(0, 8)}`;
+      if (!sites.find(s => s.id === autoSiteId)) {
+        sites.push({
+          id: autoSiteId,
+          name: client.name,
+          icon: '📺',
+          monitors: client.monitors || 1,
+          description: `${client.name} 클라이언트 자동 생성`
+        });
+        saveSites();
+        broadcastToAdmins({ type: 'sites_update' });
+      }
+      siteId = autoSiteId;
     }
-    siteId = autoSiteId;
   }
 
   client.siteId = siteId;
@@ -361,6 +370,17 @@ app.post('/api/clients/:id/approve', (req, res) => {
 
   broadcastToAdmins({ type: 'client_update' });
   console.log(`[Clients] 승인: ${client.name} (${req.params.id}) → 사이트: ${siteId || '미지정'}`);
+  res.json({ success: true });
+});
+
+// 클라이언트 앱 원격 종료 (호스트에서 클라이언트 PC의 플레이어를 끔)
+app.post('/api/clients/:id/quit', (req, res) => {
+  const client = clients.get(req.params.id);
+  if (!client || client.ws.readyState !== WebSocket.OPEN) {
+    return res.status(404).json({ error: '클라이언트가 오프라인입니다.' });
+  }
+  client.ws.send(JSON.stringify({ type: 'quit' }));
+  console.log(`[Clients] 원격 종료 명령: ${client.name} (${req.params.id})`);
   res.json({ success: true });
 });
 
