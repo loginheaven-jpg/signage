@@ -29,6 +29,9 @@ html, body {
   opacity: 1;
   z-index: 2;
 }
+.media-layer.cut {
+  transition: none;
+}
 .media-layer img, .media-layer video {
   width: 100%;
   height: 100%;
@@ -51,6 +54,14 @@ html, body {
 #standby .icon { font-size: 64px; margin-bottom: 16px; }
 #standby .title { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
 #standby .subtitle { font-size: 14px; color: #aaa; }
+#standby .monitor-badge {
+  margin-top: 16px;
+  padding: 4px 12px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 12px;
+  font-size: 12px;
+  color: #888;
+}
 #standby .status-dot {
   margin-top: 24px;
   width: 12px;
@@ -60,11 +71,30 @@ html, body {
 }
 .status-dot.connected { background: #4caf50; }
 .status-dot.disconnected { background: #ff9800; }
+.status-dot.playing { background: #2196f3; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(1.5); }
 }
+
+/* 디버그 오버레이 */
+#debug {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  background: rgba(0,0,0,0.7);
+  color: #0f0;
+  font-family: monospace;
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  z-index: 100;
+  display: none;
+  max-width: 300px;
+  word-break: break-all;
+}
+#debug.visible { display: block; }
 </style>
 </head>
 <body>
@@ -78,8 +108,12 @@ html, body {
   <div class="icon">📺</div>
   <div class="title">디지털 게시판</div>
   <div class="subtitle" id="standbyText">초기화 중...</div>
+  <div class="monitor-badge" id="monitorBadge">모니터 -</div>
   <div class="status-dot disconnected" id="statusDot"></div>
 </div>
+
+<!-- 디버그 오버레이 (I 키로 토글) -->
+<div id="debug"></div>
 
 <script>
 // ─── 상태 ────────────────────────────────────────────────
@@ -91,12 +125,29 @@ let isPlaying = false;
 let monitorCount = 1;
 let myMonitorIndex = 0;
 let hostConnected = false;
+let clientName = '';
+let initialized = false;
 
 const layer0 = document.getElementById('layer0');
 const layer1 = document.getElementById('layer1');
 const standbyEl = document.getElementById('standby');
 const standbyText = document.getElementById('standbyText');
 const statusDot = document.getElementById('statusDot');
+const monitorBadge = document.getElementById('monitorBadge');
+const debugEl = document.getElementById('debug');
+
+// ─── 초기화 (메인 프로세스에서 모니터 정보 수신) ──────────
+window.signage.onInit((data) => {
+  myMonitorIndex = data.monitorIndex || 0;
+  monitorCount = data.monitorCount || 1;
+  clientName = data.clientName || '';
+  initialized = true;
+
+  monitorBadge.textContent = `모니터 ${myMonitorIndex + 1} / ${monitorCount}대`;
+  standbyText.textContent = `${clientName} | 재생 대기 중`;
+  console.log(`[Player] 초기화: 모니터 ${myMonitorIndex}/${monitorCount}, 이름: ${clientName}`);
+  updateDebug();
+});
 
 // ─── IPC 수신 ───────────────────────────────────────────
 
@@ -104,12 +155,12 @@ const statusDot = document.getElementById('statusDot');
 window.signage.onUpdatePlaylist((data) => {
   playlist = data.playlist || [];
   monitorCount = data.monitorCount || 1;
-  console.log(`[Player] 편성표 수신: ${playlist.length}개 항목, 모니터: ${monitorCount}대`);
+  console.log(`[Player M${myMonitorIndex}] 편성표 수신: ${playlist.length}개 항목`);
 
   if (playlist.length > 0 && !isPlaying) {
     startPlayback();
   } else if (playlist.length > 0 && isPlaying) {
-    // 편성표 변경 시 현재 위치 유지하되 목록 갱신
+    // 편성표 변경 시: 현재 항목이 범위 밖이면 처음부터
     if (currentIndex >= playlist.length) {
       currentIndex = 0;
       playCurrentItem();
@@ -118,17 +169,19 @@ window.signage.onUpdatePlaylist((data) => {
     stopPlayback();
     showStandby('편성표가 비어있습니다');
   }
+  updateDebug();
 });
 
 // 호스트 연결 상태
 window.signage.onHostStatus((data) => {
   hostConnected = data.connected;
-  statusDot.className = `status-dot ${hostConnected ? 'connected' : 'disconnected'}`;
   if (!isPlaying) {
+    statusDot.className = `status-dot ${hostConnected ? 'connected' : 'disconnected'}`;
     standbyText.textContent = hostConnected
-      ? '호스트 연결됨 — 재생 대기 중'
-      : '독립 재생 모드 (호스트 미연결)';
+      ? `${clientName} | 호스트 연결됨 — 재생 대기 중`
+      : `${clientName} | 독립 재생 모드`;
   }
+  updateDebug();
 });
 
 // 호스트 직접 재생 명령 (수동 제어)
@@ -146,7 +199,7 @@ window.signage.onStop(() => {
 
 // 대기 화면 표시
 window.signage.onStandby((data) => {
-  showStandby(`${data.name} | 호스트 연결됨 — 재생 대기 중`);
+  showStandby(data.text || `${clientName} | 재생 대기 중`);
 });
 
 // ─── 재생 엔진 ──────────────────────────────────────────
@@ -156,6 +209,7 @@ function startPlayback() {
   isPlaying = true;
   currentIndex = 0;
   standbyEl.classList.add('hidden');
+  statusDot.className = 'status-dot playing';
   playCurrentItem();
 }
 
@@ -165,8 +219,12 @@ function stopPlayback() {
     clearTimeout(playTimer);
     playTimer = null;
   }
-  // 비디오 정지
-  document.querySelectorAll('video').forEach(v => { v.pause(); v.src = ''; });
+  // 비디오 정지 및 정리
+  document.querySelectorAll('video').forEach(v => {
+    v.pause();
+    v.removeAttribute('src');
+    v.load();
+  });
   layer0.innerHTML = '';
   layer1.innerHTML = '';
   layer0.classList.remove('active');
@@ -183,22 +241,25 @@ function playCurrentItem() {
     return;
   }
 
-  // 모니터 인덱스에 따라 file1 또는 file2 선택
+  // ★ 핵심: 모니터 인덱스에 따라 file1 또는 file2 선택
   let filePath, mimeType;
   if (monitorCount >= 2) {
     if (myMonitorIndex === 0) {
       filePath = entry.file1Path;
       mimeType = entry.file1Mime;
     } else {
+      // 모니터 2: file2가 있으면 file2, 없으면 file1 (단일 파일 편성)
       filePath = entry.file2Path || entry.file1Path;
       mimeType = entry.file2Mime || entry.file1Mime;
     }
   } else {
+    // 싱글 모니터: file1만 사용
     filePath = entry.file1Path;
     mimeType = entry.file1Mime;
   }
 
   if (!filePath) {
+    console.warn(`[Player M${myMonitorIndex}] 파일 경로 없음, 다음으로`);
     advanceToNext();
     return;
   }
@@ -208,15 +269,22 @@ function playCurrentItem() {
   const nextEl = nextLayer === 0 ? layer0 : layer1;
   const currEl = activeLayer === 0 ? layer0 : layer1;
 
+  // 전환 효과 설정
+  if (entry.transition === 'cut') {
+    nextEl.classList.add('cut');
+  } else {
+    nextEl.classList.remove('cut');
+  }
+
   const fileUrl = `file://${filePath.replace(/\\/g, '/')}`;
 
   if (mimeType && mimeType.startsWith('video')) {
     loadVideo(nextEl, fileUrl, entry, () => {
       nextEl.classList.add('active');
       currEl.classList.remove('active');
-      // 이전 레이어 정리
       setTimeout(() => { currEl.innerHTML = ''; }, 1000);
       activeLayer = nextLayer;
+      updateDebug();
     });
   } else {
     loadImage(nextEl, fileUrl, entry, () => {
@@ -226,7 +294,9 @@ function playCurrentItem() {
       activeLayer = nextLayer;
 
       // 이미지: duration 후 다음으로
-      playTimer = setTimeout(() => advanceToNext(), (entry.duration || 10) * 1000);
+      const dur = (entry.duration || 10) * 1000;
+      playTimer = setTimeout(() => advanceToNext(), dur);
+      updateDebug();
     });
   }
 }
@@ -236,7 +306,7 @@ function loadImage(layerEl, url, entry, onReady) {
   const img = document.createElement('img');
   img.onload = () => onReady();
   img.onerror = () => {
-    console.warn('[Player] 이미지 로드 실패:', url);
+    console.warn(`[Player M${myMonitorIndex}] 이미지 로드 실패:`, url);
     setTimeout(() => advanceToNext(), 500);
   };
   img.src = url;
@@ -247,28 +317,29 @@ function loadVideo(layerEl, url, entry, onReady) {
   layerEl.innerHTML = '';
   const video = document.createElement('video');
   video.autoplay = true;
-  video.muted = true;
+  video.muted = true;  // 기본 음소거 (편성표에서 제어 가능)
   video.playsInline = true;
 
   video.onloadeddata = () => onReady();
 
-  video.onended = () => {
-    if (entry.videoDuration === 'original' || !entry.videoDuration) {
-      advanceToNext();
-    }
-  };
-
-  // custom 모드: 지정 시간 후 다음으로
+  // ★ 동영상 시간 제어 로직
   if (entry.videoDuration === 'custom') {
+    // CUSTOM 모드: 지정 시간만큼 재생 (짧으면 반복)
     video.loop = true;
     playTimer = setTimeout(() => {
       video.pause();
       advanceToNext();
     }, (entry.duration || 10) * 1000);
+  } else {
+    // ORIGINAL 모드: 동영상 원본 길이만큼 재생
+    video.loop = false;
+    video.onended = () => {
+      advanceToNext();
+    };
   }
 
   video.onerror = () => {
-    console.warn('[Player] 동영상 로드 실패:', url);
+    console.warn(`[Player M${myMonitorIndex}] 동영상 로드 실패:`, url);
     setTimeout(() => advanceToNext(), 500);
   };
 
@@ -284,7 +355,7 @@ function advanceToNext() {
 
   currentIndex++;
   if (currentIndex >= playlist.length) {
-    currentIndex = 0;
+    currentIndex = 0; // 무한 순환
   }
 
   playCurrentItem();
@@ -306,6 +377,7 @@ function playDirectFiles(files, mode) {
     video.src = file.url;
     video.autoplay = true;
     video.muted = true;
+    video.loop = true;
     video.playsInline = true;
     nextEl.appendChild(video);
   } else {
@@ -316,6 +388,7 @@ function playDirectFiles(files, mode) {
 
   nextEl.classList.add('active');
   currEl.classList.remove('active');
+  setTimeout(() => { currEl.innerHTML = ''; }, 1000);
   activeLayer = nextLayer;
 }
 
@@ -323,12 +396,27 @@ function playDirectFiles(files, mode) {
 function showStandby(text) {
   standbyEl.classList.remove('hidden');
   standbyText.textContent = text || '재생 대기 중';
+  statusDot.className = `status-dot ${hostConnected ? 'connected' : 'disconnected'}`;
 }
 
-// ─── 초기화 ─────────────────────────────────────────────
-const urlParams = new URLSearchParams(window.location.search);
-myMonitorIndex = parseInt(urlParams.get('monitor')) || 0;
+// ─── 디버그 오버레이 ────────────────────────────────────
+function updateDebug() {
+  debugEl.innerHTML = [
+    `모니터: ${myMonitorIndex}/${monitorCount}`,
+    `재생: ${isPlaying ? '●' : '○'} [${currentIndex + 1}/${playlist.length}]`,
+    `호스트: ${hostConnected ? '연결' : '미연결'}`,
+    `현재: ${playlist[currentIndex]?.file1Path?.split(/[\\/]/).pop() || '-'}`
+  ].join('<br>');
+}
 
+// ─── 키보드 단축키 ──────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'i' || e.key === 'I') {
+    debugEl.classList.toggle('visible');
+  }
+});
+
+// ─── 초기 대기 ──────────────────────────────────────────
 showStandby('초기화 중...');
 </script>
 </body>

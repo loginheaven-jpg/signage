@@ -1,9 +1,13 @@
 /**
  * Preload 스크립트 — 렌더러 프로세스에 안전하게 IPC 노출
+ * 디지털 게시판 클라이언트 완전판
  */
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('signage', {
+  // 초기화 정보 수신 (모니터 인덱스, 클라이언트 이름 등)
+  onInit: (callback) => ipcRenderer.on('init', (_, data) => callback(data)),
+
   // 편성표 업데이트 수신 (자동 재생 모드)
   onUpdatePlaylist: (callback) => ipcRenderer.on('update-playlist', (_, data) => callback(data)),
 
