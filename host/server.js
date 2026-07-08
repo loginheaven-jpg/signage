@@ -369,7 +369,7 @@ app.put('/api/schedule', (req, res) => {
   if (!Array.isArray(entries)) return res.status(400).json({ error: 'entries 배열이 필요합니다.' });
 
   scheduleData.entries = entries.map(entry => ({
-    siteId: 'entrance',
+    siteId: entry.siteId || (sites.length > 0 ? sites[0].id : ''),
     layoutType: 'independent',
     audio: 'none',
     transition: 'fade',
