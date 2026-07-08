@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>디지털 게시판 호스트</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; color: #1a1a2e; min-height: 100vh; }
+
+.header {
+  background: #1a1a2e;
+  color: white;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.header h1 { font-size: 20px; font-weight: 600; }
+.header .status { font-size: 12px; color: #7fdb8a; display: flex; align-items: center; gap: 6px; }
+.header .status .dot { width: 8px; height: 8px; background: #7fdb8a; border-radius: 50%; }
+
+.container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+.section {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.section h2 { font-size: 16px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+
+/* 클라이언트 목록 */
+.client-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.client-card {
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  padding: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.client-card:hover { border-color: #1a73e8; background: #f8fbff; }
+.client-card.selected { border-color: #1a73e8; background: #e8f0fe; box-shadow: 0 0 0 2px rgba(26,115,232,0.2); }
+.client-card .name { font-weight: 600; font-size: 14px; }
+.client-card .meta { font-size: 12px; color: #666; margin-top: 4px; }
+.client-card .badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+.badge-online { background: #e6f9e8; color: #1b8a2d; }
+.badge-offline { background: #fde8e8; color: #c0392b; }
+.no-clients { color: #999; font-size: 14px; padding: 20px; text-align: center; }
+
+/* 업로드 */
+.upload-area {
+  border: 2px dashed #ddd;
+  border-radius: 8px;
+  padding: 30px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-bottom: 16px;
+}
+.upload-area:hover { border-color: #1a73e8; background: #f8fbff; }
+.upload-area.dragover { border-color: #1a73e8; background: #e8f0fe; }
+.upload-area p { color: #666; font-size: 14px; }
+.upload-area .icon { font-size: 32px; margin-bottom: 8px; }
+
+/* 콘텐츠 목록 */
+.content-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.content-item {
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+}
+.content-item:hover { border-color: #1a73e8; }
+.content-item.selected { border-color: #1a73e8; background: #e8f0fe; }
+.content-item .thumb {
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: #f0f0f0;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.content-item .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.content-item .fname { font-size: 12px; font-weight: 500; word-break: break-all; }
+.content-item .fsize { font-size: 11px; color: #999; }
+.content-item .delete-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(192,57,43,0.8);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  font-size: 12px;
+  cursor: pointer;
+  display: none;
+}
+.content-item:hover .delete-btn { display: block; }
+
+/* 재생 제어 */
+.play-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.btn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+}
+.btn-play { background: #1a73e8; color: white; }
+.btn-play:hover { background: #1557b0; }
+.btn-play:disabled { background: #ccc; cursor: not-allowed; }
+.btn-stop { background: #c0392b; color: white; }
+.btn-stop:hover { background: #96281b; }
+.btn-stop:disabled { background: #ccc; cursor: not-allowed; }
+
+.status-bar {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #555;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: #333;
+  color: white;
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all 0.3s;
+  z-index: 1000;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📺 디지털 게시판 호스트</h1>
+  <div class="status"><span class="dot"></span> 서버 실행 중</div>
+</div>
+
+<div class="container">
+
+  <!-- 1. 클라이언트 목록 -->
+  <div class="section">
+    <h2>📡 연결된 클라이언트</h2>
+    <div class="client-list" id="clientList">
+      <div class="no-clients">연결된 클라이언트가 없습니다. 클라이언트 플레이어를 실행해주세요.</div>
+    </div>
+  </div>
+
+  <!-- 2. 콘텐츠 업로드 -->
+  <div class="section">
+    <h2>📁 콘텐츠</h2>
+    <div class="upload-area" id="uploadArea">
+      <div class="icon">📤</div>
+      <p>이미지 또는 동영상 파일을 드래그하거나 클릭하여 업로드</p>
+      <p style="font-size:11px; color:#999; margin-top:4px">지원: JPG, PNG, GIF, MP4, WEBM (최대 500MB)</p>
+    </div>
+    <input type="file" id="fileInput" multiple accept="image/*,video/*" style="display:none">
+    <div class="content-list" id="contentList"></div>
+  </div>
+
+  <!-- 3. 재생 제어 -->
+  <div class="section">
+    <h2>▶️ 재생 제어</h2>
+    <div class="play-controls">
+      <button class="btn btn-play" id="btnPlay" disabled>▶ 선택한 콘텐츠 재생</button>
+      <button class="btn btn-stop" id="btnStop" disabled>⏹ 정지</button>
+    </div>
+    <div class="status-bar" id="statusBar">
+      클라이언트를 선택하고, 재생할 콘텐츠를 선택한 후 재생 버튼을 누르세요.
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── 상태 ────────────────────────────────────────────────
+let selectedClientId = null;
+let selectedContent = []; // 최대 2개 (듀얼 모니터용)
+let clients = [];
+let contentFiles = [];
+
+// ─── WebSocket (관리자 실시간 업데이트) ──────────────────
+const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const ws = new WebSocket(`${wsProtocol}//${location.host}`);
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({ type: 'admin_subscribe' }));
+  refreshClients();
+  refreshContent();
+};
+
+ws.onmessage = (e) => {
+  const msg = JSON.parse(e.data);
+  if (msg.type === 'client_update') {
+    refreshClients();
+  }
+};
+
+ws.onclose = () => {
+  setTimeout(() => location.reload(), 3000);
+};
+
+// ─── API 호출 ────────────────────────────────────────────
+async function refreshClients() {
+  const res = await fetch('/api/clients');
+  clients = await res.json();
+  renderClients();
+}
+
+async function refreshContent() {
+  const res = await fetch('/api/content');
+  contentFiles = await res.json();
+  renderContent();
+}
+
+// ─── 렌더링 ─────────────────────────────────────────────
+function renderClients() {
+  const el = document.getElementById('clientList');
+  if (clients.length === 0) {
+    el.innerHTML = '<div class="no-clients">연결된 클라이언트가 없습니다. 클라이언트 플레이어를 실행해주세요.</div>';
+    return;
+  }
+  el.innerHTML = clients.map(c => `
+    <div class="client-card ${c.id === selectedClientId ? 'selected' : ''}" onclick="selectClient('${c.id}')">
+      <div class="name">${c.name}</div>
+      <div class="meta">모니터: ${c.monitors}대 | ID: ${c.id.slice(0,8)}...</div>
+      <span class="badge ${c.status === 'online' ? 'badge-online' : 'badge-offline'}">
+        ● ${c.status === 'online' ? '온라인' : '오프라인'}
+      </span>
+    </div>
+  `).join('');
+}
+
+function renderContent() {
+  const el = document.getElementById('contentList');
+  if (contentFiles.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = contentFiles.map(f => {
+    const isVideo = f.mimeType && f.mimeType.startsWith('video');
+    const isSelected = selectedContent.some(s => s.id === f.id);
+    const thumbContent = isVideo
+      ? '<span style="font-size:32px">🎬</span>'
+      : `<img src="/uploads/${f.filename}" alt="${f.originalName}">`;
+    return `
+      <div class="content-item ${isSelected ? 'selected' : ''}" onclick="toggleContent('${f.id}')">
+        <div class="thumb">${thumbContent}</div>
+        <div class="fname">${f.originalName}</div>
+        <div class="fsize">${formatSize(f.size)}</div>
+        <button class="delete-btn" onclick="event.stopPropagation(); deleteContent('${f.id}')">✕</button>
+      </div>
+    `;
+  }).join('');
+}
+
+// ─── 이벤트 핸들러 ──────────────────────────────────────
+function selectClient(id) {
+  selectedClientId = id;
+  renderClients();
+  updatePlayButton();
+}
+
+function toggleContent(id) {
+  const idx = selectedContent.findIndex(s => s.id === id);
+  if (idx >= 0) {
+    selectedContent.splice(idx, 1);
+  } else {
+    if (selectedContent.length >= 2) {
+      selectedContent.shift(); // 최대 2개, 오래된 것 제거
+    }
+    selectedContent.push(contentFiles.find(f => f.id === id));
+  }
+  renderContent();
+  updatePlayButton();
+}
+
+function updatePlayButton() {
+  const btnPlay = document.getElementById('btnPlay');
+  const btnStop = document.getElementById('btnStop');
+  btnPlay.disabled = !selectedClientId || selectedContent.length === 0;
+  btnStop.disabled = !selectedClientId;
+
+  const status = document.getElementById('statusBar');
+  if (!selectedClientId) {
+    status.textContent = '① 먼저 클라이언트를 선택하세요.';
+  } else if (selectedContent.length === 0) {
+    status.textContent = '② 재생할 콘텐츠를 선택하세요. (1~2개)';
+  } else {
+    const names = selectedContent.map(c => c.originalName).join(', ');
+    const client = clients.find(c => c.id === selectedClientId);
+    status.textContent = `✓ ${client?.name}에 [${names}] 재생 준비 완료`;
+  }
+}
+
+// 재생 버튼
+document.getElementById('btnPlay').addEventListener('click', async () => {
+  if (!selectedClientId || selectedContent.length === 0) return;
+
+  const res = await fetch('/api/play', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      clientId: selectedClientId,
+      files: selectedContent.map(f => ({
+        filename: f.filename,
+        originalName: f.originalName,
+        mimeType: f.mimeType
+      }))
+    })
+  });
+  const data = await res.json();
+  if (data.success) {
+    showToast('✓ 재생 명령 전송 완료');
+  } else {
+    showToast('✕ 오류: ' + (data.error || '전송 실패'));
+  }
+});
+
+// 정지 버튼
+document.getElementById('btnStop').addEventListener('click', async () => {
+  if (!selectedClientId) return;
+  const res = await fetch('/api/stop', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientId: selectedClientId })
+  });
+  const data = await res.json();
+  if (data.success) showToast('⏹ 정지 명령 전송');
+});
+
+// 파일 업로드
+const uploadArea = document.getElementById('uploadArea');
+const fileInput = document.getElementById('fileInput');
+
+uploadArea.addEventListener('click', () => fileInput.click());
+uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadArea.classList.remove('dragover');
+  uploadFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', (e) => uploadFiles(e.target.files));
+
+async function uploadFiles(files) {
+  if (!files.length) return;
+  const formData = new FormData();
+  for (const f of files) formData.append('files', f);
+
+  showToast('📤 업로드 중...');
+  const res = await fetch('/api/upload', { method: 'POST', body: formData });
+  const data = await res.json();
+  if (data.success) {
+    showToast(`✓ ${data.files.length}개 파일 업로드 완료`);
+    refreshContent();
+  }
+}
+
+async function deleteContent(id) {
+  await fetch(`/api/content/${id}`, { method: 'DELETE' });
+  selectedContent = selectedContent.filter(s => s.id !== id);
+  refreshContent();
+  updatePlayButton();
+}
+
+// ─── 유틸 ────────────────────────────────────────────────
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/1024/1024).toFixed(1) + ' MB';
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+</script>
+</body>
+</html>

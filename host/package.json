@@ -1,0 +1,15 @@
+{
+  "name": "digital-signage-host",
+  "version": "1.0.0",
+  "description": "디지털 게시판 호스트 서버 (MVP)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "multer": "^1.4.5-lts.1",
+    "ws": "^8.16.0",
+    "uuid": "^9.0.0"
+  }
+}

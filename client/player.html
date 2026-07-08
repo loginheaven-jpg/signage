@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>디지털 게시판 플레이어</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  cursor: none;
+}
+
+/* 대기 화면 */
+#standby {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  color: white;
+  z-index: 10;
+}
+#standby .icon { font-size: 64px; margin-bottom: 16px; }
+#standby .title { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+#standby .subtitle { font-size: 14px; color: #aaa; }
+#standby .pulse {
+  margin-top: 24px;
+  width: 12px;
+  height: 12px;
+  background: #7fdb8a;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.5); }
+}
+
+/* 콘텐츠 영역 */
+#content {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+#content img, #content video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+</style>
+</head>
+<body>
+
+<div id="standby">
+  <div class="icon">📺</div>
+  <div class="title">디지털 게시판</div>
+  <div class="subtitle" id="standbyInfo">호스트 연결 대기 중...</div>
+  <div class="pulse"></div>
+</div>
+
+<div id="content"></div>
+
+<script>
+const standbyEl = document.getElementById('standby');
+const contentEl = document.getElementById('content');
+const standbyInfo = document.getElementById('standbyInfo');
+
+let currentFiles = [];
+let currentIndex = 0;
+let slideTimer = null;
+
+// ─── 대기 화면 ───────────────────────────────────────────
+window.signage.onStandby((data) => {
+  standbyInfo.textContent = `${data.name} | 호스트 연결됨 — 재생 대기 중`;
+  showStandby();
+});
+
+// ─── 재생 ────────────────────────────────────────────────
+window.signage.onPlay((data) => {
+  currentFiles = data.files;
+  currentIndex = 0;
+
+  if (data.mode === 'sequential' && currentFiles.length > 1) {
+    // 순차 재생 (모니터 1대, 파일 여러 개)
+    playFile(currentFiles[0]);
+    // 이미지: 10초 후 다음, 영상: 영상 끝나면 다음
+  } else {
+    // 단일 파일 재생
+    playFile(currentFiles[0]);
+  }
+});
+
+// ─── 정지 ────────────────────────────────────────────────
+window.signage.onStop(() => {
+  stopPlayback();
+  showStandby();
+});
+
+function showStandby() {
+  standbyEl.style.display = 'flex';
+  contentEl.style.display = 'none';
+  stopPlayback();
+}
+
+function playFile(file) {
+  standbyEl.style.display = 'none';
+  contentEl.style.display = 'flex';
+  contentEl.innerHTML = '';
+
+  if (file.mimeType && file.mimeType.startsWith('video')) {
+    const video = document.createElement('video');
+    video.src = file.url;
+    video.autoplay = true;
+    video.muted = true; // 기본 음소거
+    video.playsInline = true;
+    video.onended = () => nextSlide();
+    video.onerror = () => nextSlide();
+    contentEl.appendChild(video);
+  } else {
+    const img = document.createElement('img');
+    img.src = file.url;
+    img.onerror = () => nextSlide();
+    contentEl.appendChild(img);
+
+    // 이미지: 10초 후 다음
+    if (currentFiles.length > 1) {
+      slideTimer = setTimeout(() => nextSlide(), 10000);
+    }
+  }
+}
+
+function nextSlide() {
+  if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
+  if (currentFiles.length <= 1) return; // 단일 파일이면 유지
+
+  currentIndex = (currentIndex + 1) % currentFiles.length;
+  playFile(currentFiles[currentIndex]);
+}
+
+function stopPlayback() {
+  if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
+  contentEl.innerHTML = '';
+}
+</script>
+</body>
+</html>
