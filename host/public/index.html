@@ -3,77 +3,198 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>디지털 게시판 호스트</title>
+<title>디지털 게시판 관리 시스템</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; color: #1a1a2e; min-height: 100vh; }
 
+/* ─── Header ─── */
 .header {
   background: #1a1a2e;
   color: white;
-  padding: 16px 24px;
+  padding: 12px 24px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
-.header h1 { font-size: 20px; font-weight: 600; }
-.header .status { font-size: 12px; color: #7fdb8a; display: flex; align-items: center; gap: 6px; }
-.header .status .dot { width: 8px; height: 8px; background: #7fdb8a; border-radius: 50%; }
+.header h1 { font-size: 18px; font-weight: 600; }
+.header .subtitle { font-size: 11px; color: #a0a0b0; margin-top: 2px; }
+.header-right { display: flex; align-items: center; gap: 16px; }
+.sync-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #7fdb8a; }
+.sync-dot { width: 8px; height: 8px; background: #7fdb8a; border-radius: 50%; animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
-.container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+/* ─── Main Layout ─── */
+.main { display: grid; grid-template-columns: 220px 1fr; min-height: calc(100vh - 56px); }
 
-.section {
+/* ─── Sidebar ─── */
+.sidebar {
+  background: white;
+  border-right: 1px solid #e0e0e0;
+  padding: 16px 0;
+  position: sticky;
+  top: 56px;
+  height: calc(100vh - 56px);
+  overflow-y: auto;
+}
+.sidebar-section { margin-bottom: 20px; }
+.sidebar-title { font-size: 10px; font-weight: 700; color: #888; text-transform: uppercase; padding: 0 16px; margin-bottom: 6px; letter-spacing: 0.5px; }
+.sidebar-item {
+  padding: 9px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: background 0.15s;
+  border-right: 3px solid transparent;
+}
+.sidebar-item:hover { background: #f5f5f5; }
+.sidebar-item.active { background: #e8f0fe; color: #1a73e8; font-weight: 600; border-right-color: #1a73e8; }
+.sidebar-icon { width: 18px; text-align: center; font-size: 14px; }
+
+/* ─── Content Area ─── */
+.content { padding: 24px; overflow-y: auto; }
+.page { display: none; }
+.page.active { display: block; }
+
+/* ─── Cards ─── */
+.site-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; margin-bottom: 24px; }
+.site-card {
   background: white;
   border-radius: 12px;
   padding: 20px;
-  margin-bottom: 20px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-}
-.section h2 { font-size: 16px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
-
-/* 클라이언트 목록 */
-.client-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-.client-card {
   border: 1px solid #e8e8e8;
-  border-radius: 8px;
-  padding: 14px;
-  cursor: pointer;
-  transition: all 0.15s;
+  transition: box-shadow 0.2s;
 }
-.client-card:hover { border-color: #1a73e8; background: #f8fbff; }
-.client-card.selected { border-color: #1a73e8; background: #e8f0fe; box-shadow: 0 0 0 2px rgba(26,115,232,0.2); }
-.client-card .name { font-weight: 600; font-size: 14px; }
-.client-card .meta { font-size: 12px; color: #666; margin-top: 4px; }
-.client-card .badge {
-  display: inline-block;
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 8px;
-  font-weight: 600;
-  margin-top: 6px;
-}
+.site-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+.site-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.site-name { font-size: 16px; font-weight: 700; }
+.site-badge { font-size: 11px; padding: 3px 8px; border-radius: 12px; font-weight: 600; }
 .badge-online { background: #e6f9e8; color: #1b8a2d; }
 .badge-offline { background: #fde8e8; color: #c0392b; }
-.no-clients { color: #999; font-size: 14px; padding: 20px; text-align: center; }
+.badge-unassigned { background: #fff3e0; color: #e65100; }
 
-/* 업로드 */
-.upload-area {
-  border: 2px dashed #ddd;
-  border-radius: 8px;
-  padding: 30px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.15s;
-  margin-bottom: 16px;
+/* Monitor Preview */
+.monitor-preview { display: flex; gap: 6px; margin-bottom: 12px; }
+.monitor-frame {
+  flex: 1;
+  aspect-ratio: 16/9;
+  background: #1a1a2e;
+  border-radius: 6px;
+  border: 2px solid #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
 }
-.upload-area:hover { border-color: #1a73e8; background: #f8fbff; }
-.upload-area.dragover { border-color: #1a73e8; background: #e8f0fe; }
-.upload-area p { color: #666; font-size: 14px; }
-.upload-area .icon { font-size: 32px; margin-bottom: 8px; }
+.monitor-frame img { width: 100%; height: 100%; object-fit: cover; }
+.monitor-label { position: absolute; bottom: 3px; left: 5px; font-size: 9px; color: #aaa; background: rgba(0,0,0,0.6); padding: 1px 5px; border-radius: 3px; }
+.monitor-content-text { color: #666; font-size: 10px; text-align: center; }
 
-/* 콘텐츠 목록 */
-.content-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
-.content-item {
+.site-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 12px; color: #555; }
+.site-meta-item { display: flex; align-items: center; gap: 4px; }
+.meta-label { color: #999; }
+
+/* ─── Section Panel ─── */
+.panel {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  border: 1px solid #e8e8e8;
+  margin-bottom: 20px;
+}
+.panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.panel-title { font-size: 16px; font-weight: 700; }
+.panel-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ─── Buttons ─── */
+.btn {
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn:hover { opacity: 0.9; }
+.btn-primary { background: #1a73e8; color: white; }
+.btn-success { background: #34a853; color: white; }
+.btn-danger { background: #e74c3c; color: white; }
+.btn-secondary { background: #f0f0f0; color: #333; border: 1px solid #ddd; }
+.btn-sm { padding: 5px 10px; font-size: 11px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ─── Filter Tabs ─── */
+.filter-tabs { display: flex; gap: 2px; margin-bottom: 16px; border-bottom: 1px solid #eee; }
+.filter-tab {
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  color: #666;
+  transition: all 0.15s;
+}
+.filter-tab.active { color: #1a73e8; border-bottom-color: #1a73e8; font-weight: 600; }
+.filter-tab:hover { color: #1a73e8; }
+
+/* ─── Schedule Table ─── */
+.schedule-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.schedule-table th {
+  text-align: left;
+  padding: 8px 6px;
+  background: #f8f9fa;
+  font-weight: 600;
+  color: #555;
+  border-bottom: 1px solid #e0e0e0;
+  white-space: nowrap;
+}
+.schedule-table td {
+  padding: 6px;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: middle;
+}
+.schedule-table tr:hover { background: #f8f9ff; }
+.schedule-table tr.disabled-row { opacity: 0.5; }
+.schedule-table select, .schedule-table input[type="number"] {
+  padding: 4px 6px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 11px;
+  width: 100%;
+}
+.schedule-table input[type="number"] { width: 55px; }
+.schedule-table input[type="date"] { padding: 3px 5px; border: 1px solid #ddd; border-radius: 4px; font-size: 11px; width: 120px; }
+
+.drag-handle { cursor: grab; color: #ccc; font-size: 14px; user-select: none; }
+.drag-handle:hover { color: #666; }
+.drag-handle:active { cursor: grabbing; }
+
+.file-cell { display: flex; align-items: center; gap: 6px; }
+.file-thumb { width: 36px; height: 22px; background: #eee; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 8px; color: #999; flex-shrink: 0; }
+.file-thumb.video { background: #ffe8e8; color: #c0392b; }
+.file-thumb.image { background: #e8f4ff; color: #2980b9; }
+
+.toggle-switch { position: relative; width: 32px; height: 18px; cursor: pointer; }
+.toggle-switch input { display: none; }
+.toggle-slider { position: absolute; inset: 0; background: #ccc; border-radius: 9px; transition: 0.2s; }
+.toggle-slider::before { content: ''; position: absolute; width: 14px; height: 14px; left: 2px; top: 2px; background: white; border-radius: 50%; transition: 0.2s; }
+.toggle-switch input:checked + .toggle-slider { background: #34a853; }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(14px); }
+
+/* ─── Content Library ─── */
+.content-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.content-card {
   border: 1px solid #e8e8e8;
   border-radius: 8px;
   padding: 8px;
@@ -81,9 +202,8 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
   transition: all 0.15s;
   position: relative;
 }
-.content-item:hover { border-color: #1a73e8; }
-.content-item.selected { border-color: #1a73e8; background: #e8f0fe; }
-.content-item .thumb {
+.content-card:hover { border-color: #1a73e8; box-shadow: 0 2px 8px rgba(26,115,232,0.15); }
+.content-card .thumb {
   width: 100%;
   aspect-ratio: 16/9;
   background: #f0f0f0;
@@ -95,312 +215,369 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
   margin-bottom: 6px;
   overflow: hidden;
 }
-.content-item .thumb img { width: 100%; height: 100%; object-fit: cover; }
-.content-item .fname { font-size: 11px; font-weight: 500; word-break: break-all; }
-.content-item .fsize { font-size: 10px; color: #999; }
+.content-card .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.content-card .fname { font-size: 11px; font-weight: 500; word-break: break-all; line-height: 1.3; }
+.content-card .fmeta { font-size: 10px; color: #999; margin-top: 3px; display: flex; justify-content: space-between; }
+.content-card .source-badge { font-size: 9px; padding: 1px 4px; border-radius: 3px; font-weight: 600; }
+.source-gdrive { background: #e8f5e9; color: #2e7d32; }
+.source-local { background: #e3f2fd; color: #1565c0; }
+.content-card .delete-btn {
+  position: absolute; top: 4px; right: 4px;
+  width: 20px; height: 20px;
+  background: rgba(231,76,60,0.9); color: white;
+  border: none; border-radius: 50%; cursor: pointer;
+  font-size: 10px; display: none; align-items: center; justify-content: center;
+}
+.content-card:hover .delete-btn { display: flex; }
 
-/* 편성표 */
-.schedule-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.schedule-table th {
-  background: #f8f9fa;
-  padding: 10px 8px;
-  text-align: left;
-  font-weight: 600;
-  border-bottom: 2px solid #e0e0e0;
-}
-.schedule-table td {
-  padding: 8px;
-  border-bottom: 1px solid #f0f0f0;
-  vertical-align: middle;
-}
-.schedule-table tr:hover { background: #f8fbff; }
-.schedule-table select, .schedule-table input {
-  padding: 4px 8px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  font-size: 12px;
-  width: 100%;
-}
-.schedule-table input[type="number"] { width: 60px; }
-
-.schedule-actions {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.btn {
-  padding: 10px 20px;
+/* ─── Upload Area ─── */
+.upload-area {
+  border: 2px dashed #ddd;
   border-radius: 8px;
-  font-size: 14px;
-  font-weight: 600;
+  padding: 24px;
+  text-align: center;
   cursor: pointer;
-  border: none;
   transition: all 0.15s;
+  margin-bottom: 16px;
 }
-.btn-sm { padding: 6px 12px; font-size: 12px; }
-.btn-play { background: #1a73e8; color: white; }
-.btn-play:hover { background: #1557b0; }
-.btn-play:disabled { background: #ccc; cursor: not-allowed; }
-.btn-stop { background: #c0392b; color: white; }
-.btn-stop:hover { background: #96281b; }
-.btn-apply { background: #34a853; color: white; }
-.btn-apply:hover { background: #2d8f47; }
-.btn-add { background: #1a73e8; color: white; }
-.btn-danger { background: #e74c3c; color: white; }
-.btn-danger:hover { background: #c0392b; }
-.btn-secondary { background: #6c757d; color: white; }
-.btn-secondary:hover { background: #5a6268; }
+.upload-area:hover { border-color: #1a73e8; background: #f8fbff; }
+.upload-area.dragover { border-color: #1a73e8; background: #e8f0fe; }
+.upload-area p { color: #666; font-size: 13px; }
+.upload-area .icon { font-size: 28px; margin-bottom: 6px; }
 
-.status-bar {
-  margin-top: 12px;
-  padding: 10px 14px;
-  background: #f8f9fa;
-  border-radius: 6px;
-  font-size: 13px;
-  color: #555;
-}
+/* ─── Settings ─── */
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.setting-card { background: #f8f9fa; border-radius: 8px; padding: 16px; }
+.setting-card h3 { font-size: 14px; margin-bottom: 10px; }
+.setting-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #eee; font-size: 13px; }
+.setting-row:last-child { border-bottom: none; }
 
-/* Toast */
+/* ─── Toast ─── */
 .toast {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  background: #333;
-  color: white;
-  padding: 12px 20px;
-  border-radius: 8px;
-  font-size: 13px;
-  opacity: 0;
+  position: fixed; bottom: 20px; right: 20px;
+  background: #333; color: white;
+  padding: 12px 20px; border-radius: 8px;
+  font-size: 13px; opacity: 0;
   transform: translateY(10px);
-  transition: all 0.3s;
-  z-index: 1000;
+  transition: all 0.3s; z-index: 1000;
 }
 .toast.show { opacity: 1; transform: translateY(0); }
 
-.drag-handle { cursor: grab; user-select: none; }
-.drag-handle:active { cursor: grabbing; }
+/* ─── Modal ─── */
+.modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.5); z-index: 200;
+  align-items: center; justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: white; border-radius: 12px;
+  padding: 24px; width: 90%; max-width: 480px;
+  max-height: 80vh; overflow-y: auto;
+}
+.modal h3 { font-size: 16px; margin-bottom: 16px; }
+.modal .form-group { margin-bottom: 14px; }
+.modal label { display: block; font-size: 12px; font-weight: 600; color: #555; margin-bottom: 4px; }
+.modal input, .modal select { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; }
+.modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+
+/* ─── Responsive ─── */
+@media (max-width: 768px) {
+  .main { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .site-cards { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
 
+<!-- Header -->
 <div class="header">
-  <h1>📺 디지털 게시판 호스트</h1>
-  <div class="status"><span class="dot"></span> 서버 실행 중</div>
+  <div>
+    <h1>디지털 게시판 관리 시스템</h1>
+    <div class="subtitle">교회 디지털 사이니지 중앙 제어</div>
+  </div>
+  <div class="header-right">
+    <div class="sync-status" id="headerSync">
+      <span class="sync-dot"></span>
+      <span id="headerSyncText">연결 중...</span>
+    </div>
+  </div>
 </div>
 
-<div class="container">
+<!-- Main Layout -->
+<div class="main">
 
-  <!-- 1. 클라이언트 목록 -->
-  <div class="section">
-    <h2>📡 연결된 클라이언트</h2>
-    <div class="client-list" id="clientList">
-      <div class="no-clients">연결된 클라이언트가 없습니다. 클라이언트 플레이어를 실행해주세요.</div>
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">대시보드</div>
+      <div class="sidebar-item active" data-page="dashboard">
+        <span class="sidebar-icon">🏠</span> 메인 현황
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">편성</div>
+      <div class="sidebar-item" data-page="schedule">
+        <span class="sidebar-icon">📋</span> 큐시트 편집
+      </div>
+      <div class="sidebar-item" data-page="content">
+        <span class="sidebar-icon">📁</span> 콘텐츠 라이브러리
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">시스템</div>
+      <div class="sidebar-item" data-page="settings">
+        <span class="sidebar-icon">⚙️</span> 설정
+      </div>
     </div>
   </div>
 
-  <!-- 2. 구글 드라이브 동기화 -->
-  <div class="section">
-    <h2>☁️ 구글 드라이브</h2>
-    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-      <span id="gdriveStatus" style="font-size:13px; color:#666;">상태 확인 중...</span>
-      <button class="btn btn-sm" style="background:#34a853; color:white;" onclick="manualSync()">🔄 지금 동기화</button>
-    </div>
-  </div>
+  <!-- Content -->
+  <div class="content">
 
-  <!-- 3. 콘텐츠 라이브러리 -->
-  <div class="section">
-    <h2>📁 콘텐츠</h2>
-    <div class="upload-area" id="uploadArea">
-      <div class="icon">📤</div>
-      <p>이미지 또는 동영상 파일을 드래그하거나 클릭하여 업로드</p>
-      <p style="font-size:11px; color:#999; margin-top:4px">지원: JPG, PNG, GIF, MP4, WEBM (최대 500MB)</p>
-    </div>
-    <input type="file" id="fileInput" multiple accept="image/*,video/*" style="display:none">
-    <div class="content-list" id="contentList"></div>
-  </div>
+    <!-- ═══ PAGE: Dashboard ═══ -->
+    <div class="page active" id="page-dashboard">
+      <div class="site-cards" id="siteCards"></div>
 
-  <!-- 4. 편성표 -->
-  <div class="section">
-    <h2>📋 편성표 (큐시트)</h2>
-    <div class="schedule-actions">
-      <button class="btn btn-sm btn-add" onclick="addScheduleEntry()">+ 항목 추가</button>
-      <button class="btn btn-sm btn-apply" onclick="saveAndApplySchedule()">✓ 저장 및 적용</button>
-      <span style="font-size:12px; color:#888;" id="scheduleInfo">항목 0개</span>
-    </div>
-    <div style="overflow-x:auto;">
-      <table class="schedule-table" id="scheduleTable">
-        <thead>
-          <tr>
-            <th style="width:30px"></th>
-            <th>순번</th>
-            <th>좌측 파일 (Screen 1)</th>
-            <th>우측 파일 (Screen 2)</th>
-            <th style="width:80px">표출시간(초)</th>
-            <th style="width:100px">영상 기준</th>
-            <th style="width:60px">삭제</th>
-          </tr>
-        </thead>
-        <tbody id="scheduleBody">
-        </tbody>
-      </table>
-    </div>
-    <div class="status-bar" id="scheduleStatus">
-      편성표를 작성하고 "저장 및 적용"을 누르면 모든 클라이언트에 즉시 반영됩니다.
-    </div>
-  </div>
+      <!-- Quick Actions -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">빠른 작업</span>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn btn-success" onclick="manualSync()">☁️ 드라이브 동기화</button>
+          <button class="btn btn-primary" onclick="navigateTo('schedule')">📋 편성표 편집</button>
+          <button class="btn btn-secondary" onclick="navigateTo('content')">📁 콘텐츠 관리</button>
+        </div>
+      </div>
 
-  <!-- 5. 수동 재생 제어 -->
-  <div class="section">
-    <h2>▶️ 수동 재생 제어</h2>
-    <div style="display:flex; gap:10px; flex-wrap:wrap;">
-      <button class="btn btn-sm btn-play" id="btnPlay" disabled onclick="playManual()">▶ 선택한 콘텐츠 재생</button>
-      <button class="btn btn-sm btn-stop" id="btnStop" disabled onclick="stopManual()">⏹ 정지</button>
+      <!-- Connected Clients -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">연결된 클라이언트</span>
+        </div>
+        <div id="clientList" style="font-size:13px; color:#666;">로딩 중...</div>
+      </div>
     </div>
-    <div class="status-bar" id="statusBar">
-      클라이언트를 선택하고, 콘텐츠를 선택한 후 재생 버튼을 누르세요. (편성표와 별개로 즉시 재생)
-    </div>
-  </div>
 
+    <!-- ═══ PAGE: Schedule ═══ -->
+    <div class="page" id="page-schedule">
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">큐시트 (편성표)</span>
+          <div class="panel-controls">
+            <button class="btn btn-primary" onclick="addScheduleEntry()">+ 항목 추가</button>
+            <button class="btn btn-success" onclick="saveAndApplySchedule()">저장 및 적용</button>
+          </div>
+        </div>
+
+        <!-- Filter Tabs -->
+        <div class="filter-tabs" id="scheduleFilterTabs">
+          <div class="filter-tab active" data-site="all">전체</div>
+        </div>
+
+        <!-- Schedule Table -->
+        <div style="overflow-x:auto;">
+          <table class="schedule-table">
+            <thead>
+              <tr>
+                <th style="width:24px"></th>
+                <th>사이트</th>
+                <th>#</th>
+                <th>좌측 파일</th>
+                <th>우측 파일</th>
+                <th>편성</th>
+                <th style="width:55px">시간(초)</th>
+                <th>영상기준</th>
+                <th>소리</th>
+                <th>전환</th>
+                <th style="width:90px">시작일</th>
+                <th style="width:90px">종료일</th>
+                <th style="width:36px">활성</th>
+                <th style="width:30px"></th>
+              </tr>
+            </thead>
+            <tbody id="scheduleBody"></tbody>
+          </table>
+        </div>
+        <div style="margin-top:12px; padding:10px; background:#f8f9fa; border-radius:6px; font-size:12px; color:#666;" id="scheduleStatus">
+          편성표를 작성하고 "저장 및 적용"을 누르면 해당 사이트의 클라이언트에 즉시 반영됩니다.
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ PAGE: Content Library ═══ -->
+    <div class="page" id="page-content">
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">콘텐츠 라이브러리</span>
+          <div class="panel-controls">
+            <button class="btn btn-success" onclick="manualSync()">☁️ 드라이브 동기화</button>
+            <span id="contentCount" style="font-size:12px; color:#888; align-self:center;"></span>
+          </div>
+        </div>
+
+        <div class="upload-area" id="uploadArea">
+          <div class="icon">📤</div>
+          <p>이미지 또는 동영상 파일을 드래그하거나 클릭하여 업로드</p>
+          <p style="font-size:11px; color:#999; margin-top:4px">지원: JPG, PNG, GIF, MP4, WEBM (최대 500MB)</p>
+        </div>
+        <input type="file" id="fileInput" multiple accept="image/*,video/*" style="display:none">
+
+        <div class="content-grid" id="contentGrid"></div>
+      </div>
+    </div>
+
+    <!-- ═══ PAGE: Settings ═══ -->
+    <div class="page" id="page-settings">
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">사이트 관리</span>
+          <button class="btn btn-primary" onclick="showAddSiteModal()">+ 사이트 추가</button>
+        </div>
+        <div id="sitesList"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">구글 드라이브 연동</span>
+        </div>
+        <div class="settings-grid">
+          <div class="setting-card">
+            <h3>동기화 상태</h3>
+            <div id="gdriveSettingsStatus">확인 중...</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">클라이언트 사이트 할당</span>
+        </div>
+        <div id="clientAssignment" style="font-size:13px;">로딩 중...</div>
+      </div>
+    </div>
+
+  </div>
 </div>
 
+<!-- Toast -->
 <div class="toast" id="toast"></div>
 
+<!-- Add Site Modal -->
+<div class="modal-overlay" id="addSiteModal">
+  <div class="modal">
+    <h3>사이트 추가</h3>
+    <div class="form-group">
+      <label>사이트 이름</label>
+      <input type="text" id="newSiteName" placeholder="예: 2층 로비">
+    </div>
+    <div class="form-group">
+      <label>아이콘</label>
+      <input type="text" id="newSiteIcon" value="📺" placeholder="이모지">
+    </div>
+    <div class="form-group">
+      <label>모니터 수</label>
+      <select id="newSiteMonitors">
+        <option value="1">1대</option>
+        <option value="2">2대 (듀얼)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>설명</label>
+      <input type="text" id="newSiteDesc" placeholder="선택사항">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('addSiteModal')">취소</button>
+      <button class="btn btn-primary" onclick="addSite()">추가</button>
+    </div>
+  </div>
+</div>
+
 <script>
-// ─── 상태 ────────────────────────────────────────────────
-let selectedClientId = null;
-let selectedContent = [];
-let clients = [];
+// ═══════════════════════════════════════════════════════════
+// 상태
+// ═══════════════════════════════════════════════════════════
+let sitesData = [];
+let clientsData = [];
 let contentFiles = [];
 let scheduleEntries = [];
+let currentFilter = 'all';
 
-// ─── WebSocket (관리자 실시간 업데이트) ──────────────────
+// ═══════════════════════════════════════════════════════════
+// WebSocket
+// ═══════════════════════════════════════════════════════════
 const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-const ws = new WebSocket(`${wsProtocol}//${location.host}`);
+let ws;
+function connectWS() {
+  ws = new WebSocket(`${wsProtocol}//${location.host}`);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'admin_subscribe' }));
+    document.getElementById('headerSyncText').textContent = '서버 연결됨';
+    refreshAll();
+  };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'client_update' || msg.type === 'sites_update') { refreshSites(); refreshClients(); }
+    if (msg.type === 'content_update') refreshContent();
+    if (msg.type === 'schedule_update') refreshSchedule();
+  };
+  ws.onclose = () => {
+    document.getElementById('headerSyncText').textContent = '연결 끊김 — 재연결 중...';
+    setTimeout(connectWS, 3000);
+  };
+}
+connectWS();
 
-ws.onopen = () => {
-  ws.send(JSON.stringify({ type: 'admin_subscribe' }));
+// ═══════════════════════════════════════════════════════════
+// Navigation
+// ═══════════════════════════════════════════════════════════
+document.querySelectorAll('.sidebar-item[data-page]').forEach(item => {
+  item.addEventListener('click', () => navigateTo(item.dataset.page));
+});
+
+function navigateTo(page) {
+  document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const navItem = document.querySelector(`.sidebar-item[data-page="${page}"]`);
+  if (navItem) navItem.classList.add('active');
+  document.getElementById(`page-${page}`).classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════════
+// Data Refresh
+// ═══════════════════════════════════════════════════════════
+function refreshAll() {
+  refreshSites();
   refreshClients();
   refreshContent();
   refreshSchedule();
-};
-
-ws.onmessage = (e) => {
-  const msg = JSON.parse(e.data);
-  if (msg.type === 'client_update') refreshClients();
-  if (msg.type === 'content_update') { refreshContent(); refreshGdriveStatus(); }
-  if (msg.type === 'schedule_update') refreshSchedule();
-};
-
-ws.onclose = () => { setTimeout(() => location.reload(), 3000); };
-
-// ─── 구글 드라이브 ──────────────────────────────────────
-async function refreshGdriveStatus() {
-  try {
-    const res = await fetch('/api/gdrive/status');
-    const st = await res.json();
-    const el = document.getElementById('gdriveStatus');
-    if (!st.initialized) {
-      el.innerHTML = '❌ 연결 안됨';
-      el.style.color = '#c0392b';
-    } else {
-      const lastSync = st.lastSync ? new Date(st.lastSync).toLocaleTimeString('ko-KR') : '없음';
-      el.innerHTML = `✅ 연결됨 | 파일: ${st.fileCount}개 | 마지막 동기화: ${lastSync}`;
-      el.style.color = '#1b8a2d';
-    }
-  } catch(e) {}
+  refreshGdriveStatus();
 }
 
-async function manualSync() {
-  showToast('☁️ 동기화 시작...');
-  const res = await fetch('/api/gdrive/sync', { method: 'POST' });
-  const data = await res.json();
-  if (data.success) { showToast('✓ 동기화 완료 (클라이언트에도 전파됨)'); refreshGdriveStatus(); refreshContent(); }
+async function refreshSites() {
+  const res = await fetch('/api/sites');
+  sitesData = await res.json();
+  renderSiteCards();
+  renderScheduleFilterTabs();
+  renderSitesList();
 }
 
-refreshGdriveStatus();
-setInterval(refreshGdriveStatus, 30000);
-
-// ─── 클라이언트 ─────────────────────────────────────────
 async function refreshClients() {
   const res = await fetch('/api/clients');
-  clients = await res.json();
-  renderClients();
+  clientsData = await res.json();
+  renderClientList();
+  renderClientAssignment();
 }
 
-function renderClients() {
-  const el = document.getElementById('clientList');
-  if (clients.length === 0) {
-    el.innerHTML = '<div class="no-clients">연결된 클라이언트가 없습니다. 클라이언트 플레이어를 실행해주세요.</div>';
-    return;
-  }
-  el.innerHTML = clients.map(c => `
-    <div class="client-card ${c.id === selectedClientId ? 'selected' : ''}" onclick="selectClient('${c.id}')">
-      <div class="name">${c.name}</div>
-      <div class="meta">모니터: ${c.monitors}대 | ID: ${c.id.slice(0,8)}...</div>
-      <span class="badge ${c.status === 'online' ? 'badge-online' : 'badge-offline'}">
-        ● ${c.status === 'online' ? '온라인' : '오프라인'}
-      </span>
-    </div>
-  `).join('');
-}
-
-function selectClient(id) {
-  selectedClientId = id;
-  renderClients();
-  updatePlayButton();
-}
-
-// ─── 콘텐츠 ─────────────────────────────────────────────
 async function refreshContent() {
   const res = await fetch('/api/content');
   contentFiles = await res.json();
-  renderContent();
-  renderSchedule(); // 편성표 드롭다운 갱신
+  renderContentGrid();
+  renderSchedule(); // 드롭다운 갱신
 }
 
-function renderContent() {
-  const el = document.getElementById('contentList');
-  if (contentFiles.length === 0) { el.innerHTML = ''; return; }
-  el.innerHTML = contentFiles.map(f => {
-    const isVideo = f.mimeType && f.mimeType.startsWith('video');
-    const isSelected = selectedContent.some(s => s.id === f.id);
-    const thumbContent = isVideo
-      ? '<span style="font-size:32px">🎬</span>'
-      : `<img src="/uploads/${f.filename}" alt="${f.originalName}">`;
-    return `
-      <div class="content-item ${isSelected ? 'selected' : ''}" onclick="toggleContent('${f.id}')">
-        <div class="thumb">${thumbContent}</div>
-        <div class="fname">${f.originalName}</div>
-        <div class="fsize">${formatSize(f.size)}</div>
-      </div>
-    `;
-  }).join('');
-}
-
-function toggleContent(id) {
-  const idx = selectedContent.findIndex(s => s.id === id);
-  if (idx >= 0) { selectedContent.splice(idx, 1); }
-  else {
-    if (selectedContent.length >= 2) selectedContent.shift();
-    selectedContent.push(contentFiles.find(f => f.id === id));
-  }
-  renderContent();
-  updatePlayButton();
-}
-
-function updatePlayButton() {
-  document.getElementById('btnPlay').disabled = !selectedClientId || selectedContent.length === 0;
-  document.getElementById('btnStop').disabled = !selectedClientId;
-}
-
-// ─── 편성표 ─────────────────────────────────────────────
 async function refreshSchedule() {
   const res = await fetch('/api/schedule');
   const data = await res.json();
@@ -408,63 +585,220 @@ async function refreshSchedule() {
   renderSchedule();
 }
 
+async function refreshGdriveStatus() {
+  try {
+    const res = await fetch('/api/gdrive/status');
+    const st = await res.json();
+    const el = document.getElementById('gdriveSettingsStatus');
+    if (!st.initialized) {
+      el.innerHTML = '<div class="setting-row"><span>상태</span><span style="color:#c0392b">연결 안됨</span></div>';
+    } else {
+      const lastSync = st.lastSync ? new Date(st.lastSync).toLocaleString('ko-KR') : '없음';
+      el.innerHTML = `
+        <div class="setting-row"><span>상태</span><span style="color:#1b8a2d">연결됨</span></div>
+        <div class="setting-row"><span>파일 수</span><span>${st.fileCount}개</span></div>
+        <div class="setting-row"><span>마지막 동기화</span><span>${lastSync}</span></div>
+        <div class="setting-row"><span>폴더 ID</span><span style="font-size:10px">${st.folderId}</span></div>
+      `;
+    }
+  } catch(e) {}
+}
+setInterval(refreshGdriveStatus, 30000);
+
+// ═══════════════════════════════════════════════════════════
+// Dashboard — Site Cards
+// ═══════════════════════════════════════════════════════════
+function renderSiteCards() {
+  const el = document.getElementById('siteCards');
+  if (sitesData.length === 0) {
+    el.innerHTML = '<div style="color:#999; padding:20px; text-align:center;">사이트가 없습니다. 설정에서 추가하세요.</div>';
+    return;
+  }
+  el.innerHTML = sitesData.map(site => {
+    const statusClass = site.online ? 'badge-online' : (site.clientCount > 0 ? 'badge-offline' : 'badge-unassigned');
+    const statusText = site.online ? '온라인' : (site.clientCount > 0 ? '오프라인' : '미연결');
+    const monitors = [];
+    for (let i = 0; i < site.monitors; i++) {
+      const label = site.monitors === 1 ? '모니터' : (i === 0 ? '좌' : '우');
+      monitors.push(`<div class="monitor-frame"><span class="monitor-content-text">대기 중</span><span class="monitor-label">${label}</span></div>`);
+    }
+    const entryCount = scheduleEntries.filter(e => e.siteId === site.id).length;
+    const activeCount = scheduleEntries.filter(e => e.siteId === site.id && e.enabled).length;
+    return `
+      <div class="site-card">
+        <div class="site-card-header">
+          <span class="site-name">${site.icon} ${site.name}</span>
+          <span class="site-badge ${statusClass}">● ${statusText}</span>
+        </div>
+        <div class="monitor-preview">${monitors.join('')}</div>
+        <div class="site-meta">
+          <div class="site-meta-item"><span class="meta-label">모니터:</span> ${site.monitors}대</div>
+          <div class="site-meta-item"><span class="meta-label">클라이언트:</span> ${site.clientCount}대</div>
+          <div class="site-meta-item"><span class="meta-label">편성:</span> ${activeCount}/${entryCount}개</div>
+          <div class="site-meta-item"><span class="meta-label">마지막 응답:</span> ${getLastSeen(site)}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function getLastSeen(site) {
+  if (!site.clients || site.clients.length === 0) return '—';
+  const online = site.clients.filter(c => c.online);
+  if (online.length === 0) return '오프라인';
+  const latest = online.reduce((a, b) => new Date(a.lastSeen) > new Date(b.lastSeen) ? a : b);
+  const diff = Math.round((Date.now() - new Date(latest.lastSeen).getTime()) / 1000);
+  if (diff < 60) return `${diff}초 전`;
+  if (diff < 3600) return `${Math.round(diff/60)}분 전`;
+  return `${Math.round(diff/3600)}시간 전`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Dashboard — Client List
+// ═══════════════════════════════════════════════════════════
+function renderClientList() {
+  const el = document.getElementById('clientList');
+  if (clientsData.length === 0) {
+    el.innerHTML = '<div style="color:#999; padding:10px;">연결된 클라이언트가 없습니다.</div>';
+    return;
+  }
+  el.innerHTML = clientsData.map(c => {
+    const siteName = sitesData.find(s => s.id === c.siteId)?.name || '미지정';
+    const badge = c.status === 'online'
+      ? '<span style="color:#1b8a2d; font-weight:600;">● 온라인</span>'
+      : '<span style="color:#c0392b;">● 오프라인</span>';
+    return `<div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #f0f0f0;">
+      <div><strong>${c.name}</strong> <span style="color:#999; font-size:11px;">(${c.id.slice(0,8)}...)</span></div>
+      <div style="display:flex; gap:12px; align-items:center;">
+        <span style="font-size:11px; color:#666;">사이트: ${siteName}</span>
+        <span style="font-size:11px; color:#666;">모니터: ${c.monitors}대</span>
+        ${badge}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════
+// Schedule — Filter Tabs
+// ═══════════════════════════════════════════════════════════
+function renderScheduleFilterTabs() {
+  const el = document.getElementById('scheduleFilterTabs');
+  el.innerHTML = `<div class="filter-tab ${currentFilter === 'all' ? 'active' : ''}" data-site="all" onclick="setScheduleFilter('all')">전체</div>` +
+    sitesData.map(s => `<div class="filter-tab ${currentFilter === s.id ? 'active' : ''}" data-site="${s.id}" onclick="setScheduleFilter('${s.id}')">${s.name}</div>`).join('');
+}
+
+function setScheduleFilter(siteId) {
+  currentFilter = siteId;
+  renderScheduleFilterTabs();
+  renderSchedule();
+}
+
+// ═══════════════════════════════════════════════════════════
+// Schedule — Table Render
+// ═══════════════════════════════════════════════════════════
 function renderSchedule() {
   const tbody = document.getElementById('scheduleBody');
-  const info = document.getElementById('scheduleInfo');
-  info.textContent = `항목 ${scheduleEntries.length}개`;
+  const filtered = currentFilter === 'all'
+    ? scheduleEntries
+    : scheduleEntries.filter(e => e.siteId === currentFilter);
 
-  if (scheduleEntries.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#999; padding:20px;">편성표가 비어있습니다. "항목 추가"를 눌러 콘텐츠를 편성하세요.</td></tr>';
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="14" style="text-align:center; color:#999; padding:20px;">편성표가 비어있습니다. "항목 추가"를 눌러 콘텐츠를 편성하세요.</td></tr>';
     return;
   }
 
   const fileOptions = contentFiles.map(f => `<option value="${f.filename}">${f.originalName}</option>`).join('');
+  const siteOptions = sitesData.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
-  tbody.innerHTML = scheduleEntries.map((entry, i) => `
-    <tr data-index="${i}">
-      <td class="drag-handle">⠿</td>
-      <td>${i + 1}</td>
-      <td>
-        <select onchange="updateEntry(${i}, 'file1', this.value)">
-          <option value="">-- 선택 --</option>
-          ${fileOptions}
-        </select>
-      </td>
-      <td>
-        <select onchange="updateEntry(${i}, 'file2', this.value)">
-          <option value="">-- 없음 (1대용) --</option>
-          ${fileOptions}
-        </select>
-      </td>
-      <td><input type="number" min="3" max="300" value="${entry.duration || 10}" onchange="updateEntry(${i}, 'duration', parseInt(this.value))"></td>
-      <td>
-        <select onchange="updateEntry(${i}, 'videoDuration', this.value)">
-          <option value="original" ${entry.videoDuration === 'original' ? 'selected' : ''}>원본 길이</option>
-          <option value="custom" ${entry.videoDuration === 'custom' ? 'selected' : ''}>지정 시간</option>
-        </select>
-      </td>
-      <td><button class="btn btn-sm btn-danger" onclick="removeEntry(${i})">✕</button></td>
-    </tr>
-  `).join('');
+  tbody.innerHTML = filtered.map((entry, fi) => {
+    // 실제 인덱스 찾기
+    const realIdx = scheduleEntries.indexOf(entry);
+    const isVideo1 = entry.file1Mime && entry.file1Mime.startsWith('video');
+    const isVideo2 = entry.file2Mime && entry.file2Mime.startsWith('video');
+
+    return `
+      <tr class="${!entry.enabled ? 'disabled-row' : ''}" data-index="${realIdx}">
+        <td><span class="drag-handle" draggable="true" ondragstart="dragStart(event, ${realIdx})" ondragover="dragOver(event)" ondrop="drop(event, ${realIdx})">⠿</span></td>
+        <td>
+          <select onchange="updateEntry(${realIdx}, 'siteId', this.value)" style="width:70px">
+            ${siteOptions}
+          </select>
+        </td>
+        <td style="color:#999; font-size:11px;">${fi + 1}</td>
+        <td>
+          <select onchange="updateEntry(${realIdx}, 'file1', this.value); updateMime(${realIdx}, 'file1Mime', this.value)">
+            <option value="">— 선택 —</option>
+            ${fileOptions}
+          </select>
+        </td>
+        <td>
+          <select onchange="updateEntry(${realIdx}, 'file2', this.value); updateMime(${realIdx}, 'file2Mime', this.value)" ${entry.layoutType === 'split' ? 'disabled' : ''}>
+            <option value="">— 없음 —</option>
+            ${fileOptions}
+          </select>
+        </td>
+        <td>
+          <select onchange="updateEntry(${realIdx}, 'layoutType', this.value); renderSchedule();" style="width:60px">
+            <option value="independent" ${entry.layoutType === 'independent' ? 'selected' : ''}>독립</option>
+            <option value="split" ${entry.layoutType === 'split' ? 'selected' : ''}>분할</option>
+          </select>
+        </td>
+        <td><input type="number" min="3" max="600" value="${entry.duration || 10}" onchange="updateEntry(${realIdx}, 'duration', parseInt(this.value))"></td>
+        <td>
+          <select onchange="updateEntry(${realIdx}, 'videoDuration', this.value)" style="width:65px">
+            <option value="original" ${entry.videoDuration === 'original' ? 'selected' : ''}>원본</option>
+            <option value="custom" ${entry.videoDuration === 'custom' ? 'selected' : ''}>지정</option>
+          </select>
+        </td>
+        <td>
+          <select onchange="updateEntry(${realIdx}, 'audio', this.value)" style="width:55px">
+            <option value="none" ${entry.audio === 'none' ? 'selected' : ''}>없음</option>
+            <option value="left" ${entry.audio === 'left' ? 'selected' : ''}>좌</option>
+            <option value="right" ${entry.audio === 'right' ? 'selected' : ''}>우</option>
+          </select>
+        </td>
+        <td>
+          <select onchange="updateEntry(${realIdx}, 'transition', this.value)" style="width:60px">
+            <option value="fade" ${entry.transition === 'fade' ? 'selected' : ''}>페이드</option>
+            <option value="cut" ${entry.transition === 'cut' ? 'selected' : ''}>컷</option>
+            <option value="slide" ${entry.transition === 'slide' ? 'selected' : ''}>슬라이드</option>
+          </select>
+        </td>
+        <td><input type="date" value="${entry.validFrom || ''}" onchange="updateEntry(${realIdx}, 'validFrom', this.value || null)"></td>
+        <td><input type="date" value="${entry.validTo || ''}" onchange="updateEntry(${realIdx}, 'validTo', this.value || null)"></td>
+        <td>
+          <label class="toggle-switch">
+            <input type="checkbox" ${entry.enabled ? 'checked' : ''} onchange="updateEntry(${realIdx}, 'enabled', this.checked); renderSchedule();">
+            <span class="toggle-slider"></span>
+          </label>
+        </td>
+        <td><button class="btn btn-sm btn-danger" onclick="removeEntry(${realIdx})" style="padding:3px 7px;">✕</button></td>
+      </tr>
+    `;
+  }).join('');
 
   // 드롭다운 값 설정
   setTimeout(() => {
-    scheduleEntries.forEach((entry, i) => {
-      const row = tbody.children[i];
+    filtered.forEach((entry, fi) => {
+      const realIdx = scheduleEntries.indexOf(entry);
+      const row = tbody.querySelector(`tr[data-index="${realIdx}"]`);
       if (!row) return;
       const selects = row.querySelectorAll('select');
-      if (selects[0] && entry.file1) selects[0].value = entry.file1;
-      if (selects[1] && entry.file2) selects[1].value = entry.file2;
+      if (selects[0]) selects[0].value = entry.siteId || 'entrance';
+      if (selects[1] && entry.file1) selects[1].value = entry.file1;
+      if (selects[2] && entry.file2) selects[2].value = entry.file2;
     });
   }, 0);
 }
 
 function addScheduleEntry() {
+  const defaultSite = currentFilter !== 'all' ? currentFilter : (sitesData[0]?.id || 'entrance');
   scheduleEntries.push({
-    file1: '',
-    file2: '',
-    duration: 10,
-    videoDuration: 'original'
+    siteId: defaultSite,
+    file1: '', file2: '',
+    duration: 10, videoDuration: 'original',
+    layoutType: 'independent', audio: 'none', transition: 'fade',
+    validFrom: null, validTo: null, enabled: true
   });
   renderSchedule();
 }
@@ -477,19 +811,42 @@ function removeEntry(index) {
 function updateEntry(index, field, value) {
   if (scheduleEntries[index]) {
     scheduleEntries[index][field] = value;
+    // 분할 모드 시 file2 비움
+    if (field === 'layoutType' && value === 'split') {
+      scheduleEntries[index].file2 = '';
+      scheduleEntries[index].file2Mime = '';
+    }
   }
 }
 
-async function saveAndApplySchedule() {
-  // 빈 항목 필터링
-  const validEntries = scheduleEntries.filter(e => e.file1);
+function updateMime(index, field, filename) {
+  const f = contentFiles.find(c => c.filename === filename);
+  if (f && scheduleEntries[index]) {
+    scheduleEntries[index][field] = f.mimeType;
+  }
+}
 
-  if (validEntries.length === 0) {
-    showToast('⚠️ 최소 1개 이상의 콘텐츠를 편성하세요.');
+// Drag & Drop reorder
+let dragIdx = null;
+function dragStart(e, idx) { dragIdx = idx; e.dataTransfer.effectAllowed = 'move'; }
+function dragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+function drop(e, targetIdx) {
+  e.preventDefault();
+  if (dragIdx === null || dragIdx === targetIdx) return;
+  const [moved] = scheduleEntries.splice(dragIdx, 1);
+  scheduleEntries.splice(targetIdx, 0, moved);
+  dragIdx = null;
+  renderSchedule();
+}
+
+async function saveAndApplySchedule() {
+  const validEntries = scheduleEntries.filter(e => e.file1);
+  if (validEntries.length === 0 && scheduleEntries.length > 0) {
+    showToast('최소 1개 이상의 파일을 선택하세요.');
     return;
   }
 
-  // 파일명으로부터 mimeType 매핑
+  // mimeType 매핑
   validEntries.forEach(entry => {
     const f1 = contentFiles.find(f => f.filename === entry.file1);
     const f2 = contentFiles.find(f => f.filename === entry.file2);
@@ -497,76 +854,188 @@ async function saveAndApplySchedule() {
     if (f2) entry.file2Mime = f2.mimeType;
   });
 
-  showToast('💾 편성표 저장 중...');
-
+  showToast('편성표 저장 중...');
   const res = await fetch('/api/schedule', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ entries: validEntries })
   });
   const data = await res.json();
-
   if (data.success) {
-    showToast('✓ 편성표 저장 및 클라이언트 적용 완료!');
+    showToast('편성표 저장 및 클라이언트 적용 완료');
     document.getElementById('scheduleStatus').textContent =
-      `✓ 편성표 적용됨 (버전: ${new Date(data.version).toLocaleTimeString('ko-KR')})`;
+      `편성표 적용됨 (버전: ${new Date(data.version).toLocaleString('ko-KR')})`;
   } else {
-    showToast('✕ 저장 실패');
+    showToast('저장 실패');
   }
 }
 
-// ─── 수동 재생 ──────────────────────────────────────────
-async function playManual() {
-  if (!selectedClientId || selectedContent.length === 0) return;
-  const res = await fetch('/api/play', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      clientId: selectedClientId,
-      files: selectedContent.map(f => ({ filename: f.filename, originalName: f.originalName, mimeType: f.mimeType }))
-    })
-  });
-  const data = await res.json();
-  if (data.success) showToast('✓ 재생 명령 전송');
-  else showToast('✕ ' + (data.error || '전송 실패'));
+// ═══════════════════════════════════════════════════════════
+// Content Library
+// ═══════════════════════════════════════════════════════════
+function renderContentGrid() {
+  const el = document.getElementById('contentGrid');
+  const countEl = document.getElementById('contentCount');
+  countEl.textContent = `총 ${contentFiles.length}개`;
+
+  if (contentFiles.length === 0) {
+    el.innerHTML = '<div style="color:#999; padding:20px; text-align:center;">콘텐츠가 없습니다. 파일을 업로드하거나 구글 드라이브를 동기화하세요.</div>';
+    return;
+  }
+
+  el.innerHTML = contentFiles.map(f => {
+    const isVideo = f.mimeType && f.mimeType.startsWith('video');
+    const thumbContent = isVideo
+      ? '<span style="font-size:28px">🎬</span>'
+      : `<img src="/uploads/${f.filename}" alt="${f.originalName}" loading="lazy">`;
+    const sourceClass = f.source === 'gdrive' ? 'source-gdrive' : 'source-local';
+    const sourceLabel = f.source === 'gdrive' ? 'Drive' : 'Local';
+    return `
+      <div class="content-card">
+        <button class="delete-btn" onclick="deleteContent('${f.id}', event)" title="삭제">✕</button>
+        <div class="thumb">${thumbContent}</div>
+        <div class="fname">${f.originalName}</div>
+        <div class="fmeta">
+          <span class="source-badge ${sourceClass}">${sourceLabel}</span>
+          <span>${formatSize(f.size)}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
-async function stopManual() {
-  if (!selectedClientId) return;
-  const res = await fetch('/api/stop', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clientId: selectedClientId })
-  });
+async function deleteContent(id, event) {
+  event.stopPropagation();
+  if (!confirm('이 콘텐츠를 삭제하시겠습니까?')) return;
+  const res = await fetch(`/api/content/${id}`, { method: 'DELETE' });
   const data = await res.json();
-  if (data.success) showToast('⏹ 정지 명령 전송');
+  if (data.success) { showToast('삭제 완료'); refreshContent(); }
 }
 
-// ─── 파일 업로드 ────────────────────────────────────────
+// Upload
 const uploadArea = document.getElementById('uploadArea');
 const fileInput = document.getElementById('fileInput');
-
 uploadArea.addEventListener('click', () => fileInput.click());
 uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
 uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
-uploadArea.addEventListener('drop', (e) => {
-  e.preventDefault();
-  uploadArea.classList.remove('dragover');
-  uploadFiles(e.dataTransfer.files);
-});
+uploadArea.addEventListener('drop', (e) => { e.preventDefault(); uploadArea.classList.remove('dragover'); uploadFiles(e.dataTransfer.files); });
 fileInput.addEventListener('change', (e) => uploadFiles(e.target.files));
 
 async function uploadFiles(files) {
   if (!files.length) return;
   const formData = new FormData();
   for (const f of files) formData.append('files', f);
-  showToast('📤 업로드 중...');
+  showToast('업로드 중...');
   const res = await fetch('/api/upload', { method: 'POST', body: formData });
   const data = await res.json();
-  if (data.success) { showToast(`✓ ${data.files.length}개 파일 업로드 완료`); refreshContent(); }
+  if (data.success) { showToast(`${data.files.length}개 파일 업로드 완료`); refreshContent(); }
 }
 
-// ─── 유틸 ────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// Settings — Sites
+// ═══════════════════════════════════════════════════════════
+function renderSitesList() {
+  const el = document.getElementById('sitesList');
+  if (sitesData.length === 0) {
+    el.innerHTML = '<div style="color:#999; padding:10px;">사이트가 없습니다.</div>';
+    return;
+  }
+  el.innerHTML = sitesData.map(s => `
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid #f0f0f0;">
+      <div>
+        <strong>${s.icon} ${s.name}</strong>
+        <span style="font-size:11px; color:#888; margin-left:8px;">모니터 ${s.monitors}대 | ${s.description || ''}</span>
+      </div>
+      <button class="btn btn-sm btn-danger" onclick="deleteSite('${s.id}')">삭제</button>
+    </div>
+  `).join('');
+}
+
+function showAddSiteModal() { document.getElementById('addSiteModal').classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+async function addSite() {
+  const name = document.getElementById('newSiteName').value.trim();
+  if (!name) { showToast('사이트 이름을 입력하세요.'); return; }
+  const res = await fetch('/api/sites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      icon: document.getElementById('newSiteIcon').value || '📺',
+      monitors: parseInt(document.getElementById('newSiteMonitors').value),
+      description: document.getElementById('newSiteDesc').value
+    })
+  });
+  const data = await res.json();
+  if (data.success) {
+    showToast('사이트 추가 완료');
+    closeModal('addSiteModal');
+    document.getElementById('newSiteName').value = '';
+    document.getElementById('newSiteDesc').value = '';
+    refreshSites();
+  }
+}
+
+async function deleteSite(id) {
+  const site = sitesData.find(s => s.id === id);
+  if (!confirm(`"${site?.name}" 사이트를 삭제하시겠습니까?\n해당 사이트의 편성표도 함께 삭제됩니다.`)) return;
+  const res = await fetch(`/api/sites/${id}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (data.success) { showToast('사이트 삭제 완료'); refreshSites(); refreshSchedule(); }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Settings — Client Assignment
+// ═══════════════════════════════════════════════════════════
+function renderClientAssignment() {
+  const el = document.getElementById('clientAssignment');
+  if (clientsData.length === 0) {
+    el.innerHTML = '<div style="color:#999;">연결된 클라이언트가 없습니다.</div>';
+    return;
+  }
+  const siteOptions = `<option value="">미지정</option>` + sitesData.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+  el.innerHTML = clientsData.map(c => `
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #f0f0f0;">
+      <div><strong>${c.name}</strong> <span style="color:#999; font-size:11px;">(모니터 ${c.monitors}대)</span></div>
+      <select onchange="assignClientSite('${c.id}', this.value)" style="padding:4px 8px; border:1px solid #ddd; border-radius:4px; font-size:12px;">
+        ${siteOptions}
+      </select>
+    </div>
+  `).join('');
+
+  // 현재 값 설정
+  setTimeout(() => {
+    const rows = el.querySelectorAll('select');
+    clientsData.forEach((c, i) => {
+      if (rows[i] && c.siteId) rows[i].value = c.siteId;
+    });
+  }, 0);
+}
+
+async function assignClientSite(clientId, siteId) {
+  const res = await fetch(`/api/clients/${clientId}/site`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ siteId: siteId || null })
+  });
+  const data = await res.json();
+  if (data.success) { showToast('사이트 할당 완료'); refreshSites(); }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Google Drive Sync
+// ═══════════════════════════════════════════════════════════
+async function manualSync() {
+  showToast('드라이브 동기화 시작...');
+  const res = await fetch('/api/gdrive/sync', { method: 'POST' });
+  const data = await res.json();
+  if (data.success) { showToast('동기화 완료'); refreshGdriveStatus(); refreshContent(); }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════════════════════════
 function formatSize(bytes) {
   if (!bytes || isNaN(bytes)) return '';
   if (bytes < 1024) return bytes + ' B';

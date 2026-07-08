@@ -1,0 +1,16 @@
+[
+  {
+    "id": "entrance",
+    "name": "현관",
+    "icon": "🚪",
+    "monitors": 1,
+    "description": "교회 입구 모니터"
+  },
+  {
+    "id": "cafeteria",
+    "name": "식당",
+    "icon": "🍽️",
+    "monitors": 2,
+    "description": "식당 듀얼 모니터"
+  }
+]
