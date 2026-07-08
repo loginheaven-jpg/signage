@@ -8,11 +8,38 @@
     → https://nodejs.org 에서 LTS 버전 설치
 
 ■ 설치 (한 번만)
-  1) 이 zip 을 원하는 폴더에 압축 해제 (예: C:\signage-client)
-  2) install.bat 더블클릭
+  1) [중요] 압축 풀기 전에 zip 차단 해제
+     - 다운로드한 signage-client.zip 오른쪽 클릭 → 속성
+     - 창 하단의 "차단 해제(Unblock)" 체크 → 확인
+     - (이 단계를 건너뛰면 install.bat 이 보안 정책으로 차단될 수 있습니다)
+  2) zip 을 원하는 폴더에 압축 해제 (예: C:\signage-client)
+  3) install.bat 더블클릭
      - 필요한 프로그램 자동 설치
      - 윈도우 부팅 시 자동 실행 등록
      - 설치가 끝나면 클라이언트가 자동 실행됩니다
+
+■ "애플리케이션 제어 정책에서 차단" / "웹의 위험한 파일" 오류가 뜰 때 (Windows 11)
+  아래를 순서대로 시도하세요.
+
+  [방법 1] 파일 차단 해제
+   - install.bat (또는 start.bat) 오른쪽 클릭 → 속성
+     → 하단 "차단 해제" 체크 → 확인 → 다시 실행
+   - 여러 파일을 한 번에: PowerShell(관리자)에서
+       Get-ChildItem 'C:\signage-client' -Recurse | Unblock-File
+
+  [방법 2] 그래도 "애플리케이션 제어 정책" 메시지가 나오면
+           = 스마트 앱 제어(Smart App Control)가 켜져 있는 것입니다.
+   - 설정 → 개인정보 및 보안 → Windows 보안
+     → 앱 및 브라우저 컨트롤 → "스마트 앱 제어" → 끄기
+   - ※ 이 설정은 한 번 끄면 다시 켤 때 Windows 재설치가 필요합니다.
+     사이니지 전용 PC 에서만 끄세요.
+
+  [방법 3] 위가 어려우면 install.bat 없이 수동 설치
+   - 폴더에서 주소창에 cmd 입력 후 Enter → 검은 창에서 아래 순서로:
+       npm install --production
+       npx electron .
+   - (부팅 시 자동 실행은 start.bat 을 시작프로그램 폴더에 넣으면 됩니다.
+      Win+R → shell:startup → start.bat 바로가기 복사)
 
 ■ 최초 설정
   1) 실행되면 설정 화면이 나타납니다
