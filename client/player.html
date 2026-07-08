@@ -68,6 +68,55 @@ body {
 }
 #idle-screen .icon { font-size: 64px; margin-bottom: 16px; }
 #idle-screen .text { font-size: 16px; font-family: 'Segoe UI', sans-serif; }
+
+/* 일시정지 오버레이 */
+#pause-overlay {
+  position: fixed; inset: 0;
+  display: none;
+  align-items: center; justify-content: center;
+  flex-direction: column;
+  background: rgba(0,0,0,0.45);
+  color: #fff;
+  font-family: 'Segoe UI', sans-serif;
+  z-index: 300;
+  pointer-events: none;
+}
+#pause-overlay.show { display: flex; }
+#pause-overlay .icon { font-size: 72px; margin-bottom: 12px; }
+#pause-overlay .text { font-size: 18px; color: rgba(255,255,255,0.85); }
+
+/* 화면 하단 컨트롤 바 (마우스 움직이면 표시) */
+#control-bar {
+  position: fixed;
+  bottom: 24px; left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  display: flex; gap: 10px;
+  background: rgba(20,20,30,0.85);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: 10px 14px;
+  z-index: 400;
+  opacity: 0;
+  transition: opacity 0.25s, transform 0.25s;
+  pointer-events: none;
+  font-family: 'Segoe UI', sans-serif;
+}
+#control-bar.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+#control-bar button {
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+#control-bar button:hover { background: rgba(255,255,255,0.18); }
+#control-bar button.danger:hover { background: rgba(231,76,60,0.85); }
+#control-bar .sep { width: 1px; background: rgba(255,255,255,0.15); margin: 4px 2px; }
+body.controls-visible { cursor: default; }
 </style>
 </head>
 <body>
@@ -76,6 +125,20 @@ body {
     <div class="icon">📺</div>
     <div class="text">편성표 수신 대기 중...</div>
   </div>
+</div>
+
+<!-- 일시정지 오버레이 -->
+<div id="pause-overlay">
+  <div class="icon">⏸</div>
+  <div class="text">일시정지됨 &nbsp;·&nbsp; Ctrl+Shift+P 로 재개</div>
+</div>
+
+<!-- 하단 컨트롤 바 -->
+<div id="control-bar">
+  <button id="btn-pause" title="일시정지/재개 (Ctrl+Shift+P)">⏸ 일시정지</button>
+  <div class="sep"></div>
+  <button id="btn-settings" title="설정 (Ctrl+Shift+S)">⚙ 설정</button>
+  <button id="btn-quit" class="danger" title="종료 (Ctrl+Shift+Q)">⏻ 종료</button>
 </div>
 
 <script>
@@ -122,14 +185,73 @@ let activeEntries = [];
 let currentIndex = -1;
 let playTimer = null;
 
+// 일시정지 상태 및 현재 미디어의 진행 방식(타이머 기반 여부)
+let paused = false;
+let curOnDone = null;
+let curDuration = 0;
+let curTimerBased = false;
+
 if (!isSecondary) {
   window.signage.onScheduleUpdate((data) => {
     console.log('[Player] 편성표 수신:', data && data.entries ? data.entries.length + '개' : data);
     schedule = data;
+    paused = false;                 // 새 편성표 수신 시 재생 재개
+    updatePauseUI();
     startPlayback();
   });
   window.signage.onPlayCommand((files) => playFiles(files));
   window.signage.onStopCommand(() => stopPlayback());
+  window.signage.onTogglePause(() => togglePause());
+  setupControlBar();
+} else {
+  // 보조 창: 자신의 영상만 일시정지/재개
+  window.signage.onTogglePause(() => {
+    const v = player.querySelector('video');
+    if (v) { if (v.paused) v.play().catch(() => {}); else v.pause(); }
+  });
+}
+
+// ─── 일시정지 ────────────────────────────────────────────
+function togglePause() {
+  paused = !paused;
+  if (paused) {
+    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+    player.querySelectorAll('video').forEach(v => v.pause());
+  } else {
+    player.querySelectorAll('video').forEach(v => v.play().catch(() => {}));
+    // 타이머 기반(이미지 등) 미디어였다면 재개 시 타이머 재시작
+    if (curTimerBased && curOnDone) {
+      playTimer = setTimeout(() => curOnDone(), curDuration);
+    }
+  }
+  updatePauseUI();
+}
+
+function updatePauseUI() {
+  const ov = document.getElementById('pause-overlay');
+  if (ov) ov.classList.toggle('show', paused);
+  const btn = document.getElementById('btn-pause');
+  if (btn) btn.textContent = paused ? '▶ 재개' : '⏸ 일시정지';
+}
+
+// ─── 하단 컨트롤 바 (마우스 움직이면 표시) ────────────────
+function setupControlBar() {
+  const bar = document.getElementById('control-bar');
+  document.getElementById('btn-pause').addEventListener('click', () => window.signage.uiTogglePause());
+  document.getElementById('btn-settings').addEventListener('click', () => window.signage.uiOpenSettings());
+  document.getElementById('btn-quit').addEventListener('click', () => window.signage.uiQuit());
+
+  let hideTimer = null;
+  function showBar() {
+    bar.classList.add('show');
+    document.body.classList.add('controls-visible');
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      bar.classList.remove('show');
+      document.body.classList.remove('controls-visible');
+    }, 3000);
+  }
+  document.addEventListener('mousemove', showBar);
 }
 
 function startPlayback() {
@@ -219,7 +341,18 @@ function showMedia(panes, split, entry, duration, onDone) {
 
   // 대표 미디어가 영상이고 '원본 길이'면 끝날 때 다음, 아니면 duration 타이머
   const primaryIsVideo = panes[0].mimeType && panes[0].mimeType.startsWith('video');
-  if (!split && primaryIsVideo && entry.videoDuration !== 'custom' && videoForEnd) {
+  const videoOriginal = !split && primaryIsVideo && entry.videoDuration !== 'custom' && videoForEnd;
+  curOnDone = onDone;
+  curDuration = duration;
+  curTimerBased = !videoOriginal;
+
+  if (paused) {
+    // 일시정지 중 새 미디어가 로드되면 즉시 멈춤 상태 유지
+    container.querySelectorAll('video').forEach(v => v.pause());
+    return;
+  }
+
+  if (videoOriginal) {
     videoForEnd.onended = () => onDone();
   } else {
     playTimer = setTimeout(() => onDone(), duration);
@@ -281,6 +414,8 @@ function stopPlayback() {
   if (playTimer) { clearTimeout(playTimer); playTimer = null; }
   player.querySelectorAll('.media-element').forEach(el => el.remove());
   if (dualMonitor) window.signage.setScreen2Media(null);
+  paused = false;
+  updatePauseUI();
   report(null);
   showIdle();
 }

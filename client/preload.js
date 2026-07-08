@@ -18,5 +18,11 @@ contextBridge.exposeInMainWorld('signage', {
   onScreen2Media: (callback) => ipcRenderer.on('screen2-media', (e, data) => callback(data)),
 
   // 현재 재생 중 콘텐츠를 호스트 대시보드에 보고
-  reportPlaying: (playing) => ipcRenderer.send('report-playing', playing)
+  reportPlaying: (playing) => ipcRenderer.send('report-playing', playing),
+
+  // 재생 제어 (일시정지/설정/종료)
+  onTogglePause: (callback) => ipcRenderer.on('toggle-pause', () => callback()),
+  uiTogglePause: () => ipcRenderer.send('ui-toggle-pause'),
+  uiOpenSettings: () => ipcRenderer.send('ui-open-settings'),
+  uiQuit: () => ipcRenderer.send('ui-quit')
 });

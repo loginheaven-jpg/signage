@@ -9,7 +9,7 @@
  * Ctrl+Shift+S → 설정 화면 재표시
  */
 
-const { app, BrowserWindow, globalShortcut, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, screen, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -252,6 +252,39 @@ function closeSecondWindow() {
   secondWindow = null;
 }
 
+// ─── 재생 제어 (일시정지 / 종료 / 설정) ───────────────────
+function sendToBoth(channel, payload) {
+  [mainWindow, secondWindow].forEach(w => {
+    if (w && !w.isDestroyed() && w.webContents) w.webContents.send(channel, payload);
+  });
+}
+
+function togglePause() {
+  // 실제 상태는 렌더러가 보유(토글 방식). 두 창 모두에 전달.
+  sendToBoth('toggle-pause');
+}
+
+function openSettings() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setFullScreen(false);
+    mainWindow.loadFile('setup.html');
+  }
+}
+
+function confirmQuit() {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  const res = dialog.showMessageBoxSync(parent, {
+    type: 'question',
+    buttons: ['취소', '종료'],
+    defaultId: 0,
+    cancelId: 0,
+    title: '종료 확인',
+    message: '디지털 게시판 플레이어를 종료할까요?',
+    detail: '종료하면 이 화면의 재생이 멈춥니다. (부팅 시 자동으로 다시 실행됩니다)'
+  });
+  if (res === 1) app.quit();
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1920,
@@ -300,6 +333,12 @@ function createWindow() {
       mainWindow.setFullScreen(false);
     }
   });
+
+  // Ctrl+Shift+P → 일시정지/재개 토글
+  globalShortcut.register('CommandOrControl+Shift+P', () => togglePause());
+
+  // Ctrl+Shift+Q → 종료 (확인창)
+  globalShortcut.register('CommandOrControl+Shift+Q', () => confirmQuit());
 }
 
 // ─── IPC 핸들러 ─────────────────────────────────────────
@@ -339,6 +378,11 @@ ipcMain.on('report-playing', (event, playing) => {
   lastPlaying = playing;
   sendHeartbeat();
 });
+
+// 화면 하단 컨트롤 바에서 오는 명령
+ipcMain.on('ui-toggle-pause', () => togglePause());
+ipcMain.on('ui-open-settings', () => openSettings());
+ipcMain.on('ui-quit', () => confirmQuit());
 
 // 현재 상태 조회
 ipcMain.handle('get-status', async () => {
