@@ -1,5 +1,6 @@
 node_modules/
 uploads/
+credentials/
 *.log
 .DS_Store
 dist/
