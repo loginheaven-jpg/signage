@@ -1,37 +1,13 @@
 {
-  "name": "digital-signage-player",
+  "name": "signage-client",
   "version": "2.0.0",
-  "description": "디지털 게시판 클라이언트 플레이어 (Electron) - 독립 재생 + 드라이브 동기화",
+  "description": "디지털 게시판 클라이언트 플레이어",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
-    "build:win": "electron-builder --win",
-    "build:linux": "electron-builder --linux"
+    "start": "electron ."
   },
   "dependencies": {
-    "ws": "^8.16.0",
-    "uuid": "^9.0.0",
-    "electron-store": "^8.1.0",
-    "googleapis": "^131.0.0"
-  },
-  "devDependencies": {
     "electron": "^28.0.0",
-    "electron-builder": "^24.9.1"
-  },
-  "build": {
-    "appId": "com.church.signage.player",
-    "productName": "디지털게시판 플레이어",
-    "win": {
-      "target": "portable"
-    },
-    "linux": {
-      "target": "AppImage"
-    },
-    "extraResources": [
-      {
-        "from": "credentials",
-        "to": "credentials"
-      }
-    ]
+    "ws": "^8.16.0"
   }
 }

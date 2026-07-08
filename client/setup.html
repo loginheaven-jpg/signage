@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>디지털 게시판 — 클라이언트 설정</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', -apple-system, sans-serif;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  color: #fff;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.setup-card {
+  background: rgba(255,255,255,0.05);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 24px;
+  padding: 48px;
+  width: 480px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+.logo {
+  text-align: center;
+  margin-bottom: 32px;
+}
+.logo .icon { font-size: 48px; margin-bottom: 12px; }
+.logo h1 { font-size: 22px; font-weight: 600; }
+.logo p { font-size: 13px; color: rgba(255,255,255,0.6); margin-top: 4px; }
+
+.form-group {
+  margin-bottom: 24px;
+}
+.form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.7);
+  margin-bottom: 8px;
+}
+.form-group input {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.form-group input:focus {
+  border-color: #4ecdc4;
+}
+.form-group input::placeholder {
+  color: rgba(255,255,255,0.3);
+}
+
+.monitor-select {
+  display: flex;
+  gap: 12px;
+}
+.monitor-option {
+  flex: 1;
+  padding: 14px;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: rgba(255,255,255,0.05);
+}
+.monitor-option.active {
+  border-color: #4ecdc4;
+  background: rgba(78,205,196,0.15);
+}
+.monitor-option .num { font-size: 24px; font-weight: 700; }
+.monitor-option .label { font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 4px; }
+
+.btn-connect {
+  width: 100%;
+  padding: 16px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #4ecdc4, #44a08d);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.1s, opacity 0.2s;
+  margin-top: 8px;
+}
+.btn-connect:hover { opacity: 0.9; }
+.btn-connect:active { transform: scale(0.98); }
+.btn-connect:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hint {
+  text-align: center;
+  font-size: 11px;
+  color: rgba(255,255,255,0.4);
+  margin-top: 16px;
+}
+</style>
+</head>
+<body>
+<div class="setup-card">
+  <div class="logo">
+    <div class="icon">🖥️</div>
+    <h1>디지털 게시판 클라이언트</h1>
+    <p>호스트 서버에 연결할 정보를 입력하세요</p>
+  </div>
+
+  <div class="form-group">
+    <label>클라이언트 이름</label>
+    <input type="text" id="clientName" placeholder="예: 현관1, 식당좌, 예배당메인" />
+  </div>
+
+  <div class="form-group">
+    <label>호스트 서버 주소</label>
+    <input type="text" id="hostUrl" placeholder="https://signage.yebom.org" />
+  </div>
+
+  <div class="form-group">
+    <label>모니터 수</label>
+    <div class="monitor-select">
+      <div class="monitor-option active" data-value="1">
+        <div class="num">1</div>
+        <div class="label">단일 모니터</div>
+      </div>
+      <div class="monitor-option" data-value="2">
+        <div class="num">2</div>
+        <div class="label">듀얼 모니터</div>
+      </div>
+    </div>
+  </div>
+
+  <button class="btn-connect" id="btnConnect">연결 및 시작</button>
+
+  <div class="hint">설정 후 호스트 관리자가 승인하면 자동으로 재생이 시작됩니다</div>
+</div>
+
+<script>
+let monitors = 1;
+
+// 기존 설정 로드
+window.signage.getConfig().then(cfg => {
+  if (cfg.clientName) document.getElementById('clientName').value = cfg.clientName;
+  if (cfg.hostUrl) document.getElementById('hostUrl').value = cfg.hostUrl;
+  if (cfg.monitors) {
+    monitors = cfg.monitors;
+    document.querySelectorAll('.monitor-option').forEach(el => {
+      el.classList.toggle('active', parseInt(el.dataset.value) === monitors);
+    });
+  }
+});
+
+// 모니터 선택
+document.querySelectorAll('.monitor-option').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.monitor-option').forEach(o => o.classList.remove('active'));
+    el.classList.add('active');
+    monitors = parseInt(el.dataset.value);
+  });
+});
+
+// 연결 버튼
+document.getElementById('btnConnect').addEventListener('click', async () => {
+  const clientName = document.getElementById('clientName').value.trim();
+  const hostUrl = document.getElementById('hostUrl').value.trim();
+
+  if (!clientName) {
+    document.getElementById('clientName').focus();
+    return;
+  }
+  if (!hostUrl) {
+    document.getElementById('hostUrl').focus();
+    return;
+  }
+
+  const btn = document.getElementById('btnConnect');
+  btn.disabled = true;
+  btn.textContent = '연결 중...';
+
+  await window.signage.saveConfig({ clientName, hostUrl, monitors });
+});
+</script>
+</body>
+</html>
