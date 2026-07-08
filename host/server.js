@@ -46,10 +46,7 @@ function loadSites() {
       sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf8'));
       console.log(`[Sites] 로드: ${sites.length}개 사이트`);
     } else {
-      sites = [
-        { id: 'entrance', name: '현관', icon: '🚪', monitors: 1, description: '교회 입구 모니터' },
-        { id: 'cafeteria', name: '식당', icon: '🍽️', monitors: 2, description: '식당 듀얼 모니터' }
-      ];
+      sites = [];
       saveSites();
     }
   } catch (e) {
@@ -73,7 +70,7 @@ function loadSchedule() {
       scheduleData = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8'));
       // 기존 데이터 마이그레이션: siteId 없는 항목에 기본값 추가
       scheduleData.entries = (scheduleData.entries || []).map(entry => ({
-        siteId: 'entrance',
+        siteId: entry.siteId || (sites.length > 0 ? sites[0].id : ''),
         layoutType: 'independent',
         audio: 'none',
         transition: 'fade',
@@ -249,14 +246,32 @@ app.get('/api/clients', (req, res) => {
 
 // 클라이언트 승인
 app.post('/api/clients/:id/approve', (req, res) => {
-  const { siteId } = req.body;
+  let { siteId } = req.body;
   const client = clients.get(req.params.id);
   if (!client) return res.status(404).json({ error: '클라이언트를 찾을 수 없습니다.' });
 
-  client.siteId = siteId || null;
+  // 사이트 미선택 시 클라이언트 이름으로 사이트 자동 생성
+  if (!siteId) {
+    const autoSiteId = `site_${req.params.id.slice(0, 8)}`;
+    const existing = sites.find(s => s.id === autoSiteId);
+    if (!existing) {
+      sites.push({
+        id: autoSiteId,
+        name: client.name,
+        icon: '📺',
+        monitors: client.monitors || 1,
+        description: `${client.name} 클라이언트 자동 생성`
+      });
+      saveSites();
+      broadcastToAdmins({ type: 'sites_update' });
+    }
+    siteId = autoSiteId;
+  }
+
+  client.siteId = siteId;
   approvedClients[req.params.id] = {
     name: client.name,
-    siteId: siteId || null,
+    siteId: siteId,
     approvedAt: new Date().toISOString()
   };
   saveApproved();

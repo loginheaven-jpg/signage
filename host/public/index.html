@@ -828,7 +828,7 @@ function renderSchedule() {
       const row = tbody.querySelector(`tr[data-index="${realIdx}"]`);
       if (!row) return;
       const selects = row.querySelectorAll('select');
-      if (selects[0]) selects[0].value = entry.siteId || 'entrance';
+      if (selects[0]) selects[0].value = entry.siteId || '';
       if (selects[1] && entry.file1) selects[1].value = entry.file1;
       if (selects[2] && entry.file2) selects[2].value = entry.file2;
     });
@@ -836,7 +836,7 @@ function renderSchedule() {
 }
 
 function addScheduleEntry() {
-  const defaultSite = currentFilter !== 'all' ? currentFilter : (sitesData[0]?.id || 'entrance');
+  const defaultSite = currentFilter !== 'all' ? currentFilter : (sitesData[0]?.id || '');
   scheduleEntries.push({
     siteId: defaultSite,
     file1: '', file2: '',
