@@ -398,6 +398,46 @@ app.post('/api/clients/:id/reject', (req, res) => {
   res.json({ success: true });
 });
 
+// 모든 클라이언트 등록/승인 초기화 (연결된 클라이언트는 대기 화면으로 되돌림)
+app.post('/api/clients/reset', (req, res) => {
+  let n = 0;
+  clients.forEach((info) => {
+    if (info.ws && info.ws.readyState === WebSocket.OPEN) {
+      info.ws.send(JSON.stringify({ type: 'rejected' }));
+    }
+    n++;
+  });
+  clients.clear();
+  approvedClients = {};
+  saveApproved();
+  broadcastToAdmins({ type: 'client_update' });
+  console.log(`[Reset] 클라이언트 전체 초기화: ${n}개`);
+  res.json({ success: true, cleared: n });
+});
+
+// 전체 초기화 — 클라이언트 + 사이트 + 편성표를 모두 비운다 (완전 새출발)
+app.post('/api/reset-all', (req, res) => {
+  let n = 0;
+  clients.forEach((info) => {
+    if (info.ws && info.ws.readyState === WebSocket.OPEN) {
+      info.ws.send(JSON.stringify({ type: 'rejected' }));
+    }
+    n++;
+  });
+  clients.clear();
+  approvedClients = {};
+  saveApproved();
+  sites = [];
+  saveSites();
+  scheduleData = { version: Date.now(), entries: [] };
+  saveSchedule();
+  broadcastToAdmins({ type: 'sites_update' });
+  broadcastToAdmins({ type: 'client_update' });
+  broadcastToAdmins({ type: 'schedule_update', schedule: scheduleData });
+  console.log(`[Reset] 전체 초기화: 클라이언트 ${n}개 + 사이트/편성표 삭제`);
+  res.json({ success: true, cleared: n });
+});
+
 app.put('/api/clients/:id/site', (req, res) => {
   const { siteId } = req.body;
   const client = clients.get(req.params.id);
@@ -569,8 +609,11 @@ wss.on('connection', (ws) => {
           } else if (scheduleData.entries.length > 0) {
             ws.send(JSON.stringify({ type: 'schedule_update', schedule: scheduleData }));
           }
+        } else {
+          // 미승인(초기화된 경우 포함)이면 대기 화면으로 되돌린다.
+          // (로컬 config에 approved=true가 남아 재생 중이던 클라이언트도 확실히 리셋)
+          ws.send(JSON.stringify({ type: 'rejected' }));
         }
-        // 미승인이면 pending 상태 유지 (클라이언트는 대기 화면)
 
         broadcastToAdmins({ type: 'client_update' });
       }

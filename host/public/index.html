@@ -474,6 +474,24 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
           </div>
         </div>
       </div>
+
+      <div class="panel" style="border:1px solid #f3d0cf;">
+        <div class="panel-header">
+          <span class="panel-title" style="color:#c0392b;">초기화 (새출발)</span>
+        </div>
+        <div class="settings-grid">
+          <div class="setting-card">
+            <h3>클라이언트 등록 초기화</h3>
+            <p style="font-size:12px; color:#666; margin-bottom:10px;">등록·승인된 모든 클라이언트를 지웁니다. 연결된 클라이언트는 대기 화면으로 돌아가 재승인이 필요합니다. (사이트·편성표는 유지)</p>
+            <button class="btn btn-danger" onclick="resetClients()">클라이언트 전체 초기화</button>
+          </div>
+          <div class="setting-card">
+            <h3>전체 초기화</h3>
+            <p style="font-size:12px; color:#666; margin-bottom:10px;">클라이언트 + 사이트 + 편성표를 모두 비웁니다. 완전히 새로 시작할 때만 사용하세요. (콘텐츠 파일은 유지)</p>
+            <button class="btn btn-danger" onclick="resetAll()">전체 초기화</button>
+          </div>
+        </div>
+      </div>
     </div>
 
   </div>
@@ -743,6 +761,21 @@ async function approveClient(clientId) {
   });
   const data = await res.json();
   if (data.success) { showToast('클라이언트 승인 완료'); refreshClients(); refreshSites(); }
+}
+
+async function resetClients() {
+  if (!confirm('등록·승인된 모든 클라이언트를 초기화하시겠습니까?\n연결된 클라이언트는 대기 화면으로 돌아가 재승인이 필요합니다.')) return;
+  const res = await fetch('/api/clients/reset', { method: 'POST' });
+  const data = await res.json();
+  if (data.success) { showToast(`클라이언트 ${data.cleared}개 초기화 완료`); refreshClients(); refreshSites(); }
+}
+
+async function resetAll() {
+  if (!confirm('⚠️ 전체 초기화\n클라이언트 + 사이트 + 편성표를 모두 삭제합니다.\n정말 진행하시겠습니까?')) return;
+  if (!confirm('되돌릴 수 없습니다. 한 번 더 확인합니다. 전체 초기화를 진행할까요?')) return;
+  const res = await fetch('/api/reset-all', { method: 'POST' });
+  const data = await res.json();
+  if (data.success) { showToast('전체 초기화 완료'); refreshAll(); }
 }
 
 async function quitClient(clientId, name) {
