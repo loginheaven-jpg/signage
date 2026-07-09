@@ -73,6 +73,15 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font
   max-height: 100%;
   object-fit: contain;
 }
+/* 전환 레이어 */
+.layer { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.layer.t-fade { opacity: 0; transition: opacity 0.8s ease; }
+.layer.t-fade.active { opacity: 1; }
+.layer.t-fade.leaving { opacity: 0; }
+.layer.t-cut { opacity: 1; }
+.layer.t-slide { transform: translateX(100%); transition: transform 0.7s cubic-bezier(.4,0,.2,1); }
+.layer.t-slide.active { transform: translateX(0); }
+.layer.t-slide.leaving { transform: translateX(-100%); }
 
 /* 오버레이 정보 (좌상단) */
 .info-overlay {
@@ -335,12 +344,13 @@ function playCurrentEntry() {
   const container = document.getElementById('playerContainer');
   const screen2 = document.getElementById('screen2');
 
+  const trans = entry.transition || 'fade';
   if (hasSecond && wantBoth) {
     // 좌/우 동시 표출 (듀얼 모니터 또는 분할)
     container.classList.add('dual'); container.classList.remove('single');
     screen2.style.display = 'flex';
-    loadMedia('screen1', entry.url, entry.mimeType);
-    loadMedia('screen2', entry.url2, entry.mimeType2);
+    loadMedia('screen1', entry.url, entry.mimeType, trans);
+    loadMedia('screen2', entry.url2, entry.mimeType2, trans);
     showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || ''} + ${entry.filename2 || ''}`);
     reportPlaying(entry, 'both');
     advanceAfter(entry, entry.mimeType, duration, nextEntry);
@@ -348,11 +358,11 @@ function playCurrentEntry() {
     // 독립 + 단일 모니터: url1 → url2 순차
     container.classList.add('single'); container.classList.remove('dual');
     screen2.style.display = 'none';
-    loadMedia('screen1', entry.url, entry.mimeType);
+    loadMedia('screen1', entry.url, entry.mimeType, trans);
     showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || entry.url}`);
     reportPlaying(entry, 'left');
     advanceAfter(entry, entry.mimeType, duration, () => {
-      loadMedia('screen1', entry.url2, entry.mimeType2);
+      loadMedia('screen1', entry.url2, entry.mimeType2, trans);
       showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename2 || entry.url2}`);
       reportPlaying(entry, 'right');
       advanceAfter(entry, entry.mimeType2, duration, nextEntry);
@@ -360,7 +370,7 @@ function playCurrentEntry() {
   } else {
     container.classList.add('single'); container.classList.remove('dual');
     screen2.style.display = 'none';
-    loadMedia('screen1', entry.url, entry.mimeType);
+    loadMedia('screen1', entry.url, entry.mimeType, trans);
     showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || entry.url} (${entry.duration}초)`);
     reportPlaying(entry, 'left');
     advanceAfter(entry, entry.mimeType, duration, nextEntry);
@@ -372,7 +382,7 @@ function advanceAfter(entry, mimeType, duration, onDone) {
   clearTimeout(playTimer);
   const isVideo = mimeType && mimeType.startsWith('video');
   if (isVideo && entry.videoDuration !== 'custom') {
-    const video = document.querySelector('#screen1 video');
+    const video = document.querySelector('#screen1 .layer:last-child video');
     if (video) { video.onended = () => onDone(); return; }
   }
   playTimer = setTimeout(() => onDone(), duration);
@@ -384,15 +394,26 @@ function nextEntry() {
 }
 
 // url은 절대(http) 또는 상대(/uploads/..). 상대면 호스트 프리픽스.
-function loadMedia(screenId, url, mimeType) {
+function loadMedia(screenId, url, mimeType, trans) {
   const screen = document.getElementById(screenId);
   if (!url) { screen.innerHTML = ''; return; }
+  trans = trans || 'fade';
   const src = /^https?:\/\//i.test(url) ? url : `${hostBaseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
 
-  if (mimeType && mimeType.startsWith('video')) {
-    screen.innerHTML = `<video src="${src}" autoplay muted playsinline style="width:100%;height:100%;object-fit:contain;"></video>`;
+  const layer = document.createElement('div');
+  layer.className = 'layer t-' + trans;
+  layer.innerHTML = (mimeType && mimeType.startsWith('video'))
+    ? `<video src="${src}" autoplay muted playsinline></video>`
+    : `<img src="${src}" alt="media">`;
+
+  const old = screen.querySelector('.layer');
+  screen.appendChild(layer);
+  if (trans === 'cut') {
+    layer.classList.add('active');
+    if (old) old.remove();
   } else {
-    screen.innerHTML = `<img src="${src}" alt="media">`;
+    requestAnimationFrame(() => requestAnimationFrame(() => layer.classList.add('active')));
+    if (old) { old.classList.remove('active'); old.classList.add('leaving'); setTimeout(() => old.remove(), 800); }
   }
 }
 

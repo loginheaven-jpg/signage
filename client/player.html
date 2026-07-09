@@ -29,11 +29,17 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0;
-  transition: opacity 0.8s ease;
 }
-.media-element.active { opacity: 1; }
-.media-element.fade-out { opacity: 0; }
+/* 페이드: 서서히 나타남/사라짐 */
+.media-element.t-fade { opacity: 0; transition: opacity 0.8s ease; }
+.media-element.t-fade.active { opacity: 1; }
+.media-element.t-fade.leaving { opacity: 0; }
+/* 컷: 즉시 전환 (효과 없음) */
+.media-element.t-cut { opacity: 1; }
+/* 슬라이드: 오른쪽에서 들어오고 왼쪽으로 나감 */
+.media-element.t-slide { transform: translateX(100%); transition: transform 0.7s cubic-bezier(.4,0,.2,1); }
+.media-element.t-slide.active { transform: translateX(0); }
+.media-element.t-slide.leaving { transform: translateX(-100%); }
 
 /* 분할(split) 레이아웃: 좌/우 나란히 */
 .media-element.split { flex-direction: row; }
@@ -299,15 +305,11 @@ function playNext() {
 
 // panes: [{url, mimeType, fitMode, audible}], split: 좌우 배치 여부, onDone: 완료 콜백
 function showMedia(panes, split, entry, duration, onDone) {
+  const trans = entry.transition || 'fade';
   const existing = player.querySelector('.media-element');
-  if (existing) {
-    existing.classList.remove('active');
-    existing.classList.add('fade-out');
-    setTimeout(() => existing.remove(), 900);
-  }
 
   const container = document.createElement('div');
-  container.className = 'media-element' + (split ? ' split' : '');
+  container.className = 'media-element t-' + trans + (split ? ' split' : '');
 
   let videoForEnd = null;
   panes.forEach(p => {
@@ -324,7 +326,20 @@ function showMedia(panes, split, entry, duration, onDone) {
   });
 
   player.appendChild(container);
-  setTimeout(() => container.classList.add('active'), 50);
+
+  // 전환 효과 적용
+  if (trans === 'cut') {
+    container.classList.add('active');
+    if (existing) existing.remove();
+  } else {
+    // 다음 프레임에 active로 바꿔 트랜지션 발동 (fade/slide)
+    requestAnimationFrame(() => requestAnimationFrame(() => container.classList.add('active')));
+    if (existing) {
+      existing.classList.remove('active');
+      existing.classList.add('leaving');
+      setTimeout(() => existing.remove(), 800);
+    }
+  }
 
   if (playTimer) { clearTimeout(playTimer); playTimer = null; }
 
@@ -361,7 +376,7 @@ function renderSingle(url, mimeType, fitMode, audible) {
   const existing = player.querySelector('.media-element');
   if (existing) existing.remove();
   const container = document.createElement('div');
-  container.className = 'media-element active';
+  container.className = 'media-element t-cut active';
   container.appendChild(createMediaEl({ url, mimeType, fitMode, audible }));
   player.appendChild(container);
 }
