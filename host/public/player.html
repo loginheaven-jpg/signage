@@ -216,16 +216,32 @@ function connectToHost() {
     updateStatus('연결 오류', 'red');
   };
 
-  // 하트비트
-  setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'heartbeat',
-        clientId: clientId,
-        scheduleVersion: playlist.length > 0 ? Date.now() : 0
-      }));
-    }
-  }, 30000);
+  // 하트비트 (현재 재생 콘텐츠 보고 포함)
+  setInterval(sendHeartbeat, 30000);
+}
+
+// 현재 재생 콘텐츠를 호스트 대시보드에 보고
+let lastPlaying = null;
+function sendHeartbeat() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'heartbeat',
+      clientId: clientId,
+      scheduleVersion: playlist.length > 0 ? Date.now() : 0,
+      currentPlaying: lastPlaying
+    }));
+  }
+}
+function reportPlaying(entry, which) {
+  if (!entry) { lastPlaying = null; sendHeartbeat(); return; }
+  const left  = { url: entry.url,  filename: entry.filename,  mimeType: entry.mimeType };
+  const right = { url: entry.url2, filename: entry.filename2, mimeType: entry.mimeType2 };
+  const p = { monitors, layoutType: entry.layoutType };
+  if (which === 'both') { p.screen1 = left; p.screen2 = right; }
+  else if (which === 'right') { p.screen1 = right; p.screen2 = null; }
+  else { p.screen1 = left; p.screen2 = null; }
+  lastPlaying = p;
+  sendHeartbeat();
 }
 
 // ─── 메시지 처리 ────────────────────────────────────────
@@ -305,6 +321,7 @@ function playCurrentEntry() {
     loadMedia('screen1', entry.url, entry.mimeType);
     loadMedia('screen2', entry.url2, entry.mimeType2);
     showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || ''} + ${entry.filename2 || ''}`);
+    reportPlaying(entry, 'both');
     advanceAfter(entry, entry.mimeType, duration, nextEntry);
   } else if (hasSecond) {
     // 독립 + 단일 모니터: url1 → url2 순차
@@ -312,9 +329,11 @@ function playCurrentEntry() {
     screen2.style.display = 'none';
     loadMedia('screen1', entry.url, entry.mimeType);
     showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || entry.url}`);
+    reportPlaying(entry, 'left');
     advanceAfter(entry, entry.mimeType, duration, () => {
       loadMedia('screen1', entry.url2, entry.mimeType2);
       showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename2 || entry.url2}`);
+      reportPlaying(entry, 'right');
       advanceAfter(entry, entry.mimeType2, duration, nextEntry);
     });
   } else {
@@ -322,6 +341,7 @@ function playCurrentEntry() {
     screen2.style.display = 'none';
     loadMedia('screen1', entry.url, entry.mimeType);
     showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || entry.url} (${entry.duration}초)`);
+    reportPlaying(entry, 'left');
     advanceAfter(entry, entry.mimeType, duration, nextEntry);
   }
 }
@@ -401,6 +421,7 @@ function stopPlayback() {
   document.getElementById('fsBtn').style.display = 'none';
   updateStatus('호스트 연결됨 — 재생 대기 중', 'green');
   showInfo('⏹ 정지');
+  reportPlaying(null);
 }
 
 // ─── UI 헬퍼 ────────────────────────────────────────────
