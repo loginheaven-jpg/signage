@@ -23,8 +23,12 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
-const DATA_DIR = path.join(__dirname, 'data');
+
+// 영구 데이터 경로 — 재배포와 무관하게 보존되어야 하는 상태(사이트/편성표/승인 클라이언트)
+// Railway 등 ephemeral 환경에서는 영구 볼륨을 마운트하고 DATA_DIR/UPLOADS_DIR 환경변수로 지정한다.
+// 예) 볼륨을 /data 에 마운트 후  DATA_DIR=/data  UPLOADS_DIR=/data/uploads
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, 'uploads');
 const SITES_FILE = path.join(DATA_DIR, 'sites.json');
 const SCHEDULE_FILE = path.join(DATA_DIR, 'schedule.json');
 
@@ -32,6 +36,11 @@ const SCHEDULE_FILE = path.join(DATA_DIR, 'schedule.json');
 [UPLOADS_DIR, DATA_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
+console.log(`[Storage] DATA_DIR=${DATA_DIR}`);
+console.log(`[Storage] UPLOADS_DIR=${UPLOADS_DIR}`);
+if (!process.env.DATA_DIR) {
+  console.warn('[Storage] ⚠ DATA_DIR 미설정 — 로컬 경로 사용 중. Railway 등 배포 환경에서는 영구 볼륨을 마운트하고 DATA_DIR을 지정하지 않으면 재배포 시 데이터가 초기화됩니다.');
+}
 
 // ─── 상태 관리 ───────────────────────────────────────────
 const clients = new Map(); // clientId -> { ws, name, monitors, siteId, lastSeen, scheduleVersion, currentPlaying }

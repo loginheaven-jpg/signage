@@ -10,6 +10,5 @@ out/
 client/cache/
 client/config.json
 
-# 호스트 로컬 상태 (런타임 생성)
-host/data/content.json
-host/data/approved-clients.json
+# 호스트 런타임 상태 (영구 볼륨/로컬에 저장, 저장소에 커밋하지 않음)
+host/data/*.json
