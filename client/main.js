@@ -334,10 +334,10 @@ function createWindow() {
     }
   });
 
-  // Ctrl+Shift+P → 일시정지/재개 토글
+  // Ctrl+Shift+P → 멈추기/재생하기 토글
   globalShortcut.register('CommandOrControl+Shift+P', () => togglePause());
 
-  // Ctrl+Shift+Q → 종료 (확인창)
+  // Ctrl+Shift+Q → 앱 종료 (확인창)
   globalShortcut.register('CommandOrControl+Shift+Q', () => confirmQuit());
 }
 

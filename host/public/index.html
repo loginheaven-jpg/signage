@@ -811,16 +811,16 @@ function renderClientList() {
         const chips = cp ? [nowChip(cp.screen1), nowChip(cp.screen2)].filter(Boolean).join('') : '';
         const playing = !!cp;
         clientLine = `<span class="cc-cname">${escapeHtml(cli.name)}</span><span class="cc-arrow">›</span>` +
-          (playing ? `<span class="cc-now">● 재생중</span>${chips}` : `<span class="cc-sub">■ 재생 종료됨 (재생 버튼으로 재개)</span>`);
+          (playing ? `<span class="cc-now">● 재생중</span>${chips}` : `<span class="cc-sub">■ 재생 종료됨 (재생하기로 재개)</span>`);
         const toggleBtn = playing
-          ? `<button class="btn cc-stop" onclick="stopClient('${cli.id}')">⏹ 중지</button>`
-          : `<button class="btn cc-play" onclick="resumeClient('${cli.id}')">▶ 재생</button>`;
+          ? `<button class="btn cc-stop" onclick="stopClient('${cli.id}')">⏹ 멈추기</button>`
+          : `<button class="btn cc-play" onclick="resumeClient('${cli.id}')">▶ 재생하기</button>`;
         actions = `<button class="btn cc-edit" onclick="openReassign('${cli.id}')">수정</button>` + toggleBtn;
       } else if (cli) {
         pill = '<span class="pill off"><span class="d"></span>오프라인</span>';
         clientLine = `<span class="cc-cname" style="color:#8b909a">${escapeHtml(cli.name)}</span><span class="cc-arrow">›</span><span class="cc-sub">${getClientLastSeen(cli)} · 연결 끊김</span>`;
         actions = `<button class="btn cc-edit" onclick="openReassign('${cli.id}')">수정</button>` +
-                  `<button class="btn cc-stop dis" disabled>⏹ 중지</button>`;
+                  `<button class="btn cc-stop dis" disabled>⏹ 멈추기</button>`;
       } else {
         pill = '<span class="pill none"><span class="d"></span>미연결</span>';
         clientLine = `<span class="cc-sub">배정된 클라이언트 없음</span>`;
@@ -957,7 +957,7 @@ async function resetAll() {
 async function stopClient(clientId) {
   const res = await fetch(`/api/clients/${clientId}/stop`, { method: 'POST' });
   const data = await res.json();
-  if (data.success) { showToast('재생을 중지했습니다. (재생 버튼으로 재개)'); refreshClients(); }
+  if (data.success) { showToast('재생을 멈췄습니다. (재생하기로 재개)'); refreshClients(); }
   else { showToast(data.error || '중지 실패'); }
 }
 

@@ -131,18 +131,12 @@ body.controls-visible { cursor: default; }
   </div>
 </div>
 
-<!-- 일시정지 오버레이 -->
-<div id="pause-overlay">
-  <div class="icon">⏸</div>
-  <div class="text">일시정지됨 &nbsp;·&nbsp; Ctrl+Shift+P 로 재개</div>
-</div>
-
 <!-- 하단 컨트롤 바 -->
 <div id="control-bar">
-  <button id="btn-pause" title="일시정지/재개 (Ctrl+Shift+P)">⏸ 일시정지</button>
+  <button id="btn-stop" title="멈추기/재생하기 (Ctrl+Shift+P)">⏹ 멈추기</button>
   <div class="sep"></div>
   <button id="btn-settings" title="설정 (Ctrl+Shift+S)">⚙ 설정</button>
-  <button id="btn-quit" class="danger" title="종료 (Ctrl+Shift+Q)">⏻ 종료</button>
+  <button id="btn-quit" class="danger" title="앱 종료 (Ctrl+Shift+Q)">⏻ 앱 종료</button>
 </div>
 
 <script>
@@ -189,59 +183,50 @@ let activeEntries = [];
 let currentIndex = -1;
 let playTimer = null;
 
-// 일시정지 상태 및 현재 미디어의 진행 방식(타이머 기반 여부)
-let paused = false;
-let curOnDone = null;
-let curDuration = 0;
-let curTimerBased = false;
+// 멈춤 상태 (호스트/클라이언트 어느 쪽에서 멈춰도 동기화)
+let stopped = false;
 
 if (!isSecondary) {
   window.signage.onScheduleUpdate((data) => {
     console.log('[Player] 편성표 수신:', data && data.entries ? data.entries.length + '개' : data);
     schedule = data;
-    paused = false;                 // 새 편성표 수신 시 재생 재개
-    updatePauseUI();
+    stopped = false;                // 새 편성표 수신 시 재생 재개
+    updateStopUI();
     startPlayback();
   });
   window.signage.onPlayCommand((files) => playFiles(files));
-  window.signage.onStopCommand(() => stopPlayback(true));
-  window.signage.onTogglePause(() => togglePause());
+  window.signage.onStopCommand(() => { stopped = true; stopPlayback(true); updateStopUI(); });
+  window.signage.onTogglePause(() => toggleStop());  // Ctrl+Shift+P → 멈추기/재생하기
   setupControlBar();
 } else {
-  // 보조 창: 자신의 영상만 일시정지/재개
-  window.signage.onTogglePause(() => {
-    const v = player.querySelector('video');
-    if (v) { if (v.paused) v.play().catch(() => {}); else v.pause(); }
-  });
+  // 보조 창: 주 창이 멈추면 미디어를 비우는 신호(screen2-media null)를 받으므로 별도 처리 불필요
+  window.signage.onTogglePause(() => {});
 }
 
-// ─── 일시정지 ────────────────────────────────────────────
-function togglePause() {
-  paused = !paused;
-  if (paused) {
-    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
-    player.querySelectorAll('video').forEach(v => v.pause());
+// ─── 멈추기 / 재생하기 (클라이언트 로컬 토글) ─────────────
+function toggleStop() {
+  if (stopped) {
+    // 재생하기 — 마지막 편성표로 다시 시작 (호스트 없이 로컬 캐시로도 동작)
+    stopped = false;
+    if (schedule && schedule.entries && schedule.entries.length) startPlayback();
+    else showIdle(false);
   } else {
-    player.querySelectorAll('video').forEach(v => v.play().catch(() => {}));
-    // 타이머 기반(이미지 등) 미디어였다면 재개 시 타이머 재시작
-    if (curTimerBased && curOnDone) {
-      playTimer = setTimeout(() => curOnDone(), curDuration);
-    }
+    // 멈추기 — 재생 정지 + "재생 종료" 화면
+    stopped = true;
+    stopPlayback(true);
   }
-  updatePauseUI();
+  updateStopUI();
 }
 
-function updatePauseUI() {
-  const ov = document.getElementById('pause-overlay');
-  if (ov) ov.classList.toggle('show', paused);
-  const btn = document.getElementById('btn-pause');
-  if (btn) btn.textContent = paused ? '▶ 재개' : '⏸ 일시정지';
+function updateStopUI() {
+  const btn = document.getElementById('btn-stop');
+  if (btn) btn.textContent = stopped ? '▶ 재생하기' : '⏹ 멈추기';
 }
 
 // ─── 하단 컨트롤 바 (마우스 움직이면 표시) ────────────────
 function setupControlBar() {
   const bar = document.getElementById('control-bar');
-  document.getElementById('btn-pause').addEventListener('click', () => window.signage.uiTogglePause());
+  document.getElementById('btn-stop').addEventListener('click', () => window.signage.uiTogglePause());
   document.getElementById('btn-settings').addEventListener('click', () => window.signage.uiOpenSettings());
   document.getElementById('btn-quit').addEventListener('click', () => window.signage.uiQuit());
 
@@ -346,15 +331,6 @@ function showMedia(panes, split, entry, duration, onDone) {
   // 대표 미디어가 영상이고 '원본 길이'면 끝날 때 다음, 아니면 duration 타이머
   const primaryIsVideo = panes[0].mimeType && panes[0].mimeType.startsWith('video');
   const videoOriginal = !split && primaryIsVideo && entry.videoDuration !== 'custom' && videoForEnd;
-  curOnDone = onDone;
-  curDuration = duration;
-  curTimerBased = !videoOriginal;
-
-  if (paused) {
-    // 일시정지 중 새 미디어가 로드되면 즉시 멈춤 상태 유지
-    container.querySelectorAll('video').forEach(v => v.pause());
-    return;
-  }
 
   if (videoOriginal) {
     videoForEnd.onended = () => onDone();
@@ -414,15 +390,13 @@ function playFiles(files) {
   playNext();
 }
 
-// stopped=true 이면 호스트의 "재생 중지" 명령 → "재생 종료" 깜빡 화면
-function stopPlayback(stopped) {
+// showStopped=true 이면 "재생 종료" 깜빡 화면, 아니면 "편성표 대기" 화면
+function stopPlayback(showStopped) {
   if (playTimer) { clearTimeout(playTimer); playTimer = null; }
   player.querySelectorAll('.media-element').forEach(el => el.remove());
   if (dualMonitor) window.signage.setScreen2Media(null);
-  paused = false;
-  updatePauseUI();
   report(null);
-  showIdle(stopped);
+  showIdle(showStopped);
 }
 
 function showIdle(stopped) {
