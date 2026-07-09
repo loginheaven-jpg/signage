@@ -312,6 +312,36 @@ function saveApproved() {
 }
 loadApproved();
 
+// 한 사이트 = 한 클라이언트. 해당 사이트에 이미 연결된 다른 클라이언트를 해제한다.
+// (온라인이면 대기 화면으로 되돌리고, 오프라인이면 목록에서 제거)
+function releaseSiteOccupants(siteId, exceptId) {
+  if (!siteId) return [];
+  const released = [];
+  // 승인 목록에서 해제
+  Object.keys(approvedClients).forEach(cid => {
+    if (cid !== exceptId && approvedClients[cid].siteId === siteId) {
+      released.push({ id: cid, name: approvedClients[cid].name });
+      delete approvedClients[cid];
+    }
+  });
+  // 접속 중인 클라이언트 처리
+  clients.forEach((info, cid) => {
+    if (cid !== exceptId && info.siteId === siteId) {
+      const online = info.ws && info.ws.readyState === WebSocket.OPEN;
+      if (online) {
+        info.ws.send(JSON.stringify({ type: 'rejected' })); // 대기 화면으로
+        info.approved = false;
+        info.siteId = null;
+      } else {
+        clients.delete(cid); // 오프라인이면 목록에서 제거
+      }
+      if (!released.find(r => r.id === cid)) released.push({ id: cid, name: info.name });
+    }
+  });
+  if (released.length) saveApproved();
+  return released;
+}
+
 app.get('/api/clients', (req, res) => {
   const list = [];
   clients.forEach((info, id) => {
@@ -358,6 +388,9 @@ app.post('/api/clients/:id/approve', (req, res) => {
     }
   }
 
+  // 한 사이트 = 한 클라이언트: 기존 연결 클라이언트가 있으면 해제
+  const replaced = releaseSiteOccupants(siteId, req.params.id);
+
   client.siteId = siteId;
   client.approved = true; // 런타임 승인 플래그 — 이후 편성표 푸시 대상에 포함
   approvedClients[req.params.id] = {
@@ -378,8 +411,9 @@ app.post('/api/clients/:id/approve', (req, res) => {
   }
 
   broadcastToAdmins({ type: 'client_update' });
-  console.log(`[Clients] 승인: ${client.name} (${req.params.id}) → 사이트: ${siteId || '미지정'}`);
-  res.json({ success: true });
+  broadcastToAdmins({ type: 'sites_update' });
+  console.log(`[Clients] 승인: ${client.name} (${req.params.id}) → 사이트: ${siteId || '미지정'}${replaced.length ? ` (기존 ${replaced.map(r => r.name).join(',')} 해제)` : ''}`);
+  res.json({ success: true, replaced });
 });
 
 // 클라이언트 앱 원격 종료 (호스트에서 클라이언트 PC의 플레이어를 끔)
@@ -451,6 +485,8 @@ app.put('/api/clients/:id/site', (req, res) => {
   const { siteId } = req.body;
   const client = clients.get(req.params.id);
   if (!client) return res.status(404).json({ error: '클라이언트를 찾을 수 없습니다.' });
+  // 한 사이트 = 한 클라이언트: 대상 사이트의 기존 클라이언트를 해제
+  const replaced = releaseSiteOccupants(siteId, req.params.id);
   client.siteId = siteId;
   if (approvedClients[req.params.id]) {
     approvedClients[req.params.id].siteId = siteId;
@@ -458,11 +494,12 @@ app.put('/api/clients/:id/site', (req, res) => {
     saveApproved();
   }
   broadcastToAdmins({ type: 'client_update' });
+  broadcastToAdmins({ type: 'sites_update' });
   if (siteId && client.ws.readyState === WebSocket.OPEN) {
     const siteSchedule = getSiteSchedule(siteId);
     client.ws.send(JSON.stringify({ type: 'schedule_update', schedule: siteSchedule }));
   }
-  res.json({ success: true });
+  res.json({ success: true, replaced });
 });
 
 // ─── 콘텐츠 API ────────────────────────────────────────
