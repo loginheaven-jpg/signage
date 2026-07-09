@@ -68,6 +68,10 @@ body {
 }
 #idle-screen .icon { font-size: 64px; margin-bottom: 16px; }
 #idle-screen .text { font-size: 16px; font-family: 'Segoe UI', sans-serif; }
+#idle-screen.stopped { color: rgba(255,255,255,0.55); }
+#idle-screen.stopped .icon,
+#idle-screen.stopped .text { animation: blinkStopped 1.4s ease-in-out infinite; }
+@keyframes blinkStopped { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
 
 /* 일시정지 오버레이 */
 #pause-overlay {
@@ -200,7 +204,7 @@ if (!isSecondary) {
     startPlayback();
   });
   window.signage.onPlayCommand((files) => playFiles(files));
-  window.signage.onStopCommand(() => stopPlayback());
+  window.signage.onStopCommand(() => stopPlayback(true));
   window.signage.onTogglePause(() => togglePause());
   setupControlBar();
 } else {
@@ -410,17 +414,31 @@ function playFiles(files) {
   playNext();
 }
 
-function stopPlayback() {
+// stopped=true 이면 호스트의 "재생 중지" 명령 → "재생 종료" 깜빡 화면
+function stopPlayback(stopped) {
   if (playTimer) { clearTimeout(playTimer); playTimer = null; }
   player.querySelectorAll('.media-element').forEach(el => el.remove());
   if (dualMonitor) window.signage.setScreen2Media(null);
   paused = false;
   updatePauseUI();
   report(null);
-  showIdle();
+  showIdle(stopped);
 }
 
-function showIdle() { idleScreen.style.display = 'flex'; }
+function showIdle(stopped) {
+  idleScreen.style.display = 'flex';
+  const icon = idleScreen.querySelector('.icon');
+  const text = idleScreen.querySelector('.text');
+  if (stopped) {
+    idleScreen.classList.add('stopped');
+    icon.textContent = '⏹';
+    text.textContent = '재생 종료';
+  } else {
+    idleScreen.classList.remove('stopped');
+    icon.textContent = '📺';
+    text.textContent = '편성표 수신 대기 중...';
+  }
+}
 </script>
 </body>
 </html>

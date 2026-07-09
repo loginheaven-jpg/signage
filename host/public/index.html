@@ -62,7 +62,7 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 .page.active { display: block; }
 
 /* ─── Cards ─── */
-.site-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; margin-bottom: 24px; }
+.site-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 400px)); justify-content: start; gap: 16px; margin-bottom: 24px; }
 .site-card {
   background: white;
   border-radius: 12px;
@@ -307,8 +307,9 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 .chip .sw img { width:100%; height:100%; object-fit:cover; }
 .chip .nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .cc-actions { display:flex; gap:6px; align-items:center; }
-.cc-quit { background:#e67e22; color:#fff; }
-.cc-quit.dis { background:#eceef1; color:#b5bac2; cursor:not-allowed; }
+.cc-stop { background:#e67e22; color:#fff; }
+.cc-stop.dis { background:#eceef1; color:#b5bac2; cursor:not-allowed; }
+.cc-play { background:#27ae60; color:#fff; }
 .cc-edit { background:#eef1f6; color:#374151; border:1px solid #dfe3ea; }
 .cc-edit:hover { background:#e3e7ee; }
 
@@ -734,7 +735,7 @@ function renderSiteCards() {
         const isVideo = s.mimeType && s.mimeType.startsWith('video');
         inner = isVideo
           ? `<span class="monitor-content-text">🎬 ${escapeHtml(s.filename || '영상')}</span>`
-          : `<img src="${s.url}" alt="" onerror="this.style.display='none'">`;
+          : `<img src="${s.url}" alt="" loading="lazy" onerror="this.style.display='none'">`;
       } else {
         inner = `<span class="monitor-content-text">${site.online ? '—' : '대기 중'}</span>`;
       }
@@ -808,15 +809,18 @@ function renderClientList() {
         pill = '<span class="pill on"><span class="d"></span>온라인</span>';
         const cp = cli.currentPlaying;
         const chips = cp ? [nowChip(cp.screen1), nowChip(cp.screen2)].filter(Boolean).join('') : '';
+        const playing = !!cp;
         clientLine = `<span class="cc-cname">${escapeHtml(cli.name)}</span><span class="cc-arrow">›</span>` +
-          (chips ? `<span class="cc-now">● 재생중</span>${chips}` : `<span class="cc-sub">연결됨 · 편성표 대기</span>`);
-        actions = `<button class="btn cc-edit" onclick="openReassign('${cli.id}')">수정</button>` +
-                  `<button class="btn cc-quit" onclick="quitClient('${cli.id}')">⏻ 종료</button>`;
+          (playing ? `<span class="cc-now">● 재생중</span>${chips}` : `<span class="cc-sub">■ 재생 종료됨 (재생 버튼으로 재개)</span>`);
+        const toggleBtn = playing
+          ? `<button class="btn cc-stop" onclick="stopClient('${cli.id}')">⏹ 중지</button>`
+          : `<button class="btn cc-play" onclick="resumeClient('${cli.id}')">▶ 재생</button>`;
+        actions = `<button class="btn cc-edit" onclick="openReassign('${cli.id}')">수정</button>` + toggleBtn;
       } else if (cli) {
         pill = '<span class="pill off"><span class="d"></span>오프라인</span>';
         clientLine = `<span class="cc-cname" style="color:#8b909a">${escapeHtml(cli.name)}</span><span class="cc-arrow">›</span><span class="cc-sub">${getClientLastSeen(cli)} · 연결 끊김</span>`;
         actions = `<button class="btn cc-edit" onclick="openReassign('${cli.id}')">수정</button>` +
-                  `<button class="btn cc-quit dis" disabled>⏻ 종료</button>`;
+                  `<button class="btn cc-stop dis" disabled>⏹ 중지</button>`;
       } else {
         pill = '<span class="pill none"><span class="d"></span>미연결</span>';
         clientLine = `<span class="cc-sub">배정된 클라이언트 없음</span>`;
@@ -949,14 +953,22 @@ async function resetAll() {
   if (data.success) { showToast('전체 초기화 완료'); refreshAll(); }
 }
 
-async function quitClient(clientId) {
-  const c = findClient(clientId);
-  const name = c ? c.name : '클라이언트';
-  if (!confirm(`"${name}" 클라이언트 앱을 종료하시겠습니까?\n종료 후에는 해당 PC를 재부팅하거나 수동 실행하기 전까지 재생되지 않습니다.`)) return;
-  const res = await fetch(`/api/clients/${clientId}/quit`, { method: 'POST' });
+// 재생 중지 (앱은 살아있음, 재개 가능)
+async function stopClient(clientId) {
+  const res = await fetch(`/api/clients/${clientId}/stop`, { method: 'POST' });
   const data = await res.json();
-  if (data.success) { showToast('종료 명령을 전송했습니다.'); }
-  else { showToast(data.error || '종료 실패'); }
+  if (data.success) { showToast('재생을 중지했습니다. (재생 버튼으로 재개)'); refreshClients(); }
+  else { showToast(data.error || '중지 실패'); }
+}
+
+// 재생 재개 (사이트 편성표 재전송)
+async function resumeClient(clientId) {
+  const res = await fetch(`/api/clients/${clientId}/resume`, { method: 'POST' });
+  const data = await res.json();
+  if (data.success) {
+    showToast(data.entries > 0 ? '재생을 재개했습니다.' : '편성표가 비어 있습니다. 큐시트를 먼저 작성하세요.');
+    refreshClients();
+  } else { showToast(data.error || '재개 실패'); }
 }
 
 async function rejectClient(clientId) {

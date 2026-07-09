@@ -416,7 +416,7 @@ app.post('/api/clients/:id/approve', (req, res) => {
   res.json({ success: true, replaced });
 });
 
-// 클라이언트 앱 원격 종료 (호스트에서 클라이언트 PC의 플레이어를 끔)
+// 클라이언트 앱 원격 종료 (앱 자체를 완전히 끔 — 특수 용도)
 app.post('/api/clients/:id/quit', (req, res) => {
   const client = clients.get(req.params.id);
   if (!client || client.ws.readyState !== WebSocket.OPEN) {
@@ -425,6 +425,32 @@ app.post('/api/clients/:id/quit', (req, res) => {
   client.ws.send(JSON.stringify({ type: 'quit' }));
   console.log(`[Clients] 원격 종료 명령: ${client.name} (${req.params.id})`);
   res.json({ success: true });
+});
+
+// 재생 중지 — 현재 재생만 끔 (앱·연결은 유지, "재생 종료" 화면). 재개 가능
+app.post('/api/clients/:id/stop', (req, res) => {
+  const client = clients.get(req.params.id);
+  if (!client || client.ws.readyState !== WebSocket.OPEN) {
+    return res.status(404).json({ error: '클라이언트가 오프라인입니다.' });
+  }
+  client.ws.send(JSON.stringify({ type: 'stop' }));
+  client.currentPlaying = null;
+  broadcastToAdmins({ type: 'client_update' });
+  console.log(`[Clients] 재생 중지: ${client.name} (${req.params.id})`);
+  res.json({ success: true });
+});
+
+// 재생 재개 — 해당 클라이언트에 사이트 편성표를 다시 전송
+app.post('/api/clients/:id/resume', (req, res) => {
+  const client = clients.get(req.params.id);
+  if (!client || client.ws.readyState !== WebSocket.OPEN) {
+    return res.status(404).json({ error: '클라이언트가 오프라인입니다.' });
+  }
+  if (!client.siteId) return res.status(400).json({ error: '사이트가 배정되지 않았습니다.' });
+  const siteSchedule = getSiteSchedule(client.siteId);
+  client.ws.send(JSON.stringify({ type: 'schedule_update', schedule: siteSchedule }));
+  console.log(`[Clients] 재생 재개: ${client.name} (${req.params.id}) — ${siteSchedule.entries.length}개 항목`);
+  res.json({ success: true, entries: siteSchedule.entries.length });
 });
 
 // 클라이언트 거부 (등록 해제)
