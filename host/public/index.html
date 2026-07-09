@@ -1061,10 +1061,14 @@ function renderSchedule() {
           </select>
         </td>
         <td>
-          <select onchange="updateEntry(${realIdx}, 'transition', this.value)" style="width:60px">
+          <select onchange="updateEntry(${realIdx}, 'transition', this.value)" style="width:74px">
             <option value="fade" ${entry.transition === 'fade' ? 'selected' : ''}>페이드</option>
             <option value="cut" ${entry.transition === 'cut' ? 'selected' : ''}>컷</option>
             <option value="slide" ${entry.transition === 'slide' ? 'selected' : ''}>슬라이드</option>
+            <option value="dissolve" ${entry.transition === 'dissolve' ? 'selected' : ''}>디졸브</option>
+            <option value="wipe" ${entry.transition === 'wipe' ? 'selected' : ''}>와이프</option>
+            <option value="flip" ${entry.transition === 'flip' ? 'selected' : ''}>플립</option>
+            <option value="zoom" ${entry.transition === 'zoom' ? 'selected' : ''}>줌</option>
           </select>
         </td>
         <td><input type="date" value="${entry.validFrom || ''}" onchange="updateEntry(${realIdx}, 'validFrom', this.value || null)"></td>

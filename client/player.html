@@ -29,17 +29,35 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
-/* 페이드: 서서히 나타남/사라짐 */
+/* 페이드 */
 .media-element.t-fade { opacity: 0; transition: opacity 0.8s ease; }
 .media-element.t-fade.active { opacity: 1; }
 .media-element.t-fade.leaving { opacity: 0; }
-/* 컷: 즉시 전환 (효과 없음) */
+/* 컷 (즉시) */
 .media-element.t-cut { opacity: 1; }
-/* 슬라이드: 오른쪽에서 들어오고 왼쪽으로 나감 */
+/* 슬라이드 (우→좌) */
 .media-element.t-slide { transform: translateX(100%); transition: transform 0.7s cubic-bezier(.4,0,.2,1); }
 .media-element.t-slide.active { transform: translateX(0); }
 .media-element.t-slide.leaving { transform: translateX(-100%); }
+/* 디졸브 (블러 해제 + 페이드) */
+.media-element.t-dissolve { opacity: 0; filter: blur(12px); transition: opacity 1s ease, filter 1s ease; }
+.media-element.t-dissolve.active { opacity: 1; filter: blur(0); }
+.media-element.t-dissolve.leaving { opacity: 0; filter: blur(12px); }
+/* 와이프 (좌→우 닦아내기) */
+.media-element.t-wipe { clip-path: inset(0 100% 0 0); transition: clip-path 0.8s ease; }
+.media-element.t-wipe.active { clip-path: inset(0 0 0 0); }
+/* 플립 (3D 회전) */
+.media-element.t-flip { opacity: 0; transform: perspective(1200px) rotateY(90deg); transition: transform 0.7s ease, opacity 0.7s ease; }
+.media-element.t-flip.active { opacity: 1; transform: perspective(1200px) rotateY(0deg); }
+.media-element.t-flip.leaving { opacity: 0; transform: perspective(1200px) rotateY(-90deg); }
+/* 줌 (Ken Burns: 페이드 인 + 느린 확대) */
+.media-element.t-zoom { opacity: 0; transition: opacity 1s ease; }
+.media-element.t-zoom.active { opacity: 1; }
+.media-element.t-zoom.leaving { opacity: 0; }
+.media-element.t-zoom.active img, .media-element.t-zoom.active video { animation: kenburns var(--kb, 12s) ease-out forwards; }
+@keyframes kenburns { from { transform: scale(1); } to { transform: scale(1.18); } }
 
 /* 분할(split) 레이아웃: 좌/우 나란히 */
 .media-element.split { flex-direction: row; }
@@ -310,6 +328,7 @@ function showMedia(panes, split, entry, duration, onDone) {
 
   const container = document.createElement('div');
   container.className = 'media-element t-' + trans + (split ? ' split' : '');
+  if (trans === 'zoom') container.style.setProperty('--kb', Math.max(6, duration / 1000) + 's');
 
   let videoForEnd = null;
   panes.forEach(p => {

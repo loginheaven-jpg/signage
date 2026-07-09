@@ -74,7 +74,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font
   object-fit: contain;
 }
 /* 전환 레이어 */
-.layer { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.layer { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .layer.t-fade { opacity: 0; transition: opacity 0.8s ease; }
 .layer.t-fade.active { opacity: 1; }
 .layer.t-fade.leaving { opacity: 0; }
@@ -82,6 +82,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font
 .layer.t-slide { transform: translateX(100%); transition: transform 0.7s cubic-bezier(.4,0,.2,1); }
 .layer.t-slide.active { transform: translateX(0); }
 .layer.t-slide.leaving { transform: translateX(-100%); }
+.layer.t-dissolve { opacity: 0; filter: blur(12px); transition: opacity 1s ease, filter 1s ease; }
+.layer.t-dissolve.active { opacity: 1; filter: blur(0); }
+.layer.t-dissolve.leaving { opacity: 0; filter: blur(12px); }
+.layer.t-wipe { clip-path: inset(0 100% 0 0); transition: clip-path 0.8s ease; }
+.layer.t-wipe.active { clip-path: inset(0 0 0 0); }
+.layer.t-flip { opacity: 0; transform: perspective(1200px) rotateY(90deg); transition: transform 0.7s ease, opacity 0.7s ease; }
+.layer.t-flip.active { opacity: 1; transform: perspective(1200px) rotateY(0deg); }
+.layer.t-flip.leaving { opacity: 0; transform: perspective(1200px) rotateY(-90deg); }
+.layer.t-zoom { opacity: 0; transition: opacity 1s ease; }
+.layer.t-zoom.active { opacity: 1; }
+.layer.t-zoom.leaving { opacity: 0; }
+.layer.t-zoom.active img, .layer.t-zoom.active video { animation: kenburns var(--kb, 12s) ease-out forwards; }
+@keyframes kenburns { from { transform: scale(1); } to { transform: scale(1.18); } }
 
 /* 오버레이 정보 (좌상단) */
 .info-overlay {
@@ -349,8 +362,8 @@ function playCurrentEntry() {
     // 좌/우 동시 표출 (듀얼 모니터 또는 분할)
     container.classList.add('dual'); container.classList.remove('single');
     screen2.style.display = 'flex';
-    loadMedia('screen1', entry.url, entry.mimeType, trans);
-    loadMedia('screen2', entry.url2, entry.mimeType2, trans);
+    loadMedia('screen1', entry.url, entry.mimeType, trans, duration);
+    loadMedia('screen2', entry.url2, entry.mimeType2, trans, duration);
     showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || ''} + ${entry.filename2 || ''}`);
     reportPlaying(entry, 'both');
     advanceAfter(entry, entry.mimeType, duration, nextEntry);
@@ -358,11 +371,11 @@ function playCurrentEntry() {
     // 독립 + 단일 모니터: url1 → url2 순차
     container.classList.add('single'); container.classList.remove('dual');
     screen2.style.display = 'none';
-    loadMedia('screen1', entry.url, entry.mimeType, trans);
+    loadMedia('screen1', entry.url, entry.mimeType, trans, duration);
     showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || entry.url}`);
     reportPlaying(entry, 'left');
     advanceAfter(entry, entry.mimeType, duration, () => {
-      loadMedia('screen1', entry.url2, entry.mimeType2, trans);
+      loadMedia('screen1', entry.url2, entry.mimeType2, trans, duration);
       showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename2 || entry.url2}`);
       reportPlaying(entry, 'right');
       advanceAfter(entry, entry.mimeType2, duration, nextEntry);
@@ -370,7 +383,7 @@ function playCurrentEntry() {
   } else {
     container.classList.add('single'); container.classList.remove('dual');
     screen2.style.display = 'none';
-    loadMedia('screen1', entry.url, entry.mimeType, trans);
+    loadMedia('screen1', entry.url, entry.mimeType, trans, duration);
     showInfo(`${currentIndex + 1}/${playlist.length}: ${entry.filename || entry.url} (${entry.duration}초)`);
     reportPlaying(entry, 'left');
     advanceAfter(entry, entry.mimeType, duration, nextEntry);
@@ -394,7 +407,7 @@ function nextEntry() {
 }
 
 // url은 절대(http) 또는 상대(/uploads/..). 상대면 호스트 프리픽스.
-function loadMedia(screenId, url, mimeType, trans) {
+function loadMedia(screenId, url, mimeType, trans, durationMs) {
   const screen = document.getElementById(screenId);
   if (!url) { screen.innerHTML = ''; return; }
   trans = trans || 'fade';
@@ -402,6 +415,7 @@ function loadMedia(screenId, url, mimeType, trans) {
 
   const layer = document.createElement('div');
   layer.className = 'layer t-' + trans;
+  if (trans === 'zoom') layer.style.setProperty('--kb', Math.max(6, (durationMs || 12000) / 1000) + 's');
   layer.innerHTML = (mimeType && mimeType.startsWith('video'))
     ? `<video src="${src}" autoplay muted playsinline></video>`
     : `<img src="${src}" alt="media">`;
