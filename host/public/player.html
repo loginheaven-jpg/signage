@@ -208,6 +208,7 @@ function connectToHost() {
   };
 
   ws.onclose = () => {
+    if (quitted) return; // 호스트 종료 명령이면 재연결하지 않음
     updateStatus('연결 끊김 — 재연결 시도 중...', 'red');
     setTimeout(() => connectToHost(), 5000);
   };
@@ -266,10 +267,30 @@ function handleMessage(msg) {
       stopPlayback();
       break;
 
+    case 'quit':
+      hostQuit();
+      break;
+
     case 'sync_now':
       showInfo('🔄 동기화 명령 수신');
       break;
   }
+}
+
+// 호스트 원격 종료: 재생 중지 + 연결 끊기 + 종료 화면
+// (브라우저 탭은 스크립트로 강제로 닫을 수 없으므로 종료 안내 화면을 표시한다)
+let quitted = false;
+function hostQuit() {
+  quitted = true;
+  stopPlayback();
+  reportPlaying(null);
+  if (ws) { try { ws.close(); } catch (e) {} }
+  const sb = document.getElementById('standby');
+  sb.classList.remove('hidden');
+  updateStatus('호스트에서 종료됨 — 이 탭은 닫아도 됩니다', 'red');
+  const cfg = document.querySelector('.config-panel');
+  if (cfg) cfg.innerHTML = '<div style="text-align:center; color:#e0a066; font-size:13px; line-height:1.7;">호스트에서 종료 명령을 받았습니다.<br>다시 재생하려면 이 탭을 새로고침(F5)하세요.</div>';
+  try { window.close(); } catch (e) {} // 스크립트로 연 창이면 닫힘
 }
 
 // ─── 편성표 적용 ────────────────────────────────────────
