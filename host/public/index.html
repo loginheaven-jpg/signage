@@ -306,8 +306,11 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 .chip .sw { width:22px; height:14px; border-radius:3px; flex-shrink:0; display:grid; place-items:center; color:#fff; font-size:8px; overflow:hidden; background:#cdd5e0; }
 .chip .sw img { width:100%; height:100%; object-fit:cover; }
 .chip .nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cc-actions { display:flex; gap:6px; align-items:center; }
 .cc-quit { background:#e67e22; color:#fff; }
 .cc-quit.dis { background:#eceef1; color:#b5bac2; cursor:not-allowed; }
+.cc-edit { background:#eef1f6; color:#374151; border:1px solid #dfe3ea; }
+.cc-edit:hover { background:#e3e7ee; }
 
 .cc-phead { display:flex; align-items:center; gap:10px; padding:14px 2px 6px; margin-top:8px; border-top:1px solid #e6e8ec; font-size:12px; font-weight:700; color:#d9822b; }
 .cc-phead .rule { flex:1; height:1px; background:#f0d9bd; }
@@ -572,6 +575,22 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
   </div>
 </div>
 
+<!-- Site Picker Modal (승인 / 사이트 변경) -->
+<div class="modal-overlay" id="sitePickerModal">
+  <div class="modal">
+    <h3 id="spTitle">사이트 선택</h3>
+    <p id="spInfo" style="font-size:13px; color:#666; margin-bottom:14px;"></p>
+    <div class="form-group">
+      <label>연결할 사이트</label>
+      <select id="spSelect"></select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('sitePickerModal')">취소</button>
+      <button class="btn btn-primary" id="spConfirm">확인</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ═══════════════════════════════════════════════════════════
 // 상태
@@ -596,7 +615,8 @@ function connectWS() {
   };
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
-    if (msg.type === 'client_update' || msg.type === 'sites_update') { refreshSites(); refreshClients(); }
+    // 재생상태 heartbeat 등으로 잦은 갱신이 몰릴 수 있어 디바운스로 합침
+    if (msg.type === 'client_update' || msg.type === 'sites_update') debouncedRefresh();
     if (msg.type === 'content_update') refreshContent();
     if (msg.type === 'schedule_update') refreshSchedule();
   };
@@ -631,6 +651,12 @@ function refreshAll() {
   refreshContent();
   refreshSchedule();
   refreshGdriveStatus();
+}
+
+let _refreshTimer = null;
+function debouncedRefresh() {
+  clearTimeout(_refreshTimer);
+  _refreshTimer = setTimeout(() => { refreshSites(); refreshClients(); }, 500);
 }
 
 async function refreshSites() {
@@ -776,7 +802,7 @@ function renderClientList() {
     html += '<div class="cc-grid">' + sitesData.map(site => {
       const cli = clientsData.find(c => c.approved && c.siteId === site.id);
       const online = cli && cli.status === 'online';
-      let pill, clientLine, quitBtn = '';
+      let pill, clientLine, actions = '';
 
       if (cli && online) {
         pill = '<span class="pill on"><span class="d"></span>온라인</span>';
@@ -784,11 +810,13 @@ function renderClientList() {
         const chips = cp ? [nowChip(cp.screen1), nowChip(cp.screen2)].filter(Boolean).join('') : '';
         clientLine = `<span class="cc-cname">${escapeHtml(cli.name)}</span><span class="cc-arrow">›</span>` +
           (chips ? `<span class="cc-now">● 재생중</span>${chips}` : `<span class="cc-sub">연결됨 · 편성표 대기</span>`);
-        quitBtn = `<button class="btn cc-quit" onclick="quitClient('${cli.id}', '${cli.name.replace(/'/g, "\\'")}')">⏻ 종료</button>`;
+        actions = `<button class="btn cc-edit" onclick="openReassign('${cli.id}')">수정</button>` +
+                  `<button class="btn cc-quit" onclick="quitClient('${cli.id}')">⏻ 종료</button>`;
       } else if (cli) {
         pill = '<span class="pill off"><span class="d"></span>오프라인</span>';
         clientLine = `<span class="cc-cname" style="color:#8b909a">${escapeHtml(cli.name)}</span><span class="cc-arrow">›</span><span class="cc-sub">${getClientLastSeen(cli)} · 연결 끊김</span>`;
-        quitBtn = `<button class="btn cc-quit dis" disabled>⏻ 종료</button>`;
+        actions = `<button class="btn cc-edit" onclick="openReassign('${cli.id}')">수정</button>` +
+                  `<button class="btn cc-quit dis" disabled>⏻ 종료</button>`;
       } else {
         pill = '<span class="pill none"><span class="d"></span>미연결</span>';
         clientLine = `<span class="cc-sub">배정된 클라이언트 없음</span>`;
@@ -804,7 +832,7 @@ function renderClientList() {
                 <div class="cc-meta">${pill} · 모니터 ${site.monitors}대</div>
               </div>
             </div>
-            <div>${quitBtn}</div>
+            <div class="cc-actions">${actions}</div>
           </div>
           <div class="cc-client"><div class="cc-cline">${clientLine}</div></div>
         </div>
@@ -817,7 +845,6 @@ function renderClientList() {
   if (pending.length === 0) {
     html += '<div class="cc-empty">새로 접속한 클라이언트가 없습니다.</div>';
   } else {
-    const siteOpts = sitesData.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
     html += '<div class="cc-grid">' + pending.map(c => `
       <div class="cc-pend">
         <div class="cc-siteinfo">
@@ -828,12 +855,7 @@ function renderClientList() {
           </div>
         </div>
         <div class="cc-pactions">
-          <select id="approve-site-${c.id}" class="cc-sel">
-            <option value="">사이트 선택…</option>
-            ${siteOpts}
-            <option value="__new__">+ 새 사이트로 (이름 자동)</option>
-          </select>
-          <button class="btn btn-success" onclick="approveClient('${c.id}')">승인</button>
+          <button class="btn btn-success" onclick="openApprove('${c.id}')">승인 · 사이트 선택</button>
           <button class="btn btn-danger" onclick="rejectClient('${c.id}')">거부</button>
         </div>
       </div>
@@ -851,11 +873,43 @@ function getClientLastSeen(c) {
   return `${Math.round(diff/3600)}시간 전`;
 }
 
-async function approveClient(clientId) {
-  const siteSelect = document.getElementById(`approve-site-${clientId}`);
-  let siteId = siteSelect ? siteSelect.value : '';
-  if (siteId === '__new__') siteId = ''; // 빈 값 → 서버가 새 사이트 생성
+// ─── 사이트 선택 모달 (승인 / 사이트 변경) ───
+let spContext = null;
+function findClient(id) { return clientsData.find(c => c.id === id); }
 
+function openApprove(clientId) {
+  const c = findClient(clientId);
+  openSitePicker('approve', clientId, c ? c.name : '', '');
+}
+function openReassign(clientId) {
+  const c = findClient(clientId);
+  openSitePicker('reassign', clientId, c ? c.name : '', c ? c.siteId : '');
+}
+function openSitePicker(mode, clientId, name, currentSiteId) {
+  spContext = { mode, clientId };
+  document.getElementById('spTitle').textContent = mode === 'approve' ? '클라이언트 승인' : '사이트 변경';
+  document.getElementById('spInfo').textContent = `"${name}" 을(를) 연결할 사이트를 선택하세요.`;
+  const sel = document.getElementById('spSelect');
+  sel.innerHTML =
+    (sitesData.length ? '' : '<option value="__new__">(사이트 없음 — 새로 만들기)</option>') +
+    sitesData.map(s => `<option value="${s.id}">${escapeHtml(s.name)} (모니터 ${s.monitors}대)</option>`).join('') +
+    `<option value="__new__">+ 새 사이트 만들기 ("${escapeHtml(name)}")</option>`;
+  if (currentSiteId) sel.value = currentSiteId;
+  document.getElementById('sitePickerModal').classList.add('show');
+}
+document.getElementById('spConfirm').addEventListener('click', async () => {
+  if (!spContext) return;
+  let siteId = document.getElementById('spSelect').value;
+  const { mode, clientId } = spContext;
+  spContext = null;
+  closeModal('sitePickerModal');
+  if (siteId === '__new__') siteId = ''; // 빈 값 → 서버가 새 사이트 생성
+  if (mode === 'approve') await approveClient(clientId, siteId);
+  else await assignClientSite(clientId, siteId);
+});
+
+async function approveClient(clientId, siteId) {
+  siteId = siteId || '';
   // 한 사이트 = 한 클라이언트: 기존 연결 있으면 경고
   if (siteId) {
     const occ = siteOccupant(siteId, clientId);
@@ -895,7 +949,9 @@ async function resetAll() {
   if (data.success) { showToast('전체 초기화 완료'); refreshAll(); }
 }
 
-async function quitClient(clientId, name) {
+async function quitClient(clientId) {
+  const c = findClient(clientId);
+  const name = c ? c.name : '클라이언트';
   if (!confirm(`"${name}" 클라이언트 앱을 종료하시겠습니까?\n종료 후에는 해당 PC를 재부팅하거나 수동 실행하기 전까지 재생되지 않습니다.`)) return;
   const res = await fetch(`/api/clients/${clientId}/quit`, { method: 'POST' });
   const data = await res.json();
