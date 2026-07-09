@@ -288,13 +288,15 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 .pill.off { background:#fdeaea; color:#c0392b; } .pill.off .d { background:#c0392b; }
 .pill.none { background:#eef0f3; color:#8b909a; } .pill.none .d { background:#b6bcc6; }
 
-.cc-site { display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; padding:13px 2px; border-top:1px solid #f0f1f4; }
-.cc-site:first-child { border-top:none; }
+.cc-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; }
+.cc-card { border:1px solid #eceef2; border-radius:11px; padding:4px 14px 12px; transition:box-shadow .15s, border-color .15s; }
+.cc-card:hover { border-color:#dfe3ea; box-shadow:0 2px 10px rgba(16,20,40,.05); }
+.cc-site { display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; padding:12px 0 8px; }
 .cc-siteinfo { display:flex; align-items:center; gap:11px; }
 .cc-emoji { width:34px; height:34px; border-radius:9px; background:#f1f3f8; display:grid; place-items:center; font-size:17px; flex-shrink:0; }
 .cc-name { font-size:14.5px; font-weight:700; }
 .cc-meta { font-size:11.5px; color:#6b7280; margin-top:2px; display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
-.cc-client { padding:0 2px 4px 45px; }
+.cc-client { padding:0 0 2px 45px; }
 .cc-cline { display:flex; align-items:center; gap:9px; flex-wrap:wrap; font-size:12.5px; color:#444; }
 .cc-cname { font-weight:600; color:#1a1a2e; }
 .cc-arrow { color:#c3c8d1; }
@@ -310,13 +312,16 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 .cc-phead { display:flex; align-items:center; gap:10px; padding:14px 2px 6px; margin-top:8px; border-top:1px solid #e6e8ec; font-size:12px; font-weight:700; color:#d9822b; }
 .cc-phead .rule { flex:1; height:1px; background:#f0d9bd; }
 .cc-phead .cbadge { background:#d9822b; color:#fff; border-radius:6px; padding:1px 7px; font-size:10px; }
-.cc-pend { display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; padding:11px 10px; background:#fffdf9; border:1px solid #f4e7d2; border-radius:9px; margin-top:8px; }
+.cc-pend { display:flex; flex-direction:column; gap:11px; padding:12px; background:#fffdf9; border:1px solid #f4e7d2; border-radius:9px; }
 .new-badge { font-size:10px; font-weight:800; color:#fff; background:#d9822b; padding:2px 7px; border-radius:5px; margin-left:6px; }
 .cc-pactions { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-.cc-sel { border:1px solid #d7dbe2; border-radius:7px; padding:6px 9px; font-size:12px; background:#fff; }
+.cc-sel { flex:1; min-width:130px; border:1px solid #d7dbe2; border-radius:7px; padding:6px 9px; font-size:12px; background:#fff; }
 .cc-empty { padding:16px; text-align:center; color:#9aa1ac; font-size:12.5px; }
 
 /* ─── Responsive ─── */
+@media (max-width: 900px) {
+  .cc-grid { grid-template-columns: 1fr; }
+}
 @media (max-width: 768px) {
   .main { grid-template-columns: 1fr; }
   .sidebar { display: none; }
@@ -764,11 +769,11 @@ function renderClientList() {
 
   let html = '';
 
-  // ── 사이트별 연결 상태 (미연결 포함) ──
+  // ── 사이트별 연결 상태 (미연결 포함) — 한 줄에 2개씩 ──
   if (sitesData.length === 0) {
     html += '<div class="cc-empty">등록된 사이트가 없습니다. 설정에서 사이트를 추가하거나, 아래 대기 중인 클라이언트를 승인할 때 사이트를 만드세요.</div>';
   } else {
-    html += sitesData.map(site => {
+    html += '<div class="cc-grid">' + sitesData.map(site => {
       const cli = clientsData.find(c => c.approved && c.siteId === site.id);
       const online = cli && cli.status === 'online';
       let pill, clientLine, quitBtn = '';
@@ -790,19 +795,21 @@ function renderClientList() {
       }
 
       return `
-        <div class="cc-site">
-          <div class="cc-siteinfo">
-            <div class="cc-emoji">${site.icon || '📺'}</div>
-            <div>
-              <div class="cc-name">${escapeHtml(site.name)}</div>
-              <div class="cc-meta">${pill} · 모니터 ${site.monitors}대</div>
+        <div class="cc-card">
+          <div class="cc-site">
+            <div class="cc-siteinfo">
+              <div class="cc-emoji">${site.icon || '📺'}</div>
+              <div>
+                <div class="cc-name">${escapeHtml(site.name)}</div>
+                <div class="cc-meta">${pill} · 모니터 ${site.monitors}대</div>
+              </div>
             </div>
+            <div>${quitBtn}</div>
           </div>
-          <div>${quitBtn}</div>
+          <div class="cc-client"><div class="cc-cline">${clientLine}</div></div>
         </div>
-        <div class="cc-client"><div class="cc-cline">${clientLine}</div></div>
       `;
-    }).join('');
+    }).join('') + '</div>';
   }
 
   // ── 승인 대기 (새로 접속한 미승인 클라이언트) ──
@@ -811,7 +818,7 @@ function renderClientList() {
     html += '<div class="cc-empty">새로 접속한 클라이언트가 없습니다.</div>';
   } else {
     const siteOpts = sitesData.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
-    html += pending.map(c => `
+    html += '<div class="cc-grid">' + pending.map(c => `
       <div class="cc-pend">
         <div class="cc-siteinfo">
           <div class="cc-emoji" style="background:#fdf1e3">🆕</div>
@@ -830,7 +837,7 @@ function renderClientList() {
           <button class="btn btn-danger" onclick="rejectClient('${c.id}')">거부</button>
         </div>
       </div>
-    `).join('');
+    `).join('') + '</div>';
   }
 
   el.innerHTML = html;
