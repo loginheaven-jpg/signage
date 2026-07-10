@@ -195,7 +195,7 @@ if (isSecondary) {
   window.signage.onScreen2Media((media) => {
     if (!media || !media.url) { showIdle(); return; }
     idleScreen.style.display = 'none';
-    renderSingle(resolveUrl(media.url), media.mimeType, media.fitMode, media.sound === 'right');
+    renderSingle(resolveUrl(media.url), media.mimeType, media.fitMode, media.sound === 'right', media.transition, media.duration);
   });
 }
 
@@ -300,8 +300,8 @@ function playNext() {
   const m2 = hasSecond ? { url: url2, mimeType: entry.mimeType2, fitMode, audible: entry.sound === 'right' } : null;
 
   if (hasSecond && wantBoth && dualMonitor) {
-    // 듀얼 모니터: 좌=주 창, 우=보조 창 동시 표출
-    window.signage.setScreen2Media({ url: entry.url2, mimeType: entry.mimeType2, fitMode, sound: entry.sound });
+    // 듀얼 모니터: 좌=주 창, 우=보조 창 동시 표출 (전환효과도 함께 전달)
+    window.signage.setScreen2Media({ url: entry.url2, mimeType: entry.mimeType2, fitMode, sound: entry.sound, transition: entry.transition, duration });
     report(entry, 'both');
     showMedia([m1], false, entry, duration, playNext);
   } else if (hasSecond && wantBoth) {
@@ -390,14 +390,27 @@ function createMediaEl(p) {
   return img;
 }
 
-// 보조 화면(screen=2): 단일 미디어 표출
-function renderSingle(url, mimeType, fitMode, audible) {
+// 보조 화면(screen=2): 단일 미디어 표출 (주 화면과 동일한 전환효과 적용)
+function renderSingle(url, mimeType, fitMode, audible, trans, durationMs) {
+  trans = trans || 'fade';
   const existing = player.querySelector('.media-element');
-  if (existing) existing.remove();
   const container = document.createElement('div');
-  container.className = 'media-element t-cut active';
+  container.className = 'media-element t-' + trans;
+  if (trans === 'zoom') container.style.setProperty('--kb', Math.max(6, (durationMs || 12000) / 1000) + 's');
   container.appendChild(createMediaEl({ url, mimeType, fitMode, audible }));
   player.appendChild(container);
+
+  if (trans === 'cut') {
+    container.classList.add('active');
+    if (existing) existing.remove();
+  } else {
+    requestAnimationFrame(() => requestAnimationFrame(() => container.classList.add('active')));
+    if (existing) {
+      existing.classList.remove('active');
+      existing.classList.add('leaving');
+      setTimeout(() => existing.remove(), 800);
+    }
+  }
 }
 
 // 현재 재생 콘텐츠를 호스트에 보고 (which: 'left' | 'right' | 'both')

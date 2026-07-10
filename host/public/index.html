@@ -306,12 +306,15 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 .chip .sw { width:22px; height:14px; border-radius:3px; flex-shrink:0; display:grid; place-items:center; color:#fff; font-size:8px; overflow:hidden; background:#cdd5e0; }
 .chip .sw img { width:100%; height:100%; object-fit:cover; }
 .chip .nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.cc-actions { display:flex; gap:6px; align-items:center; }
+.cc-actions { display:flex; gap:5px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+.cc-actions .btn { padding:6px 10px; font-size:11.5px; }
 .cc-stop { background:#e67e22; color:#fff; }
 .cc-stop.dis { background:#eceef1; color:#b5bac2; cursor:not-allowed; }
 .cc-play { background:#27ae60; color:#fff; }
 .cc-edit { background:#eef1f6; color:#374151; border:1px solid #dfe3ea; }
 .cc-edit:hover { background:#e3e7ee; }
+.cc-cue { background:#e8f0fe; color:#1a73e8; border:1px solid #cfe0fc; }
+.cc-cue:hover { background:#d9e7fd; }
 
 .cc-phead { display:flex; align-items:center; gap:10px; padding:14px 2px 6px; margin-top:8px; border-top:1px solid #e6e8ec; font-size:12px; font-weight:700; color:#d9822b; }
 .cc-phead .rule { flex:1; height:1px; background:#f0d9bd; }
@@ -805,6 +808,7 @@ function renderClientList() {
       const online = cli && cli.status === 'online';
       let pill, clientLine, actions = '';
 
+      const cueBtn = `<button class="btn cc-cue" onclick="openCuesheet('${site.id}')">큐시트</button>`;
       if (cli && online) {
         pill = '<span class="pill on"><span class="d"></span>온라인</span>';
         const cp = cli.currentPlaying;
@@ -815,15 +819,16 @@ function renderClientList() {
         const toggleBtn = playing
           ? `<button class="btn cc-stop" onclick="stopClient('${cli.id}')">⏹ 멈추기</button>`
           : `<button class="btn cc-play" onclick="resumeClient('${cli.id}')">▶ 재생하기</button>`;
-        actions = `<button class="btn cc-edit" onclick="openReassign('${cli.id}')">수정</button>` + toggleBtn;
+        actions = `<button class="btn cc-edit" onclick="openReassign('${cli.id}')">연결수정</button>` + cueBtn + toggleBtn;
       } else if (cli) {
         pill = '<span class="pill off"><span class="d"></span>오프라인</span>';
         clientLine = `<span class="cc-cname" style="color:#8b909a">${escapeHtml(cli.name)}</span><span class="cc-arrow">›</span><span class="cc-sub">${getClientLastSeen(cli)} · 연결 끊김</span>`;
-        actions = `<button class="btn cc-edit" onclick="openReassign('${cli.id}')">수정</button>` +
+        actions = `<button class="btn cc-edit" onclick="openReassign('${cli.id}')">연결수정</button>` + cueBtn +
                   `<button class="btn cc-stop dis" disabled>⏹ 멈추기</button>`;
       } else {
         pill = '<span class="pill none"><span class="d"></span>미연결</span>';
         clientLine = `<span class="cc-sub">배정된 클라이언트 없음</span>`;
+        actions = cueBtn;
       }
 
       return `
@@ -961,6 +966,12 @@ async function stopClient(clientId) {
   else { showToast(data.error || '중지 실패'); }
 }
 
+// 큐시트 편집으로 이동 (해당 사이트로 필터)
+function openCuesheet(siteId) {
+  navigateTo('schedule');
+  setScheduleFilter(siteId);
+}
+
 // 재생 재개 (사이트 편성표 재전송)
 async function resumeClient(clientId) {
   const res = await fetch(`/api/clients/${clientId}/resume`, { method: 'POST' });
@@ -1046,9 +1057,9 @@ function renderSchedule() {
             <option value="split" ${entry.layoutType === 'split' ? 'selected' : ''}>분할</option>
           </select>
         </td>
-        <td><input type="number" min="3" max="600" value="${entry.duration || 10}" onchange="updateEntry(${realIdx}, 'duration', parseInt(this.value))"></td>
+        <td><input type="number" min="3" max="600" value="${entry.duration || 10}" onchange="updateEntry(${realIdx}, 'duration', parseInt(this.value))" ${(isVideo1 && entry.videoDuration === 'original') ? 'disabled title="원본 재생: 영상 끝까지 재생하므로 시간 설정은 무시됩니다"' : ''}></td>
         <td>
-          <select onchange="updateEntry(${realIdx}, 'videoDuration', this.value)" style="width:65px">
+          <select onchange="updateEntry(${realIdx}, 'videoDuration', this.value); renderSchedule();" style="width:65px" ${isVideo1 ? '' : 'disabled title="영상 항목에만 적용"'}>
             <option value="original" ${entry.videoDuration === 'original' ? 'selected' : ''}>원본</option>
             <option value="custom" ${entry.videoDuration === 'custom' ? 'selected' : ''}>지정</option>
           </select>
