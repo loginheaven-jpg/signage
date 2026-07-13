@@ -1,89 +1,88 @@
 @echo off
-chcp 65001 >nul
-title 디지털 게시판 클라이언트 설치 / 업데이트
+title Digital Signage Client - Install / Update
 
 echo.
-echo ╔══════════════════════════════════════════╗
-echo ║  디지털 게시판 클라이언트 설치 / 업데이트 ║
-echo ╚══════════════════════════════════════════╝
+echo +==============================================+
+echo ^|   Digital Signage Client - Install / Update  ^|
+echo +==============================================+
 echo.
 
-:: ─── 신규/업데이트 자동 판별 ─────────────────────────────
-set "MODE=신규 설치"
-if exist "%~dp0node_modules" set "MODE=업데이트"
-echo   ▶ 설치 유형: %MODE%
-if "%MODE%"=="업데이트" (
-    echo     (기존 설치 폴더를 감지했습니다. 파일만 갱신합니다.)
-    echo     ※ 실행 중인 앱이 있으면 Ctrl+Shift+Q 로 먼저 종료하세요.
+:: --- Detect new install vs update ---------------------
+set "MODE=New install"
+if exist "%~dp0node_modules" set "MODE=Update"
+echo   ^> Setup type: %MODE%
+if "%MODE%"=="Update" (
+    echo     ^(Existing install detected. Refreshing files only.^)
+    echo     * If the app is running, quit it first with Ctrl+Shift+Q.
 )
 echo.
 
-:: ─── 1. Node.js 확인 ────────────────────────────────────
-echo [1/4] Node.js 확인 중...
+:: --- 1. Check Node.js ---------------------------------
+echo [1/4] Checking Node.js...
 where node >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo.
-    echo ⚠  Node.js가 설치되어 있지 않습니다.
-    echo    https://nodejs.org 에서 LTS 버전을 설치한 후 다시 실행하세요.
+    echo [!] Node.js is not installed.
+    echo     Install the LTS version from https://nodejs.org and run this again.
     echo.
-    start https://nodejs.org/ko/download/
+    start https://nodejs.org/en/download/
     pause
     exit /b 1
 )
 for /f "tokens=*" %%i in ('node --version') do set NODE_VER=%%i
-echo    ✓ Node.js %NODE_VER% 확인됨
+echo    [OK] Node.js %NODE_VER% detected
 echo.
 
-:: ─── 2. 의존성 설치/확인 ───────────────────────────────
-echo [2/4] 패키지 확인 중... (신규는 다운로드, 기존은 확인만)
+:: --- 2. Install / check dependencies ------------------
+echo [2/4] Preparing packages... ^(download on new install, verify on update^)
 call npm install --production 2>nul
 if %ERRORLEVEL% neq 0 (
-    echo    npm install 실패. 네트워크를 확인하세요.
+    echo    npm install failed. Please check your network.
     pause
     exit /b 1
 )
-echo    ✓ 패키지 준비 완료
+echo    [OK] Packages ready
 echo.
 
-:: ─── 3. 윈도우 시작프로그램 등록 ────────────────────────
-echo [3/4] 윈도우 시작프로그램 등록 중...
+:: --- 3. Register Windows startup ----------------------
+echo [3/4] Registering Windows startup...
 
 set "STARTUP_FOLDER=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "SHORTCUT_NAME=디지털게시판.lnk"
+set "SHORTCUT_NAME=DigitalSignage.lnk"
 set "SCRIPT_PATH=%~dp0start.bat"
 
-:: VBScript로 바로가기 생성 (이미 있으면 덮어씀)
+:: Create shortcut via VBScript (overwrites if it exists)
 echo Set oWS = WScript.CreateObject("WScript.Shell") > "%TEMP%\create_shortcut.vbs"
 echo sLinkFile = "%STARTUP_FOLDER%\%SHORTCUT_NAME%" >> "%TEMP%\create_shortcut.vbs"
 echo Set oLink = oWS.CreateShortcut(sLinkFile) >> "%TEMP%\create_shortcut.vbs"
 echo oLink.TargetPath = "%SCRIPT_PATH%" >> "%TEMP%\create_shortcut.vbs"
 echo oLink.WorkingDirectory = "%~dp0" >> "%TEMP%\create_shortcut.vbs"
 echo oLink.WindowStyle = 7 >> "%TEMP%\create_shortcut.vbs"
-echo oLink.Description = "디지털 게시판 클라이언트 자동 시작" >> "%TEMP%\create_shortcut.vbs"
+echo oLink.Description = "Digital Signage client auto-start" >> "%TEMP%\create_shortcut.vbs"
 echo oLink.Save >> "%TEMP%\create_shortcut.vbs"
 cscript //nologo "%TEMP%\create_shortcut.vbs"
 del "%TEMP%\create_shortcut.vbs"
 
-echo    ✓ 윈도우 부팅 시 자동 실행 등록 완료
+echo    [OK] Auto-start on Windows boot registered
 echo.
 
-:: ─── 4. 실행 ────────────────────────────────────────────
-echo [4/4] 클라이언트 실행 중...
+:: --- 4. Launch ----------------------------------------
+echo [4/4] Starting client...
 echo.
-echo ╔══════════════════════════════════════════╗
-echo ║  %MODE% 완료!
-echo ║                                          ║
-echo ║  • 클라이언트가 자동으로 시작됩니다       ║
-echo ║  • (신규) 설정 화면에서 이름/서버 입력    ║
-echo ║  • PC 재부팅 시 자동 실행됩니다           ║
-echo ║                                          ║
-echo ║  단축키:                                 ║
-echo ║    Ctrl+Shift+P  멈추기 / 재생하기       ║
-echo ║    Ctrl+Shift+S  설정 화면               ║
-echo ║    Ctrl+Shift+F  전체화면 토글           ║
-echo ║    Ctrl+Shift+Q  앱 종료                 ║
-echo ╚══════════════════════════════════════════╝
+echo +==============================================+
+echo ^|   %MODE% complete!
+echo ^|                                              ^|
+echo ^|   - The client will start automatically      ^|
+echo ^|   - (New) Enter name/server on setup screen  ^|
+echo ^|   - Starts automatically when the PC reboots ^|
+echo ^|                                              ^|
+echo ^|   Shortcuts:                                 ^|
+echo ^|     Ctrl+Shift+P   Pause / Play              ^|
+echo ^|     Ctrl+Shift+S   Settings screen           ^|
+echo ^|     Ctrl+Shift+F   Toggle fullscreen         ^|
+echo ^|     Ctrl+Shift+Q   Quit app                  ^|
+echo +==============================================+
 echo.
 
-:: Electron 실행
+:: Launch Electron
 call npx electron .
