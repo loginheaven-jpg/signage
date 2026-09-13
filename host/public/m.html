@@ -164,6 +164,7 @@ header .sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
 .banner.show { display: block; }
 .banner.warn { background: rgba(230,126,34,0.15); border: 1px solid rgba(230,126,34,0.4); color: #ffd9a8; }
 .banner.err  { background: rgba(231,76,60,0.15); border: 1px solid rgba(231,76,60,0.4); color: #ffb8b0; }
+.banner.ok   { background: rgba(46,204,113,0.15); border: 1px solid rgba(46,204,113,0.4); color: #b6f0cd; }
 
 .spin {
   width: 30px; height: 30px; margin: 0 auto 10px;
@@ -244,7 +245,9 @@ const LS = {
   siteName: 'live.siteName',
   siteIcon: 'live.siteIcon',
   uploaderId: 'live.uploaderId',
-  uploaderName: 'live.uploaderName'
+  uploaderName: 'live.uploaderName',
+  pending: 'live.pending',   // 카메라 진입 후 아직 사진을 받지 못한 상태
+  draft: 'live.draft'        // 입력 중이던 메시지 (탭이 폐기돼도 살리기 위해)
 };
 
 function ls(k, v) {
@@ -330,6 +333,7 @@ async function init(quiet) {
 
   if (!uploaderName && !quiet) askName(true);
   renderWhoami();
+  if (!quiet) recoverFromLostShot();
 
   try {
     const res = await fetch(`/live/api/hello?t=${encodeURIComponent(token)}`);
@@ -372,6 +376,42 @@ async function init(quiet) {
     });
   }
 }
+
+// 카메라를 열었는데 사진이 돌아오지 않은 흔적이 남아 있으면 알려준다.
+// (폰이 카메라를 쓰는 동안 메모리 부족으로 이 페이지를 폐기하면, 돌아왔을 때
+//  페이지가 새로 로드되어 change 이벤트가 아예 오지 않는다 — 가장 흔한 조용한 실패)
+function recoverFromLostShot() {
+  const pending = ls(LS.pending);
+  const draft = ls(LS.draft);
+
+  // 쓰던 메시지는 무조건 되살린다
+  if (draft && !el('msg').value) {
+    el('msg').value = draft;
+    el('msgCount').textContent = draft.length;
+  }
+
+  if (!pending) return;
+  ls(LS.pending, null);
+  const ago = Date.now() - Number(pending);
+  if (!(ago >= 0 && ago < 10 * 60 * 1000)) return;   // 오래된 흔적은 무시
+
+  showBanner('warn',
+    '직전에 찍은 사진이 <b>전달되지 않았습니다.</b> 폰이 카메라를 쓰는 동안 이 화면을 ' +
+    '잠시 닫았을 수 있습니다(메모리 부족). 다시 찍어 주세요 — 메시지는 그대로 남겨두었습니다.' +
+    (draft ? '' : ' 계속 실패하면 <b>앨범에서 고르기</b>로 올려보세요.'));
+}
+
+// 카메라에서 돌아왔는데(화면이 다시 보이는데) 사진이 오지 않으면 알려준다.
+// 촬영을 취소한 경우도 여기로 오므로 문구는 두 경우에 모두 맞게 쓴다.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (!ls(LS.pending)) return;
+  setTimeout(() => {
+    if (fileArrived || !ls(LS.pending) || busy) return;
+    ls(LS.pending, null);
+    showBanner('warn', '사진을 받지 못했습니다. 촬영을 취소했거나 전달이 실패했을 수 있습니다 — 다시 시도해 주세요.');
+  }, 2500);
+});
 
 function renderWhoami() {
   el('whoami').innerHTML = uploaderName
@@ -453,46 +493,94 @@ function selectSite(id) {
 // 촬영 → 리사이즈 → 업로드
 // ═══════════════════════════════════════════════════════════
 async function pickPhoto() {
-  // 막힌 상태에서 누르면: 서버 상태를 다시 확인하고, 풀렸으면 바로 카메라를 연다
+  // 막힌 상태에서 누르면: 서버 상태를 다시 확인한다.
+  // 이때 카메라를 바로 열지는 않는다 — await 로 사용자 제스처가 끊기면
+  // iOS 가 file input 열기를 조용히 무시하기 때문이다(다시 누르도록 안내).
   if (block) {
     const prev = block.label;
     el('shootBtn').innerHTML = '확인 중...';
     await init(true);
     if (block) {
-      // 여전히 막혀 있음 — 이유가 화면에 그대로 보이므로 추가 안내만 짧게
       if (block.label === prev) showBanner(block.kind || 'warn', block.detail + ' <b>(방금 확인함)</b>');
-      return;
+    } else {
+      showBanner('ok', '준비됐습니다. <b>촬영 버튼을 한 번 더 눌러</b> 주세요.');
     }
+    return;
   }
   if (!ls(LS.siteId)) {
     alert('먼저 송출할 모니터를 선택해 주세요.');
     el('siteList').classList.add('show');
     return;
   }
-  el('fileInput').value = '';
-  el('fileInput').click();
+  openPicker('fileInput');
 }
 
 function pickFromGallery() {
   if (block) return pickPhoto();
-  el('galleryInput').value = '';
-  el('galleryInput').click();
-}
-
-el('fileInput').addEventListener('change', e => handleFile(e.target.files[0]));
-el('galleryInput').addEventListener('change', e => handleFile(e.target.files[0]));
-
-el('msg').addEventListener('input', e => { el('msgCount').textContent = e.target.value.length; });
-
-async function handleFile(file) {
-  if (!file || busy) return;
   if (!ls(LS.siteId)) {
     alert('먼저 송출할 모니터를 선택해 주세요.');
     el('siteList').classList.add('show');
     return;
   }
-  busy = true;
-  setComposerEnabled(false);
+  openPicker('galleryInput');
+}
+
+// 카메라/앨범을 열기 직전에 '진행 중' 흔적을 남긴다.
+// 폰이 카메라를 쓰는 동안 메모리 부족으로 이 페이지를 폐기하는 일이 있는데,
+// 그러면 돌아왔을 때 change 이벤트가 아예 오지 않아 아무 일도 없는 것처럼 보인다.
+// 다음 로드에서 이 흔적을 보고 원인을 알려주고, 쓰던 메시지도 되살린다.
+function openPicker(inputId) {
+  ls(LS.pending, String(Date.now()));
+  ls(LS.draft, el('msg').value || '');
+  fileArrived = false;
+  const input = el(inputId);
+  input.value = '';
+  input.click();
+}
+
+el('fileInput').addEventListener('change', e => onPicked(e.target.files));
+el('galleryInput').addEventListener('change', e => onPicked(e.target.files));
+
+el('msg').addEventListener('input', e => {
+  el('msgCount').textContent = e.target.value.length;
+  ls(LS.draft, e.target.value);   // 탭이 폐기돼도 메시지가 남도록 저장
+});
+
+// 사진이 돌아왔을 때의 입구 — 여기서 조용히 끝나는 경우가 없도록 한다
+let fileArrived = false;
+function onPicked(files) {
+  fileArrived = true;
+  ls(LS.pending, null);
+  const file = files && files[0];
+  if (!file) {
+    // 카메라 앱이 결과를 돌려주지 못한 경우 (일부 안드로이드에서 발생)
+    showStatus('err', '<div class="big">⚠️</div><div class="t">사진을 받지 못했습니다</div>' +
+      '<div class="d">카메라가 사진을 넘겨주지 못했습니다. 다시 시도하거나 <b>앨범에서 고르기</b>를 이용해 주세요.</div>' +
+      '<button class="big-btn sub" style="margin-top:14px" onclick="resetComposer()">돌아가기</button>');
+    return;
+  }
+  if (!file.size) {
+    showStatus('err', '<div class="big">⚠️</div><div class="t">사진 파일이 비어 있습니다</div>' +
+      '<div class="d">저장이 끝나기 전에 넘어온 것 같습니다. 다시 찍어 주세요.</div>' +
+      '<button class="big-btn sub" style="margin-top:14px" onclick="resetComposer()">돌아가기</button>');
+    return;
+  }
+  handleFile(file);
+}
+
+async function handleFile(file) {
+  if (busy) {
+    // 이전 업로드가 아직 진행 중 — 조용히 무시하지 않고 알려준다
+    showBanner('warn', '앞서 올린 사진을 <b>아직 보내는 중</b>입니다. 잠시만 기다려 주세요.');
+    return;
+  }
+  if (!file) return onPicked(null);
+  if (!ls(LS.siteId)) {
+    alert('먼저 송출할 모니터를 선택해 주세요.');
+    el('siteList').classList.add('show');
+    return;
+  }
+  setBusy(true);
 
   try {
     showStatus('', '<div class="spin"></div><div class="t">사진 준비 중...</div>');
@@ -526,13 +614,32 @@ async function handleFile(file) {
 
     el('msg').value = '';
     el('msgCount').textContent = '0';
+    ls(LS.draft, null);
+    ls(LS.pending, null);
     showUploaded(data);
   } catch (e) {
     showStatus('err', `<div class="big">⚠️</div><div class="t">사진 처리 중 문제가 생겼습니다</div>
       <div class="d">${escapeHtml(e.message || '')}</div>
       <button class="big-btn sub" style="margin-top:14px" onclick="resetComposer()">다시 시도</button>`);
   } finally {
-    busy = false;
+    setBusy(false);
+  }
+}
+
+// busy 는 잠깁니다 — 어떤 이유로든 해제되지 않으면 이후 모든 촬영이 조용히 무시되므로
+// 안전 타임아웃을 둔다.
+let busyTimer = null;
+function setBusy(on) {
+  busy = !!on;
+  applyButtons();
+  clearTimeout(busyTimer);
+  if (busy) {
+    busyTimer = setTimeout(() => {
+      if (!busy) return;
+      busy = false;
+      applyButtons();
+      showBanner('warn', '업로드가 응답하지 않아 중단했습니다. 다시 시도해 주세요.');
+    }, 90000);
   }
 }
 
@@ -587,8 +694,7 @@ function resetComposer() {
   el('preview').classList.remove('show');
   el('previewImg').removeAttribute('src');
   el('composer').style.display = '';
-  busy = false;
-  applyButtons();
+  setBusy(false);
   init(true); // 사이트 온라인 상태 및 송출 ON/OFF 갱신
 }
 
@@ -597,11 +703,6 @@ function showStatus(kind, html) {
   s.className = 'card show' + (kind ? ' ' + kind : '');
   el('statusBody').innerHTML = html;
   el('composer').style.display = 'none';
-}
-
-function setComposerEnabled(on) {
-  busy = !on;
-  applyButtons();
 }
 
 function showBanner(kind, html) {
