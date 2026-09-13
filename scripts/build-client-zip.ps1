@@ -13,13 +13,15 @@ $zipPath   = Join-Path $outDir 'signage-client.zip'
 $staging   = Join-Path $env:TEMP ('signage-client-' + [guid]::NewGuid().ToString('N'))
 
 # 배포에 포함할 파일 (화이트리스트 — 실수로 민감/불필요 파일 포함 방지)
+# 한글 파일명(사용설명서.txt)은 이 스크립트의 인코딩에 따라 직접 매칭이 깨질 수 있으므로
+# 아래 $includePatterns 의 와일드카드로 포함한다.
 $include = @(
   'main.js', 'preload.js',
   'setup.html', 'waiting.html', 'player.html',
   'package.json',
-  'install.bat', 'start.bat', 'uninstall.bat',
-  '사용설명서.txt'
+  'install.bat', 'start.bat', 'uninstall.bat'
 )
+$includePatterns = @('*.txt')
 
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 New-Item -ItemType Directory -Force -Path $outDir  | Out-Null
@@ -30,6 +32,15 @@ foreach ($f in $include) {
     Copy-Item $src -Destination (Join-Path $staging $f) -Force
   } else {
     Write-Warning "누락: $f (건너뜀)"
+  }
+}
+
+foreach ($pat in $includePatterns) {
+  $matched = Get-ChildItem -Path $clientDir -Filter $pat -File
+  if (-not $matched) { Write-Warning "패턴 일치 없음: $pat" }
+  foreach ($m in $matched) {
+    Copy-Item $m.FullName -Destination (Join-Path $staging $m.Name) -Force
+    Write-Host "포함: $($m.Name)"
   }
 }
 

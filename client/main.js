@@ -252,6 +252,43 @@ function closeSecondWindow() {
   secondWindow = null;
 }
 
+// ─── 라이브 레이어 창 배정 ───────────────────────────────
+// 듀얼 모니터면 보조 창이 라이브를 맡고(주 화면은 편성표 유지),
+// 단일 화면이면 주 창이 편성표 위에 오버레이로 띄운다.
+let liveOccupying = false;
+let playerStopped = false;   // 주 창이 "멈추기" 상태면 라이브도 띄우지 않는다
+
+ipcMain.on('player-stopped', (event, v) => { playerStopped = !!v; });
+
+function liveTarget() {
+  const useSecond = dualMonitor && secondWindow && !secondWindow.isDestroyed() && secondWindow.webContents;
+  const w = useSecond ? secondWindow : mainWindow;
+  return (w && !w.isDestroyed() && w.webContents) ? [w] : [];
+}
+
+// 주 창에 "2번 화면이 라이브에 점유됨" 상태를 알린다.
+// 주 창은 이 동안 분할(split) 항목의 우측을 2번 화면으로 보내지 않고
+// 창 안에서 좌/우 나란히 렌더링한다(기존 단일 디스플레이 폴백 재사용).
+function setLiveOccupy(on) {
+  if (liveOccupying === on) return;
+  liveOccupying = on;
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+    mainWindow.webContents.send('live-occupy', { occupied: on });
+  }
+}
+
+function routeLive(channel, payload) {
+  if (playerStopped) { console.log('[Live] 멈춤 상태 — 라이브 사진 표출 생략'); return; }
+  const targets = liveTarget();
+  if (!targets.length) return;
+  const onSecond = dualMonitor && targets[0] === secondWindow;
+  if (onSecond) setLiveOccupy(true);
+  targets.forEach(w => w.webContents.send(channel, payload));
+}
+
+// 보조 창의 라이브 레이어가 끝났다고 보고 → 2번 화면 점유 해제
+ipcMain.on('live-ended', () => setLiveOccupy(false));
+
 // ─── 재생 제어 (일시정지 / 종료 / 설정) ───────────────────
 function sendToBoth(channel, payload) {
   [mainWindow, secondWindow].forEach(w => {
@@ -511,6 +548,23 @@ function handleMessage(msg) {
       if (mainWindow && mainWindow.webContents) {
         mainWindow.webContents.send('stop-command');
       }
+      break;
+
+    // ─── 라이브 사진 (폰 촬영 → 즉시 송출) ────────────────
+    // 편성표는 건드리지 않는다. 라이브 레이어를 띄울 창만 고른다:
+    //  - 듀얼 모니터면 보조(2번) 창이 라이브를 점유하고 주 창은 편성표 계속
+    //  - 단일 화면이면 주 창에서 편성표 위에 오버레이
+    case 'live_photo':
+      routeLive('live-photo', { photo: msg.photo, session: msg.session, settings: msg.settings });
+      break;
+
+    case 'live_update':
+      routeLive('live-update', { removedId: msg.removedId, session: msg.session, settings: msg.settings });
+      break;
+
+    case 'live_clear':
+      liveTarget().forEach(w => w.webContents.send('live-clear'));
+      setLiveOccupy(false);
       break;
 
     case 'sync_now':

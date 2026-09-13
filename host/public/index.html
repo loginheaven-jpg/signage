@@ -373,6 +373,9 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
       <div class="sidebar-item" data-page="content">
         <span class="sidebar-icon">📁</span> 콘텐츠 라이브러리
       </div>
+      <div class="sidebar-item" data-page="live">
+        <span class="sidebar-icon">📸</span> 라이브 송출 <span id="liveNavDot" style="display:none; margin-left:6px; color:#e74c3c;">●</span>
+      </div>
     </div>
     <div class="sidebar-section">
       <div class="sidebar-title">작업</div>
@@ -477,6 +480,100 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
     </div>
 
     <!-- ═══ PAGE: Settings ═══ -->
+    <!-- ═══ PAGE: 라이브 송출 (폰 촬영 → 지정 모니터 즉시 표출) ═══ -->
+    <div class="page" id="page-live">
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">라이브 송출</span>
+          <button class="btn" id="liveToggleBtn" onclick="toggleLive()">불러오는 중...</button>
+        </div>
+        <div id="liveMasterBox" style="font-size:13px; color:#666; line-height:1.6;">
+          폰으로 찍은 사진이 <b>지정한 모니터</b>에 즉시 뜹니다. 편성표는 뒤에서 계속 재생되며,
+          새 사진이 일정 시간 없으면 저절로 편성표로 돌아갑니다.
+          <b>평소에는 꺼 두고 행사 때만 켜는</b> 것을 권합니다.
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">폰 링크</span>
+          <button class="btn btn-secondary" onclick="rotateLiveToken()">🔑 링크 새로 발급</button>
+        </div>
+        <div class="settings-grid">
+          <div class="setting-card">
+            <h3>이 링크를 사진 올릴 사람에게 전달하세요</h3>
+            <p style="font-size:12px; color:#666; margin-bottom:10px;">카톡방에 붙여넣거나 QR로 보여주면 됩니다. 폰에서 열고 <b>홈 화면에 추가</b>하면 앱처럼 씁니다.</p>
+            <input type="text" id="liveLink" readonly onclick="this.select()"
+                   style="width:100%; padding:10px; border:1px solid #ddd; border-radius:8px; font-size:12px; font-family:monospace; margin-bottom:10px;">
+            <button class="btn btn-primary" onclick="copyLiveLink()">📋 링크 복사</button>
+            <p style="font-size:11px; color:#e67e22; margin-top:10px; line-height:1.5;">
+              ⚠ 링크를 가진 사람은 누구나 사진을 올릴 수 있습니다(승인 절차 없음). 상시 공개하지 말고 행사 때만 전달하세요.
+              문제가 생기면 아래 <b>라이브 즉시 종료</b> 로 화면에서 내리고, <b>링크 새로 발급</b> 으로 기존 링크를 무효화하세요.
+            </p>
+          </div>
+          <div class="setting-card">
+            <h3>QR 코드</h3>
+            <div id="liveQr" style="min-height:150px; display:flex; align-items:center; justify-content:center; color:#999; font-size:12px;">생성 중...</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">현재 라이브 현황</span>
+          <button class="btn btn-danger" onclick="clearLive()">⏹ 라이브 즉시 종료 (전체)</button>
+        </div>
+        <div id="liveSessions" style="font-size:13px;">라이브 중인 화면이 없습니다.</div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">표출 방식 설정</span>
+          <button class="btn btn-primary" onclick="saveLiveSettings()">저장</button>
+        </div>
+        <div class="settings-grid">
+          <div class="setting-card">
+            <h3>풀스크린(히어로) 시간</h3>
+            <p style="font-size:12px; color:#666; margin-bottom:8px;">새 사진이 혼자 크게 뜨는 시간. 대기 사진이 있으면 아래 단축 시간이 적용되고, 3장 이상 한꺼번에 오면 풀스크린을 건너뛰고 바로 배치됩니다.</p>
+            <label style="font-size:12px;">기본 <input type="number" id="liveHeroSec" min="2" max="30" step="1" style="width:70px; padding:6px; margin:0 4px;">초</label>
+            <label style="font-size:12px; margin-left:10px;">대기 있을 때 <input type="number" id="liveHeroBusySec" min="2" max="20" step="1" style="width:70px; padding:6px; margin:0 4px;">초</label>
+          </div>
+          <div class="setting-card">
+            <h3>편성표 복귀</h3>
+            <p style="font-size:12px; color:#666; margin-bottom:8px;">이 시간 동안 새 사진이 없으면 편성표로 돌아갑니다. 돌아간 뒤 코너에 작게 남는 시간도 정할 수 있습니다(0이면 바로 사라짐).</p>
+            <label style="font-size:12px;">복귀 <input type="number" id="liveReturnSec" min="10" max="600" step="5" style="width:70px; padding:6px; margin:0 4px;">초</label>
+            <label style="font-size:12px; margin-left:10px;">코너 잔상 <input type="number" id="liveCornerSec" min="0" max="900" step="10" style="width:70px; padding:6px; margin:0 4px;">초</label>
+          </div>
+          <div class="setting-card">
+            <h3>동시 표출 장수</h3>
+            <p style="font-size:12px; color:#666; margin-bottom:8px;">그리드 최대 칸 수. 장수에 따라 1장=풀스크린, 2장=좌우, 3장=3분할, 4장=2x2로 자동 배치됩니다.</p>
+            <select id="liveGridMax" style="padding:8px; border:1px solid #ddd; border-radius:6px;">
+              <option value="1">1장 (항상 풀스크린)</option>
+              <option value="2">2장까지</option>
+              <option value="3">3장까지</option>
+              <option value="4">4장까지 (2x2)</option>
+            </select>
+          </div>
+          <div class="setting-card">
+            <h3>보관 / 취소</h3>
+            <p style="font-size:12px; color:#666; margin-bottom:8px;">사진은 콘텐츠 라이브러리에 남지 않고 보관 시간이 지나면 파일까지 삭제됩니다. 취소 시간 안에는 올린 사람이 직접 내릴 수 있습니다.</p>
+            <label style="font-size:12px;">보관 <input type="number" id="liveTtlMin" min="5" max="1440" step="5" style="width:70px; padding:6px; margin:0 4px;">분</label>
+            <label style="font-size:12px; margin-left:10px;">본인 취소 <input type="number" id="liveCancelSec" min="10" max="600" step="10" style="width:70px; padding:6px; margin:0 4px;">초</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">최근 업로드 기록</span>
+        </div>
+        <p style="font-size:12px; color:#666; margin-bottom:10px;">화면에는 메시지만 나가고, 올린 사람은 여기에만 기록됩니다(익명 장난 방지).</p>
+        <div id="liveLog" style="font-size:12px;">기록이 없습니다.</div>
+      </div>
+
+    </div>
+
     <div class="page" id="page-settings">
       <div class="panel">
         <div class="panel-header">
@@ -623,6 +720,7 @@ function connectWS() {
     if (msg.type === 'client_update' || msg.type === 'sites_update') debouncedRefresh();
     if (msg.type === 'content_update') refreshContent();
     if (msg.type === 'schedule_update') refreshSchedule();
+    if (msg.type === 'live_update') refreshLive();
   };
   ws.onclose = () => {
     document.getElementById('headerSyncText').textContent = '연결 끊김 — 재연결 중...';
@@ -655,6 +753,7 @@ function refreshAll() {
   refreshContent();
   refreshSchedule();
   refreshGdriveStatus();
+  refreshLive();
 }
 
 let _refreshTimer = null;
@@ -1384,6 +1483,201 @@ function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
   return (bytes/1024/1024).toFixed(1) + ' MB';
+}
+
+// ═══════════════════════════════════════════════════════════
+// 라이브 송출 (폰 촬영 → 지정 모니터 즉시 표출)
+// ═══════════════════════════════════════════════════════════
+let liveData = null;
+
+async function refreshLive() {
+  try {
+    const res = await fetch('/api/live');
+    liveData = await res.json();
+  } catch (e) { return; }
+  renderLive();
+}
+
+function renderLive() {
+  if (!liveData) return;
+
+  // 마스터 스위치
+  const btn = document.getElementById('liveToggleBtn');
+  btn.textContent = liveData.enabled ? '🔴 송출 중 — 끄기' : '⚪ 꺼져 있음 — 켜기';
+  btn.className = 'btn ' + (liveData.enabled ? 'btn-danger' : 'btn-primary');
+
+  // 사이드바 표시등
+  const dot = document.getElementById('liveNavDot');
+  if (dot) dot.style.display = liveData.enabled ? '' : 'none';
+
+  // 폰 링크
+  const link = location.origin + liveData.link;
+  document.getElementById('liveLink').value = link;
+  renderLiveQr(link);
+
+  // 설정값
+  const s = liveData.settings || {};
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  set('liveHeroSec', Math.round((s.heroMs || 8000) / 1000));
+  set('liveHeroBusySec', Math.round((s.heroBusyMs || 4000) / 1000));
+  set('liveReturnSec', Math.round((s.returnMs || 50000) / 1000));
+  set('liveCornerSec', Math.round((s.cornerMs || 0) / 1000));
+  set('liveTtlMin', s.photoTtlMin || 180);
+  set('liveCancelSec', s.cancelSec || 60);
+  set('liveGridMax', String(s.gridMax || 4));
+
+  // 현황
+  const box = document.getElementById('liveSessions');
+  if (!liveData.sessions || !liveData.sessions.length) {
+    box.innerHTML = '<span style="color:#999;">라이브 중인 화면이 없습니다.</span>';
+  } else {
+    box.innerHTML = liveData.sessions.map(sess => `
+      <div style="border:1px solid #eee; border-radius:10px; padding:12px; margin-bottom:10px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+          <b style="font-size:14px;">${escapeHtml(sess.siteName)}</b>
+          <span style="color:#666;">사진 ${sess.count}장</span>
+          <span style="color:#999; font-size:11px;">최근 ${timeAgo(sess.lastAt)}</span>
+          <button class="btn btn-danger" style="margin-left:auto; padding:5px 12px; font-size:12px;"
+                  onclick="clearLive('${sess.siteId}')">이 화면 라이브 종료</button>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          ${sess.photos.map(p => `
+            <div style="width:110px;">
+              <img src="${p.url}" style="width:110px; height:80px; object-fit:cover; border-radius:6px; background:#000; display:block;">
+              <div style="font-size:10px; color:#555; margin-top:3px; line-height:1.4; word-break:break-all;">
+                ${p.message ? escapeHtml(p.message) : '<span style="color:#bbb;">(메시지 없음)</span>'}
+              </div>
+              <div style="font-size:10px; color:#aaa;">${escapeHtml(p.uploaderName || '익명')}</div>
+              <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; margin-top:3px;"
+                      onclick="deleteLivePhoto('${p.id}')">삭제</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // 업로드 기록
+  const log = document.getElementById('liveLog');
+  if (!liveData.log || !liveData.log.length) {
+    log.innerHTML = '<span style="color:#999;">기록이 없습니다.</span>';
+  } else {
+    log.innerHTML = liveData.log.map(l => `
+      <div style="display:flex; gap:10px; padding:6px 0; border-bottom:1px solid #f3f3f3;">
+        <span style="color:#999; width:70px; flex:none;">${timeAgo(l.ts)}</span>
+        <span style="width:110px; flex:none;">${escapeHtml(l.siteName || '')}</span>
+        <span style="width:100px; flex:none; color:#555;">${escapeHtml(l.uploaderName || '익명')}</span>
+        <span style="flex:1; color:#333;">${l.message ? escapeHtml(l.message) : '<span style="color:#bbb;">(메시지 없음)</span>'}</span>
+      </div>
+    `).join('');
+  }
+}
+
+// QR — 라이브러리를 CDN에서 불러와 브라우저에서만 생성한다(토큰이 외부로 나가지 않음).
+// 오프라인이면 조용히 링크 안내로 대체된다.
+let _qrLibLoading = null;
+function renderLiveQr(link) {
+  const box = document.getElementById('liveQr');
+  if (!box) return;
+  const draw = () => {
+    box.innerHTML = '';
+    try {
+      new QRCode(box, { text: link, width: 150, height: 150, correctLevel: QRCode.CorrectLevel.M });
+    } catch (e) {
+      box.textContent = 'QR 생성 실패 — 위 링크를 직접 전달하세요.';
+    }
+  };
+  if (window.QRCode) return draw();
+  if (!_qrLibLoading) {
+    _qrLibLoading = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  _qrLibLoading.then(draw).catch(() => {
+    box.innerHTML = '<span style="color:#999;">QR을 만들 수 없습니다(인터넷 필요).<br>위 링크를 복사해 전달하세요.</span>';
+  });
+}
+
+async function toggleLive() {
+  if (!liveData) return;
+  const next = !liveData.enabled;
+  if (next && !confirm('라이브 송출을 켭니다.\n링크를 가진 사람은 누구나 사진을 올릴 수 있습니다(승인 없음).\n계속할까요?')) return;
+  const res = await fetch('/api/live', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: next })
+  });
+  const data = await res.json();
+  if (data.success) {
+    showToast(next ? '라이브 송출을 켰습니다' : '라이브 송출을 끄고 화면을 정리했습니다');
+    refreshLive();
+  }
+}
+
+async function saveLiveSettings() {
+  const n = id => Number(document.getElementById(id).value);
+  const res = await fetch('/api/live', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      settings: {
+        heroMs: n('liveHeroSec') * 1000,
+        heroBusyMs: n('liveHeroBusySec') * 1000,
+        returnMs: n('liveReturnSec') * 1000,
+        cornerMs: n('liveCornerSec') * 1000,
+        gridMax: n('liveGridMax'),
+        photoTtlMin: n('liveTtlMin'),
+        cancelSec: n('liveCancelSec')
+      }
+    })
+  });
+  const data = await res.json();
+  if (data.success) { showToast('라이브 표출 설정 저장 완료'); refreshLive(); }
+}
+
+async function rotateLiveToken() {
+  if (!confirm('새 링크를 발급하면 지금까지 나눠준 링크는 모두 쓸 수 없게 됩니다.\n계속할까요?')) return;
+  const res = await fetch('/api/live/token/rotate', { method: 'POST' });
+  const data = await res.json();
+  if (data.success) { showToast('새 링크를 발급했습니다 — 기존 링크 무효'); refreshLive(); }
+}
+
+function copyLiveLink() {
+  const input = document.getElementById('liveLink');
+  input.select();
+  navigator.clipboard.writeText(input.value)
+    .then(() => showToast('링크를 복사했습니다'))
+    .catch(() => { document.execCommand('copy'); showToast('링크를 복사했습니다'); });
+}
+
+async function clearLive(siteId) {
+  const what = siteId ? '이 화면의 라이브를' : '모든 화면의 라이브를';
+  if (!confirm(`${what} 즉시 종료하고 올라온 사진을 삭제합니다.\n계속할까요?`)) return;
+  const res = await fetch('/api/live/clear', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(siteId ? { siteId } : {})
+  });
+  const data = await res.json();
+  if (data.success) { showToast(`라이브 종료 — 사진 ${data.removed}장 삭제`); refreshLive(); }
+}
+
+async function deleteLivePhoto(id) {
+  const res = await fetch(`/api/live/photo/${id}`, { method: 'DELETE' });
+  if (res.ok) { showToast('사진을 화면에서 내렸습니다'); refreshLive(); }
+}
+
+function timeAgo(ts) {
+  if (!ts) return '-';
+  const sec = Math.floor((Date.now() - ts) / 1000);
+  if (sec < 60) return `${sec}초 전`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}분 전`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}시간 전`;
+  return `${Math.floor(sec / 86400)}일 전`;
 }
 
 function showToast(msg) {

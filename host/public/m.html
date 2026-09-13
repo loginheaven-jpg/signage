@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111318">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>사진 올리기 — 디지털 게시판</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+:root {
+  --bg: #111318;
+  --card: #1c1f27;
+  --card2: #23262f;
+  --line: rgba(255,255,255,0.10);
+  --text: #f2f4f8;
+  --dim: #9aa2b1;
+  --accent: #4c8dff;
+  --ok: #2ecc71;
+  --danger: #e74c3c;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Malgun Gothic', sans-serif;
+  min-height: 100vh;
+  padding: max(16px, env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 520px; margin: 0 auto; }
+
+header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+header .logo { font-size: 26px; }
+header h1 { font-size: 17px; font-weight: 700; letter-spacing: -0.2px; }
+header .sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+.label { font-size: 12px; color: var(--dim); margin-bottom: 8px; display: block; font-weight: 600; }
+
+/* 대상 모니터 칩 */
+#targetChip {
+  width: 100%;
+  display: flex; align-items: center; gap: 10px;
+  background: var(--card2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  color: var(--text);
+  font-size: 17px; font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+#targetChip .ic { font-size: 22px; }
+#targetChip .nm { flex: 1; }
+#targetChip .arrow { color: var(--dim); font-size: 13px; font-weight: 400; }
+#targetChip.unset { border-color: rgba(231,76,60,0.5); }
+#targetChip .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; flex: none; }
+#targetChip .dot.on { background: var(--ok); box-shadow: 0 0 8px rgba(46,204,113,0.7); }
+.hint { font-size: 11px; color: var(--dim); margin-top: 8px; line-height: 1.5; }
+
+/* 사이트 선택 목록 */
+#siteList { display: none; margin-top: 10px; }
+#siteList.show { display: block; }
+.site-opt {
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-bottom: 8px;
+  background: var(--card2);
+  cursor: pointer;
+  font-size: 15px;
+}
+.site-opt.sel { border-color: var(--accent); background: rgba(76,141,255,0.12); }
+.site-opt .ic { font-size: 20px; }
+.site-opt .nm { flex: 1; font-weight: 600; }
+.site-opt .st { font-size: 11px; color: var(--dim); }
+.site-opt .st.on { color: var(--ok); }
+
+/* 메시지 입력 */
+#msg {
+  width: 100%;
+  background: var(--card2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  color: var(--text);
+  font-size: 16px;
+  font-family: inherit;
+}
+#msg:focus { outline: none; border-color: var(--accent); }
+#msg::placeholder { color: #6b7280; }
+.counter { text-align: right; font-size: 11px; color: var(--dim); margin-top: 6px; }
+
+/* 촬영 버튼 */
+.big-btn {
+  width: 100%;
+  border: none; border-radius: 18px;
+  padding: 22px;
+  font-size: 19px; font-weight: 800;
+  color: #fff;
+  background: linear-gradient(135deg, #4c8dff, #2f6fe0);
+  box-shadow: 0 10px 26px rgba(47,111,224,0.35);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: inherit;
+}
+.big-btn:disabled { opacity: 0.45; box-shadow: none; }
+.big-btn.sub {
+  background: var(--card2);
+  border: 1px solid var(--line);
+  box-shadow: none;
+  font-size: 15px; font-weight: 600; padding: 15px;
+}
+.big-btn.danger { background: var(--danger); box-shadow: none; font-size: 15px; padding: 14px; }
+#fileInput { display: none; }
+
+/* 미리보기 */
+#preview { display: none; margin-bottom: 14px; }
+#preview.show { display: block; }
+#preview img {
+  width: 100%;
+  max-height: 46vh;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #000;
+  display: block;
+}
+
+/* 상태 표시 */
+#status { display: none; text-align: center; padding: 18px 16px; }
+#status.show { display: block; }
+#status .big { font-size: 34px; margin-bottom: 8px; }
+#status .t { font-size: 16px; font-weight: 700; }
+#status .d { font-size: 12px; color: var(--dim); margin-top: 6px; line-height: 1.5; }
+#status.ok .t { color: var(--ok); }
+#status.err .t { color: var(--danger); }
+
+.banner {
+  border-radius: 12px; padding: 13px 14px; font-size: 13px; line-height: 1.5;
+  margin-bottom: 14px; display: none;
+}
+.banner.show { display: block; }
+.banner.warn { background: rgba(230,126,34,0.15); border: 1px solid rgba(230,126,34,0.4); color: #ffd9a8; }
+.banner.err  { background: rgba(231,76,60,0.15); border: 1px solid rgba(231,76,60,0.4); color: #ffb8b0; }
+
+.spin {
+  width: 30px; height: 30px; margin: 0 auto 10px;
+  border: 3px solid rgba(255,255,255,0.15);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+footer { text-align: center; font-size: 11px; color: #5b6270; margin-top: 20px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="logo">📸</div>
+    <div>
+      <h1>사진 올리기</h1>
+      <div class="sub" id="whoami">— </div>
+    </div>
+  </header>
+
+  <div class="banner" id="banner"></div>
+
+  <!-- 대상 모니터 (바꿀 때까지 유지됨) -->
+  <div class="card">
+    <span class="label">송출할 모니터</span>
+    <button id="targetChip" class="unset" onclick="toggleSiteList()">
+      <span class="dot"></span>
+      <span class="ic">📺</span>
+      <span class="nm">선택해 주세요</span>
+      <span class="arrow">바꾸기 ▾</span>
+    </button>
+    <div id="siteList"></div>
+    <div class="hint">한 번 고르면 <b>바꿀 때까지 그대로 유지</b>됩니다. 이 폰에만 저장됩니다.</div>
+  </div>
+
+  <!-- 촬영 / 업로드 -->
+  <div id="composer">
+    <div class="card" id="preview">
+      <img id="previewImg" alt="미리보기">
+    </div>
+
+    <div class="card">
+      <span class="label">화면에 함께 띄울 메시지 (선택)</span>
+      <input id="msg" type="text" maxlength="40" placeholder="예: 김집사님 생일 축하합니다" autocomplete="off">
+      <div class="counter"><span id="msgCount">0</span>/40</div>
+      <div class="hint">비워두면 사진만 나갑니다. 링크·주소는 넣을 수 없습니다.</div>
+    </div>
+
+    <input type="file" id="fileInput" accept="image/*" capture="environment">
+    <button class="big-btn" id="shootBtn" onclick="pickPhoto()">📷 촬영하고 바로 올리기</button>
+    <button class="big-btn sub" id="galleryBtn" style="margin-top:10px" onclick="pickFromGallery()">🖼 앨범에서 고르기</button>
+    <input type="file" id="galleryInput" accept="image/*" style="display:none">
+  </div>
+
+  <!-- 업로드 상태 -->
+  <div class="card" id="status">
+    <div id="statusBody"></div>
+  </div>
+
+  <footer>
+    브라우저 메뉴 → <b>홈 화면에 추가</b> 하면 앱처럼 쓸 수 있습니다.<br>
+    <span id="verLine">디지털 게시판 라이브</span>
+  </footer>
+
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// 상태 — 토큰 / 업로더 / 대상 모니터는 모두 이 폰에 저장(유지)
+// ═══════════════════════════════════════════════════════════
+const LS = {
+  token: 'live.token',
+  siteId: 'live.siteId',
+  siteName: 'live.siteName',
+  siteIcon: 'live.siteIcon',
+  uploaderId: 'live.uploaderId',
+  uploaderName: 'live.uploaderName'
+};
+
+function ls(k, v) {
+  try {
+    if (v === undefined) return localStorage.getItem(k);
+    if (v === null) { localStorage.removeItem(k); return null; }
+    localStorage.setItem(k, v); return v;
+  } catch (e) { return null; }
+}
+
+// 토큰: URL의 ?t= 가 있으면 그것을 저장(= 새 링크로 갱신), 없으면 저장된 것 사용
+const urlToken = new URLSearchParams(location.search).get('t');
+if (urlToken) ls(LS.token, urlToken);
+let token = ls(LS.token) || '';
+
+// 업로더 식별자 — 화면에는 표시하지 않고 서버 로그에만 남는다(책임 추적)
+let uploaderId = ls(LS.uploaderId);
+if (!uploaderId) {
+  uploaderId = 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  ls(LS.uploaderId, uploaderId);
+}
+let uploaderName = ls(LS.uploaderName) || '';
+
+let sites = [];
+let liveEnabled = false;
+let cancelSec = 60;
+let busy = false;
+
+const el = id => document.getElementById(id);
+
+// ═══════════════════════════════════════════════════════════
+// 초기 로드
+// ═══════════════════════════════════════════════════════════
+async function init() {
+  if (!token) {
+    showBanner('err', '이 페이지는 관리자가 준 링크로 열어야 합니다. (링크에 <b>?t=</b> 부분이 필요합니다)');
+    setComposerEnabled(false);
+    return;
+  }
+
+  if (!uploaderName) askName(true);
+  renderWhoami();
+
+  try {
+    const res = await fetch(`/live/api/hello?t=${encodeURIComponent(token)}`);
+    const data = await res.json();
+    if (!res.ok) {
+      showBanner('err', data.error || '링크가 유효하지 않습니다.');
+      setComposerEnabled(false);
+      return;
+    }
+    sites = data.sites || [];
+    liveEnabled = !!data.enabled;
+    cancelSec = data.cancelSec || 60;
+
+    if (!liveEnabled) {
+      showBanner('warn', '지금은 <b>라이브 송출이 꺼져 있습니다.</b> 관리자가 켜면 바로 올릴 수 있습니다.');
+      setComposerEnabled(false);
+    } else if (!sites.length) {
+      showBanner('warn', '등록된 모니터가 없습니다. 관리자에게 문의해 주세요.');
+      setComposerEnabled(false);
+    } else {
+      hideBanner();
+      setComposerEnabled(true);
+    }
+
+    restoreTarget();
+    renderSiteList();
+  } catch (e) {
+    showBanner('err', '서버에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.');
+    setComposerEnabled(false);
+  }
+}
+
+function renderWhoami() {
+  el('whoami').innerHTML = uploaderName
+    ? `${escapeHtml(uploaderName)} · <a href="#" onclick="askName();return false" style="color:#6b7280">이름 변경</a>`
+    : `<a href="#" onclick="askName();return false" style="color:#6b7280">이름 등록</a>`;
+}
+
+function askName(firstTime) {
+  const v = prompt(firstTime
+    ? '이름을 한 번만 등록해 주세요.\n(화면에는 나오지 않고, 관리 기록에만 남습니다)'
+    : '이름을 입력해 주세요.', uploaderName || '');
+  if (v === null) return;
+  uploaderName = v.trim().slice(0, 20);
+  ls(LS.uploaderName, uploaderName);
+  renderWhoami();
+}
+
+// ═══════════════════════════════════════════════════════════
+// 대상 모니터 — 선택은 바꿀 때까지 유지
+// ═══════════════════════════════════════════════════════════
+function currentTarget() {
+  const id = ls(LS.siteId);
+  if (!id) return null;
+  const live = sites.find(s => s.id === id);
+  if (live) return live;
+  // 서버에서 사라진 사이트면 선택 해제
+  return { id, name: ls(LS.siteName) || id, icon: ls(LS.siteIcon) || '📺', online: false, missing: true };
+}
+
+function restoreTarget() {
+  const t = currentTarget();
+  const chip = el('targetChip');
+  if (!t) {
+    chip.classList.add('unset');
+    chip.querySelector('.nm').textContent = '선택해 주세요';
+    chip.querySelector('.ic').textContent = '📺';
+    chip.querySelector('.dot').classList.remove('on');
+    if (sites.length) el('siteList').classList.add('show'); // 처음이면 목록을 펼쳐 보여준다
+    return;
+  }
+  chip.classList.remove('unset');
+  chip.querySelector('.nm').textContent = t.name;
+  chip.querySelector('.ic').textContent = t.icon || '📺';
+  chip.querySelector('.dot').classList.toggle('on', !!t.online);
+  if (t.missing) {
+    showBanner('warn', `저장된 모니터 <b>${escapeHtml(t.name)}</b> 를 찾을 수 없습니다. 다시 선택해 주세요.`);
+    el('siteList').classList.add('show');
+  }
+}
+
+function toggleSiteList() {
+  el('siteList').classList.toggle('show');
+}
+
+function renderSiteList() {
+  const cur = ls(LS.siteId);
+  el('siteList').innerHTML = sites.map(s => `
+    <div class="site-opt ${s.id === cur ? 'sel' : ''}" onclick="selectSite('${s.id}')">
+      <span class="ic">${s.icon || '📺'}</span>
+      <span class="nm">${escapeHtml(s.name)}</span>
+      <span class="st ${s.online ? 'on' : ''}">${s.online ? '● 켜짐' : '○ 꺼짐'}</span>
+    </div>
+  `).join('') || '<div class="hint">등록된 모니터가 없습니다.</div>';
+}
+
+function selectSite(id) {
+  const s = sites.find(x => x.id === id);
+  if (!s) return;
+  ls(LS.siteId, s.id);
+  ls(LS.siteName, s.name);
+  ls(LS.siteIcon, s.icon || '📺');
+  hideBanner();
+  restoreTarget();
+  renderSiteList();
+  el('siteList').classList.remove('show');
+}
+
+// ═══════════════════════════════════════════════════════════
+// 촬영 → 리사이즈 → 업로드
+// ═══════════════════════════════════════════════════════════
+function pickPhoto() { el('fileInput').value = ''; el('fileInput').click(); }
+function pickFromGallery() { el('galleryInput').value = ''; el('galleryInput').click(); }
+
+el('fileInput').addEventListener('change', e => handleFile(e.target.files[0]));
+el('galleryInput').addEventListener('change', e => handleFile(e.target.files[0]));
+
+el('msg').addEventListener('input', e => { el('msgCount').textContent = e.target.value.length; });
+
+async function handleFile(file) {
+  if (!file || busy) return;
+  if (!ls(LS.siteId)) {
+    alert('먼저 송출할 모니터를 선택해 주세요.');
+    el('siteList').classList.add('show');
+    return;
+  }
+  busy = true;
+  setComposerEnabled(false);
+
+  try {
+    showStatus('', '<div class="spin"></div><div class="t">사진 준비 중...</div>');
+    const blob = await resizeImage(file, 1920, 0.85);
+
+    // 미리보기
+    const url = URL.createObjectURL(blob);
+    el('previewImg').src = url;
+    el('preview').classList.add('show');
+
+    const siteName = ls(LS.siteName) || '';
+    showStatus('', `<div class="spin"></div><div class="t">${escapeHtml(siteName)} 화면으로 보내는 중...</div>
+      <div class="d">${(blob.size / 1024).toFixed(0)} KB</div>`);
+
+    const fd = new FormData();
+    fd.append('t', token);
+    fd.append('siteId', ls(LS.siteId));
+    fd.append('message', el('msg').value.trim());
+    fd.append('uploaderId', uploaderId);
+    fd.append('uploaderName', uploaderName);
+    fd.append('photo', blob, 'photo.jpg');
+
+    const res = await fetch('/live/api/photo', { method: 'POST', body: fd });
+    const data = await res.json();
+
+    if (!res.ok) {
+      showStatus('err', `<div class="big">⚠️</div><div class="t">${escapeHtml(data.error || '업로드 실패')}</div>
+        <button class="big-btn sub" style="margin-top:14px" onclick="resetComposer()">다시 시도</button>`);
+      return;
+    }
+
+    el('msg').value = '';
+    el('msgCount').textContent = '0';
+    showUploaded(data);
+  } catch (e) {
+    showStatus('err', `<div class="big">⚠️</div><div class="t">사진 처리 중 문제가 생겼습니다</div>
+      <div class="d">${escapeHtml(e.message || '')}</div>
+      <button class="big-btn sub" style="margin-top:14px" onclick="resetComposer()">다시 시도</button>`);
+  } finally {
+    busy = false;
+  }
+}
+
+function showUploaded(data) {
+  const screens = data.screens || 0;
+  const where = escapeHtml(data.siteName || '');
+  const detail = screens > 0
+    ? `${where} 화면에 지금 떴습니다.`
+    : `${where} 는 지금 꺼져 있어 화면에 나오지 않았습니다.`;
+
+  showStatus('ok', `
+    <div class="big">✅</div>
+    <div class="t">화면에 나왔어요!</div>
+    <div class="d">${detail}<br>10초쯤 크게 보인 뒤 다른 사진들과 함께 배치됩니다.</div>
+    <button class="big-btn" style="margin-top:16px" onclick="resetComposer()">📷 한 장 더 올리기</button>
+    <button class="big-btn danger" style="margin-top:10px" id="cancelBtn">취소하기 (<span id="cdown">${cancelSec}</span>초)</button>
+  `);
+
+  const btn = el('cancelBtn');
+  let left = cancelSec;
+  const timer = setInterval(() => {
+    left--;
+    const cd = el('cdown');
+    if (cd) cd.textContent = left;
+    if (left <= 0) {
+      clearInterval(timer);
+      if (btn) btn.remove();
+    }
+  }, 1000);
+
+  btn.onclick = async () => {
+    clearInterval(timer);
+    btn.disabled = true;
+    btn.textContent = '취소 중...';
+    try {
+      const res = await fetch(`/live/api/photo/${data.photo.id}?t=${encodeURIComponent(token)}&uploaderId=${encodeURIComponent(uploaderId)}`, { method: 'DELETE' });
+      const r = await res.json();
+      if (res.ok) {
+        showStatus('', `<div class="big">🗑</div><div class="t">화면에서 내렸습니다</div>
+          <button class="big-btn" style="margin-top:16px" onclick="resetComposer()">📷 다시 올리기</button>`);
+      } else {
+        btn.textContent = r.error || '취소할 수 없습니다';
+      }
+    } catch (e) {
+      btn.textContent = '취소 실패 — 관리자에게 문의';
+    }
+  };
+}
+
+function resetComposer() {
+  el('status').classList.remove('show', 'ok', 'err');
+  el('preview').classList.remove('show');
+  el('previewImg').removeAttribute('src');
+  el('composer').style.display = '';
+  setComposerEnabled(liveEnabled);
+  init(); // 사이트 온라인 상태 갱신
+}
+
+function showStatus(kind, html) {
+  const s = el('status');
+  s.className = 'card show' + (kind ? ' ' + kind : '');
+  el('statusBody').innerHTML = html;
+  el('composer').style.display = 'none';
+}
+
+function setComposerEnabled(on) {
+  el('shootBtn').disabled = !on;
+  el('galleryBtn').disabled = !on;
+}
+
+function showBanner(kind, html) {
+  const b = el('banner');
+  b.className = 'banner show ' + kind;
+  b.innerHTML = html;
+}
+function hideBanner() { el('banner').className = 'banner'; }
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ═══════════════════════════════════════════════════════════
+// 이미지 리사이즈 — 폰에서 줄여 보내야 "찍자마자 뜬다"가 성립한다.
+// EXIF 회전은 createImageBitmap의 imageOrientation:'from-image' 또는
+// <img> 디코딩(모던 모바일 브라우저 기본 적용)으로 처리된다.
+// ═══════════════════════════════════════════════════════════
+async function resizeImage(file, maxEdge, quality) {
+  const src = await decodeImage(file);
+  const w0 = src.width, h0 = src.height;
+  const scale = Math.min(1, maxEdge / Math.max(w0, h0));
+  const w = Math.max(1, Math.round(w0 * scale));
+  const h = Math.max(1, Math.round(h0 * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, 0, 0, w, h);
+  if (src.close) src.close();
+
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+  if (!blob) throw new Error('이미지 변환 실패');
+  // 리사이즈 결과가 원본보다 크면(작은 원본) 원본을 그대로 보낸다
+  return (blob.size < file.size || file.size > 3 * 1024 * 1024) ? blob : file;
+}
+
+async function decodeImage(file) {
+  if (window.createImageBitmap) {
+    try {
+      return await createImageBitmap(file, { imageOrientation: 'from-image' });
+    } catch (e) { /* 구형 브라우저 폴백 */ }
+  }
+  return await new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('사진을 읽을 수 없습니다')); };
+    img.src = url;
+  });
+}
+
+init();
+</script>
+</body>
+</html>

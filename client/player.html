@@ -145,6 +145,116 @@ body {
 #control-bar button.danger:hover { background: rgba(231,76,60,0.85); }
 #control-bar .sep { width: 1px; background: rgba(255,255,255,0.15); margin: 4px 2px; }
 body.controls-visible { cursor: default; }
+
+/* ═══════════════════════════════════════════════════════
+   라이브 레이어 — 폰에서 올린 사진을 편성표 "위에" 띄운다.
+   편성표 재생 루프는 아래에서 계속 돌고 있으므로, 레이어가
+   사라지면 복귀 처리가 따로 필요 없다.
+   ═══════════════════════════════════════════════════════ */
+#live-layer { position: fixed; inset: 0; z-index: 200; display: none; pointer-events: none; }
+#live-layer.on { display: block; }
+
+#live-stage {
+  position: absolute; inset: 0;
+  background: #000;
+  overflow: hidden;
+  border-radius: 0;
+  transform-origin: 100% 100%;
+  transition: transform 0.9s cubic-bezier(.4,0,.2,1), border-radius 0.9s ease,
+              box-shadow 0.9s ease, opacity 0.7s ease;
+}
+/* 복귀 후 코너 잔상 — 편성표가 전체화면으로 돌아온 뒤 잠시 남는다 */
+#live-stage.corner {
+  transform: translate(-2.2vw, -2.2vh) scale(0.27);
+  border-radius: 40px;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.75), 0 0 0 4px rgba(255,255,255,0.16);
+}
+#live-stage.gone { opacity: 0; }
+
+/* 사진 한 장 (히어로와 그리드 칸이 같은 구조를 쓴다) */
+.lphoto { position: relative; overflow: hidden; background: #000; }
+.lphoto .lbg {
+  position: absolute; inset: -10%;
+  background-size: cover; background-position: center;
+  filter: blur(30px) brightness(0.4);
+  transform: scale(1.08);
+}
+.lphoto img { position: relative; width: 100%; height: 100%; object-fit: contain; display: block; }
+.lphoto .lcap {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(to top, rgba(0,0,0,0.86) 10%, rgba(0,0,0,0));
+  color: #fff;
+  font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
+  font-weight: 700;
+  line-height: 1.35;
+  word-break: keep-all;
+  text-shadow: 0 2px 16px rgba(0,0,0,0.85);
+}
+
+/* 히어로 — 새 사진이 풀스크린으로 먼저 뜬다 (C) */
+#live-hero {
+  position: absolute; inset: 0; z-index: 2;
+  opacity: 0;
+  transition: opacity 0.45s ease, transform 0.7s cubic-bezier(.4,0,.2,1);
+}
+#live-hero.in { opacity: 1; }
+#live-hero.out { opacity: 0; transform: scale(0.93); }
+#live-hero .lphoto { width: 100%; height: 100%; }   /* 그리드 칸과 달리 직접 크기를 준다 */
+#live-hero .lcap {
+  font-size: 3vw;
+  padding: 2.4vh 4vw 3.4vh;
+  border-left: 0.45vw solid #4c8dff;
+  margin-left: 3.2vw;
+  padding-left: 2vw;
+  border-bottom-left-radius: 4px;
+}
+
+/* 그리드 — 히어로가 끝나면 최근 사진들이 배치된다 (D, 1/2/3/4 적응) */
+#live-grid {
+  position: absolute; inset: 0; z-index: 1;
+  display: grid; gap: 0.5vh;
+  background: #000;
+  opacity: 0;
+  transition: opacity 0.55s ease;
+}
+#live-grid.in { opacity: 1; }
+#live-grid[data-n="1"] { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+#live-grid[data-n="2"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+#live-grid[data-n="3"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+#live-grid[data-n="3"] .lphoto:first-child { grid-row: span 2; }   /* 빈 칸 없이 3분할 */
+#live-grid[data-n="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+#live-grid .lphoto .lcap { font-size: 1.5vw; padding: 5% 6% 6%; }
+#live-grid[data-n="1"] .lphoto .lcap { font-size: 3vw; padding: 2.4vh 4vw 3.4vh; }
+#live-grid[data-n="2"] .lphoto .lcap { font-size: 2vw; padding: 4% 7% 5%; }
+#live-grid[data-n="3"] .lphoto:first-child .lcap { font-size: 2vw; }
+/* 새로 들어온 사진이 자기 칸에 톡 들어앉는 모션 */
+@keyframes lpop { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
+#live-grid .lphoto.pop { animation: lpop 0.55s cubic-bezier(.2,.8,.2,1) both; }
+
+/* LIVE 배지 */
+#live-badge {
+  position: absolute; top: 3vh; left: 3vw; z-index: 3;
+  display: flex; align-items: center; gap: 0.8vw;
+  background: rgba(231,76,60,0.94);
+  color: #fff;
+  font-family: 'Segoe UI', sans-serif; font-weight: 800;
+  font-size: 1.4vw; letter-spacing: 0.14em;
+  padding: 0.8vh 1.6vw; border-radius: 100px;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.45);
+}
+#live-badge .rec {
+  width: 0.85vw; height: 0.85vw; border-radius: 50%; background: #fff;
+  animation: recblink 1.4s ease-in-out infinite;
+}
+@keyframes recblink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+/* 코너로 축소되면 배지가 같이 작아지므로 상쇄해서 키운다 */
+#live-stage.corner #live-badge { font-size: 4.4vw; padding: 2.6vh 5.4vw; gap: 2.4vw; border-radius: 400px; }
+#live-stage.corner #live-badge .rec { width: 2.9vw; height: 2.9vw; }
+
+/* 셔터 플래시 — 폰에서 찍은 것이 "찰칵" 하고 화면에 나타나는 연결감 */
+#live-flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 250; }
+#live-flash.fire { animation: lflash 0.5s ease-out; }
+@keyframes lflash { 0% { opacity: 0; } 12% { opacity: 0.9; } 100% { opacity: 0; } }
 </style>
 </head>
 <body>
@@ -154,6 +264,16 @@ body.controls-visible { cursor: default; }
     <div class="text">편성표 수신 대기 중...</div>
   </div>
 </div>
+
+<!-- 라이브 레이어 (폰 촬영 사진) — 편성표 위에 겹쳐 표출 -->
+<div id="live-layer">
+  <div id="live-stage">
+    <div id="live-grid"></div>
+    <div id="live-hero"></div>
+    <div id="live-badge"><span class="rec"></span>LIVE</div>
+  </div>
+</div>
+<div id="live-flash"></div>
 
 <!-- 하단 컨트롤 바 -->
 <div id="control-bar">
@@ -174,7 +294,8 @@ let hostUrl = '';
 let dualMonitor = false;
 let monitors = 1;
 
-window.signage.getConfig().then(cfg => {
+// 라이브 사진은 호스트 상대 URL로 오므로, hostUrl 이 준비된 뒤에 표출해야 한다.
+const configReady = window.signage.getConfig().then(cfg => {
   hostUrl = cfg.hostUrl || '';
   dualMonitor = !!cfg.dualMonitor;
   monitors = cfg.monitors || 1;
@@ -210,16 +331,25 @@ let playTimer = null;
 // 멈춤 상태 (호스트/클라이언트 어느 쪽에서 멈춰도 동기화)
 let stopped = false;
 
+// 라이브 사진이 2번 화면을 점유 중인지 (듀얼 모니터에서만 true가 된다)
+let liveOccupiesScreen2 = false;
+
+// 멈춤 상태를 메인 프로세스에 알린다 — 멈춘 화면에는 라이브 사진도 띄우지 않는다
+function setStopped(v) {
+  stopped = v;
+  if (!isSecondary) window.signage.setPlayerStopped(v);
+}
+
 if (!isSecondary) {
   window.signage.onScheduleUpdate((data) => {
     console.log('[Player] 편성표 수신:', data && data.entries ? data.entries.length + '개' : data);
     schedule = data;
-    stopped = false;                // 새 편성표 수신 시 재생 재개
+    setStopped(false);              // 새 편성표 수신 시 재생 재개
     updateStopUI();
     startPlayback();
   });
   window.signage.onPlayCommand((files) => playFiles(files));
-  window.signage.onStopCommand(() => { stopped = true; stopPlayback(true); updateStopUI(); });
+  window.signage.onStopCommand(() => { setStopped(true); stopPlayback(true); updateStopUI(); });
   window.signage.onTogglePause(() => toggleStop());  // Ctrl+Shift+P → 멈추기/재생하기
   setupControlBar();
 } else {
@@ -231,12 +361,12 @@ if (!isSecondary) {
 function toggleStop() {
   if (stopped) {
     // 재생하기 — 마지막 편성표로 다시 시작 (호스트 없이 로컬 캐시로도 동작)
-    stopped = false;
+    setStopped(false);
     if (schedule && schedule.entries && schedule.entries.length) startPlayback();
     else showIdle(false);
   } else {
     // 멈추기 — 재생 정지 + "재생 종료" 화면
-    stopped = true;
+    setStopped(true);
     stopPlayback(true);
   }
   updateStopUI();
@@ -278,10 +408,19 @@ function startPlayback() {
 
 function playNext() {
   if (!activeEntries || activeEntries.length === 0) { report(null); showIdle(); return; }
-
   currentIndex = (currentIndex + 1) % activeEntries.length;
-  const entry = activeEntries[currentIndex];
+  renderEntry(activeEntries[currentIndex]);
+}
 
+// 인덱스를 옮기지 않고 현재 항목만 다시 렌더링.
+// 라이브가 2번 화면을 점유/해제할 때 분할 항목의 배치를 바꾸기 위해 쓴다.
+function rerenderCurrent() {
+  if (!activeEntries || !activeEntries.length) return;
+  const entry = activeEntries[currentIndex];
+  if (entry) renderEntry(entry);
+}
+
+function renderEntry(entry) {
   // 유효기간 체크
   const now = new Date();
   if (entry.validFrom && new Date(entry.validFrom) > now) return playNext();
@@ -299,7 +438,8 @@ function playNext() {
   const m1 = { url: url1, mimeType: entry.mimeType, fitMode, audible: entry.sound === 'left' || (entry.sound && entry.sound !== 'none' && !hasSecond) };
   const m2 = hasSecond ? { url: url2, mimeType: entry.mimeType2, fitMode, audible: entry.sound === 'right' } : null;
 
-  if (hasSecond && wantBoth && dualMonitor) {
+  // 라이브가 2번 화면을 점유 중이면 보조 창으로 보내지 않고, 창 안에서 좌/우 나란히 표출
+  if (hasSecond && wantBoth && dualMonitor && !liveOccupiesScreen2) {
     // 듀얼 모니터: 좌=주 창, 우=보조 창 동시 표출 (전환효과도 함께 전달)
     window.signage.setScreen2Media({ url: entry.url2, mimeType: entry.mimeType2, fitMode, sound: entry.sound, transition: entry.transition, duration });
     report(entry, 'both');
@@ -444,6 +584,264 @@ function stopPlayback(showStopped) {
   if (dualMonitor) window.signage.setScreen2Media(null);
   report(null);
   showIdle(showStopped);
+}
+
+// ═══════════════════════════════════════════════════════
+// 라이브 레이어 — 폰 촬영 사진
+//   히어로(새 사진 풀스크린) → 그리드(최근 사진 1/2/3/4 적응 배치)
+//   새 사진이 오면 다시 히어로. 무입력이 이어지면 코너로 축소된 뒤 소멸.
+//   편성표 재생 루프는 이 레이어 아래에서 계속 돌고 있다.
+// ═══════════════════════════════════════════════════════
+const LIVE_DEFAULTS = { heroMs: 8000, heroBusyMs: 4000, returnMs: 50000, cornerMs: 120000, gridMax: 4 };
+const LIVE_HERO_MIN_MS = 1200;   // 풀스크린이 깜빡이듯 지나가지 않도록 하한
+const LIVE_RETURN_MIN_MS = 5000; // 복귀 타이머 하한
+
+const liveLayer = document.getElementById('live-layer');
+const liveStage = document.getElementById('live-stage');
+const liveGrid  = document.getElementById('live-grid');
+const liveHero  = document.getElementById('live-hero');
+const liveFlash = document.getElementById('live-flash');
+
+let liveSettings = { ...LIVE_DEFAULTS };
+let liveSlots = [];        // 화면 칸에 놓인 사진 (칸 위치 고정 — 가득 차면 제자리 교체)
+let liveSlotCursor = 0;
+let liveQueue = [];        // 히어로 대기열
+let liveState = 'off';     // off | hero | grid | corner
+let liveHeroTimer = null;
+let liveHeroStartedAt = 0;
+let liveHeroFullMs = 0;
+let liveReturnTimer = null;
+let liveCornerTimer = null;
+let liveGoneTimer = null;
+
+window.signage.onLivePhoto((data) => {
+  configReady.then(() => {
+    applyLiveSettings(data.settings);
+    if (!data.photo) return;
+    placeInSlot(data.photo);
+    liveQueue.push(data.photo);
+    armLiveReturn();
+    // 히어로 중이면 현재 히어로를 단축해 대기열을 빨리 흘리고,
+    // 아니면 즉시 시작한다(지연 없이 "찍자마자 뜬다").
+    if (liveState === 'hero') shortenHero();
+    else liveDrive();
+  });
+});
+
+window.signage.onLiveUpdate((data) => {
+  applyLiveSettings(data.settings);
+  if (!data.removedId) return;
+  liveQueue = liveQueue.filter(p => p.id !== data.removedId);
+  const idx = liveSlots.findIndex(p => p && p.id === data.removedId);
+  if (idx === -1) return;
+  liveSlots.splice(idx, 1);
+  if (liveSlotCursor > liveSlots.length) liveSlotCursor = liveSlots.length;
+  if (!liveSlots.length) { endLive(); return; }
+  if (liveState === 'hero' && liveHero.dataset.photoId === data.removedId) {
+    clearTimeout(liveHeroTimer);
+    heroDone();
+  } else if (liveState === 'grid' || liveState === 'corner') {
+    renderLiveGrid(-1);
+  }
+});
+
+window.signage.onLiveClear(() => endLive());
+
+// 듀얼 모니터: 2번 화면이 라이브에 점유/해제되면 분할 항목 배치를 다시 잡는다
+if (!isSecondary) {
+  window.signage.onLiveOccupy((data) => {
+    const on = !!(data && data.occupied);
+    if (liveOccupiesScreen2 === on) return;
+    liveOccupiesScreen2 = on;
+    const entry = activeEntries[currentIndex];
+    // 분할 항목만 배치가 달라지므로 그때만 다시 렌더링한다 (영상 재시작 최소화)
+    if (entry && entry.url2) {
+      if (on) window.signage.setScreen2Media(null);
+      rerenderCurrent();
+    }
+  });
+}
+
+function applyLiveSettings(s) {
+  if (s) liveSettings = { ...LIVE_DEFAULTS, ...s };
+}
+
+// 칸 배치: 최대 칸수까지는 새 칸을 늘리고, 가득 차면 가장 오래된 칸을 제자리 교체
+function placeInSlot(photo) {
+  const max = Math.max(1, Math.min(4, liveSettings.gridMax || 4));
+  if (liveSlots.length < max) {
+    liveSlots.push(photo);
+    liveSlotCursor = liveSlots.length % max;
+  } else {
+    liveSlots[liveSlotCursor] = photo;
+    liveSlotCursor = (liveSlotCursor + 1) % max;
+  }
+}
+
+function liveDrive() {
+  if (!liveSlots.length) { endLive(); return; }
+  // 3장 이상 한꺼번에 도착 — 히어로를 생략하고 바로 그리드로 (풀스크린 홍수 방지)
+  if (liveQueue.length >= 3) {
+    liveQueue.length = 0;
+    showLiveGrid();
+    return;
+  }
+  const next = liveQueue.shift();
+  if (!next) { showLiveGrid(); return; }
+  showLiveHero(next, liveQueue.length > 0 ? liveSettings.heroBusyMs : liveSettings.heroMs);
+}
+
+function liveOn() {
+  clearTimeout(liveGoneTimer);
+  liveStage.classList.remove('corner', 'gone');
+  liveLayer.classList.add('on');
+  if (liveCornerTimer) { clearTimeout(liveCornerTimer); liveCornerTimer = null; }
+}
+
+function photoEl(photo, extraClass) {
+  const url = resolveUrl(photo.url);
+  const box = document.createElement('div');
+  box.className = 'lphoto' + (extraClass ? ' ' + extraClass : '');
+
+  const bg = document.createElement('div');
+  bg.className = 'lbg';
+  // 세로 사진(폰 기본)이 가로 화면에서 좌우로 비지 않도록 같은 사진을 블러 배경으로 깐다
+  bg.style.backgroundImage = `url("${url.replace(/"/g, '%22')}")`;
+  box.appendChild(bg);
+
+  const img = document.createElement('img');
+  img.src = url;
+  box.appendChild(img);
+
+  if (photo.message) {
+    const cap = document.createElement('div');
+    cap.className = 'lcap';
+    cap.textContent = photo.message;
+    box.appendChild(cap);
+  }
+  return box;
+}
+
+function showLiveHero(photo, ms) {
+  liveState = 'hero';
+  liveOn();
+
+  liveHero.innerHTML = '';
+  liveHero.dataset.photoId = photo.id || '';
+  liveHero.classList.remove('in', 'out');
+  liveHero.appendChild(photoEl(photo));
+  liveHero.style.display = '';
+
+  // 셔터 플래시
+  liveFlash.classList.remove('fire');
+  void liveFlash.offsetWidth;
+  liveFlash.classList.add('fire');
+
+  requestAnimationFrame(() => requestAnimationFrame(() => liveHero.classList.add('in')));
+
+  clearTimeout(liveHeroTimer);
+  liveHeroFullMs = Math.max(LIVE_HERO_MIN_MS, ms || LIVE_DEFAULTS.heroMs);
+  liveHeroStartedAt = Date.now();
+  liveHeroTimer = setTimeout(heroDone, liveHeroFullMs);
+}
+
+// 히어로 표출 중에 새 사진이 도착하면 현재 히어로를 '대기 있을 때' 시간으로 줄인다.
+// (이미 그보다 짧게 끝날 예정이면 그대로 두고, 최소 0.6초는 더 보여준다)
+function shortenHero() {
+  if (liveState !== 'hero') return;
+  const busy = Math.max(LIVE_HERO_MIN_MS, liveSettings.heroBusyMs || LIVE_DEFAULTS.heroBusyMs);
+  const elapsed = Date.now() - liveHeroStartedAt;
+  const target = Math.max(600, busy - elapsed);
+  if (target >= liveHeroFullMs - elapsed) return;
+  clearTimeout(liveHeroTimer);
+  liveHeroFullMs = elapsed + target;
+  liveHeroTimer = setTimeout(heroDone, target);
+}
+
+function heroDone() {
+  // 대기 사진이 있으면 그리드를 거치지 않고 바로 다음 히어로
+  if (liveQueue.length) { liveDrive(); return; }
+  showLiveGrid();
+}
+
+function showLiveGrid() {
+  if (!liveSlots.length) { endLive(); return; }
+  liveState = 'grid';
+  liveOn();
+
+  const newestIdx = liveSlots.length ? (liveSlotCursor - 1 + liveSlots.length) % liveSlots.length : -1;
+  renderLiveGrid(newestIdx);
+
+  // 히어로가 살짝 축소되며 사라지고 그리드가 떠오른다
+  liveHero.classList.remove('in');
+  liveHero.classList.add('out');
+  setTimeout(() => {
+    if (liveState === 'hero') return;   // 그 사이 새 히어로가 떴으면 건드리지 않는다
+    liveHero.innerHTML = '';
+    liveHero.classList.remove('out');
+    liveHero.dataset.photoId = '';
+  }, 700);
+}
+
+function renderLiveGrid(popIndex) {
+  liveGrid.innerHTML = '';
+  liveGrid.dataset.n = String(liveSlots.length);
+  liveSlots.forEach((photo, i) => {
+    if (!photo) return;
+    liveGrid.appendChild(photoEl(photo, i === popIndex ? 'pop' : ''));
+  });
+  requestAnimationFrame(() => liveGrid.classList.add('in'));
+}
+
+// 무입력 복귀 타이머 — 새 사진이 올 때마다 다시 센다
+function armLiveReturn() {
+  clearTimeout(liveReturnTimer);
+  clearTimeout(liveCornerTimer);
+  liveCornerTimer = null;
+  liveStage.classList.remove('corner');
+  liveReturnTimer = setTimeout(toLiveCorner, Math.max(LIVE_RETURN_MIN_MS, liveSettings.returnMs || LIVE_DEFAULTS.returnMs));
+}
+
+// 편성표로 복귀 — 뚝 끊지 않고 코너에 잠시 축소되어 남는다
+function toLiveCorner() {
+  const cornerMs = liveSettings.cornerMs;
+  if (!cornerMs || cornerMs <= 0) { endLive(); return; }
+  if (liveState === 'hero') {           // 히어로 중이면 먼저 그리드로 내린다
+    clearTimeout(liveHeroTimer);
+    showLiveGrid();
+  }
+  liveState = 'corner';
+  liveStage.classList.add('corner');
+  liveCornerTimer = setTimeout(endLive, cornerMs);
+}
+
+function endLive() {
+  clearTimeout(liveHeroTimer);
+  clearTimeout(liveReturnTimer);
+  clearTimeout(liveCornerTimer);
+  liveHeroTimer = liveReturnTimer = liveCornerTimer = null;
+
+  const wasOn = liveState !== 'off';
+  liveState = 'off';
+  liveQueue = [];
+  liveSlots = [];
+  liveSlotCursor = 0;
+
+  liveStage.classList.add('gone');
+  clearTimeout(liveGoneTimer);
+  liveGoneTimer = setTimeout(() => {
+    liveLayer.classList.remove('on');
+    liveStage.classList.remove('corner', 'gone');
+    liveGrid.innerHTML = '';
+    liveGrid.classList.remove('in');
+    liveGrid.removeAttribute('data-n');
+    liveHero.innerHTML = '';
+    liveHero.classList.remove('in', 'out');
+    liveHero.dataset.photoId = '';
+  }, 750);
+
+  // 보조 창이 라이브를 맡고 있었다면 2번 화면 점유를 해제한다
+  if (wasOn) window.signage.liveEnded();
 }
 
 function showIdle(stopped) {

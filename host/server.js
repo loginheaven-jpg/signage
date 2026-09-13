@@ -641,6 +641,384 @@ app.post('/api/gdrive/sync', async (req, res) => {
   res.json({ success: true, status: gdrive.getStatus() });
 });
 
+// ═══════════════════════════════════════════════════════════
+// 라이브 사진 (폰 촬영 → 지정 모니터 즉시 송출)
+// ═══════════════════════════════════════════════════════════
+// 편성표를 건드리지 않는다. 클라이언트는 편성표를 계속 재생한 채
+// 그 위에 '라이브 레이어'를 띄우고, 무입력이 일정 시간 이어지면 레이어만 사라진다.
+//  - 폰 페이지: GET /m  (토큰 기반, 관리자 인증 없음)
+//  - 폰 API   : /live/api/*  (토큰 검사)
+//  - 관리 API : /api/live/*  (관리자 인증)
+
+const crypto = require('crypto');
+const LIVE_DIR = path.join(UPLOADS_DIR, 'live');
+const LIVE_CONFIG_FILE = path.join(DATA_DIR, 'live.json');
+if (!fs.existsSync(LIVE_DIR)) fs.mkdirSync(LIVE_DIR, { recursive: true });
+
+const LIVE_DEFAULT_SETTINGS = {
+  heroMs: 8000,       // 새 사진 풀스크린(히어로) 표출 시간 — 대기 사진이 없을 때
+  heroBusyMs: 4000,   // 대기 사진이 있을 때 단축된 히어로 시간
+  returnMs: 50000,    // 이 시간 동안 새 사진이 없으면 편성표로 복귀
+  cornerMs: 120000,   // 복귀 후 코너에 축소되어 남는 시간 (0이면 즉시 소멸)
+  gridMax: 4,         // 그리드 최대 칸 수 (1→풀, 2→좌우, 3~4→2x2 적응)
+  photoTtlMin: 180,   // 사진 보관 시간(분) — 지나면 파일까지 삭제
+  cancelSec: 60       // 업로더 본인이 취소할 수 있는 시간(초)
+};
+
+let liveConfig = { enabled: false, token: '', settings: { ...LIVE_DEFAULT_SETTINGS } };
+
+function newLiveToken() {
+  return crypto.randomBytes(9).toString('base64url'); // 12자
+}
+
+function loadLiveConfig() {
+  try {
+    if (fs.existsSync(LIVE_CONFIG_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(LIVE_CONFIG_FILE, 'utf8'));
+      liveConfig = {
+        enabled: !!saved.enabled,
+        token: saved.token || '',
+        settings: { ...LIVE_DEFAULT_SETTINGS, ...(saved.settings || {}) }
+      };
+    }
+  } catch (e) {
+    console.warn('[Live] 설정 로드 실패:', e.message);
+  }
+  if (!liveConfig.token) { liveConfig.token = newLiveToken(); saveLiveConfig(); }
+}
+
+function saveLiveConfig() {
+  try { fs.writeFileSync(LIVE_CONFIG_FILE, JSON.stringify(liveConfig, null, 2)); }
+  catch (e) { console.error('[Live] 설정 저장 실패:', e.message); }
+}
+
+loadLiveConfig();
+console.log(`[Live] 라이브 송출: ${liveConfig.enabled ? 'ON' : 'OFF'} — 폰 링크 /m?t=${liveConfig.token}`);
+
+// 사이트별 라이브 세션. siteId -> { photos: [...], lastAt }
+// photos[]: { id, filename, url, message, uploaderId, uploaderName, ts }
+const liveSessions = new Map();
+// 책임 추적용 최근 업로드 로그 (메모리, 최근 50건)
+const liveUploadLog = [];
+
+function liveSession(siteId) {
+  if (!liveSessions.has(siteId)) liveSessions.set(siteId, { photos: [], lastAt: 0 });
+  return liveSessions.get(siteId);
+}
+
+// 화면에 보내는 사진 정보 — 업로더 이름은 내보내지 않는다(화면에는 메시지만 표시).
+function livePublicPhotos(session) {
+  return session.photos.map(p => ({ id: p.id, url: p.url, message: p.message || '', ts: p.ts }));
+}
+
+function pushLive(siteId, msg) {
+  const data = JSON.stringify(msg);
+  let n = 0;
+  clients.forEach((info) => {
+    if (info.siteId === siteId && info.ws.readyState === WebSocket.OPEN) { info.ws.send(data); n++; }
+  });
+  return n;
+}
+
+function liveDeleteFile(photo) {
+  try {
+    const p = path.join(LIVE_DIR, photo.filename);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  } catch (e) { console.warn('[Live] 파일 삭제 실패:', e.message); }
+}
+
+// 메시지 정제 — 40자 제한, 제어문자 제거, URL/도메인 차단(화면 광고 방지)
+const LIVE_MSG_MAX = 40;
+function sanitizeLiveMessage(raw) {
+  let s = String(raw || '').replace(/[\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!s) return { ok: true, message: '' };
+  if (s.length > LIVE_MSG_MAX) s = s.slice(0, LIVE_MSG_MAX);
+  if (/(https?:\/\/|www\.|\b[\w-]+\.(com|net|org|kr|io|co|me|biz|info|shop|xyz)\b)/i.test(s)) {
+    return { ok: false, error: '메시지에 링크·주소는 넣을 수 없습니다.' };
+  }
+  return { ok: true, message: s };
+}
+
+// ─── 폰 업로드용 multer (이미지 전용) ──────────────────────
+const liveStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, LIVE_DIR),
+  filename: (req, file, cb) => {
+    let ext = (path.extname(file.originalname) || '').toLowerCase();
+    if (!/^\.(jpe?g|png|gif|webp|heic|heif)$/.test(ext)) ext = '.jpg';
+    cb(null, `live_${Date.now()}_${uuidv4().slice(0, 8)}${ext}`);
+  }
+});
+const liveUpload = multer({
+  storage: liveStorage,
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!/^image\//.test(file.mimetype)) return cb(new Error('이미지 파일만 올릴 수 있습니다.'));
+    cb(null, true);
+  }
+});
+
+function checkLiveToken(req) {
+  const t = req.query.t || req.body?.t || req.headers['x-live-token'] || '';
+  return !!liveConfig.token && t === liveConfig.token;
+}
+
+// ─── 폰 페이지 ─────────────────────────────────────────────
+app.get(['/m', '/m.html'], (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'm.html'));
+});
+
+// ─── 폰 API (토큰 인증) ────────────────────────────────────
+
+// 초기 정보: 송출 가능 모니터(사이트) 목록 — 폰의 '대상 모니터' 선택에 사용
+app.get('/live/api/hello', (req, res) => {
+  if (!checkLiveToken(req)) return res.status(401).json({ error: '링크가 유효하지 않습니다. 관리자에게 새 링크를 받아주세요.' });
+  const list = sites.map(s => {
+    const online = Array.from(clients.values()).some(c => c.siteId === s.id && c.ws.readyState === WebSocket.OPEN);
+    return { id: s.id, name: s.name, icon: s.icon || '📺', online };
+  });
+  res.json({
+    ok: true,
+    enabled: liveConfig.enabled,
+    sites: list,
+    msgMax: LIVE_MSG_MAX,
+    cancelSec: liveConfig.settings.cancelSec
+  });
+});
+
+// 사진 업로드 → 지정 사이트로 즉시 송출
+app.post('/live/api/photo', (req, res) => {
+  liveUpload.single('photo')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || '업로드 실패' });
+    if (!checkLiveToken(req)) {
+      if (req.file) try { fs.unlinkSync(req.file.path); } catch (e) {}
+      return res.status(401).json({ error: '링크가 유효하지 않습니다.' });
+    }
+    if (!liveConfig.enabled) {
+      if (req.file) try { fs.unlinkSync(req.file.path); } catch (e) {}
+      return res.status(403).json({ error: '지금은 라이브 송출이 꺼져 있습니다.' });
+    }
+    if (!req.file) return res.status(400).json({ error: '사진이 없습니다.' });
+
+    const siteId = String(req.body.siteId || '');
+    const site = sites.find(s => s.id === siteId);
+    if (!site) {
+      try { fs.unlinkSync(req.file.path); } catch (e) {}
+      return res.status(400).json({ error: '송출할 모니터를 다시 선택해 주세요.' });
+    }
+
+    const chk = sanitizeLiveMessage(req.body.message);
+    if (!chk.ok) {
+      try { fs.unlinkSync(req.file.path); } catch (e) {}
+      return res.status(400).json({ error: chk.error });
+    }
+
+    const photo = {
+      id: uuidv4(),
+      filename: req.file.filename,
+      url: `/uploads/live/${req.file.filename}`,
+      message: chk.message,
+      uploaderId: String(req.body.uploaderId || '').slice(0, 64),
+      uploaderName: String(req.body.uploaderName || '').replace(/[\x00-\x1f]/g, '').slice(0, 20),
+      ts: Date.now()
+    };
+
+    const session = liveSession(siteId);
+    session.photos.push(photo);
+    session.lastAt = photo.ts;
+    // 세션 보관량 제한 — 그리드는 최근 gridMax장만 쓰지만 여유분을 둔다
+    const keepMax = Math.max(8, (liveConfig.settings.gridMax || 4) * 3);
+    while (session.photos.length > keepMax) liveDeleteFile(session.photos.shift());
+
+    liveUploadLog.unshift({
+      ts: photo.ts, siteId, siteName: site.name, message: photo.message,
+      uploaderName: photo.uploaderName, uploaderId: photo.uploaderId, photoId: photo.id
+    });
+    if (liveUploadLog.length > 50) liveUploadLog.length = 50;
+
+    const sent = pushLive(siteId, {
+      type: 'live_photo',
+      photo: { id: photo.id, url: photo.url, message: photo.message, ts: photo.ts },
+      session: { photos: livePublicPhotos(session) },
+      settings: liveConfig.settings
+    });
+
+    broadcastToAdmins({ type: 'live_update' });
+    console.log(`[Live] 사진 → ${site.name}: "${photo.message || '(메시지 없음)'}" by ${photo.uploaderName || '익명'}(${photo.uploaderId.slice(0, 8)}) → ${sent}개 화면`);
+
+    res.json({ success: true, photo: { id: photo.id, url: photo.url, message: photo.message }, screens: sent, siteName: site.name });
+  });
+});
+
+// 업로더 본인 취소 (cancelSec 이내, 같은 uploaderId)
+app.delete('/live/api/photo/:id', (req, res) => {
+  if (!checkLiveToken(req)) return res.status(401).json({ error: '링크가 유효하지 않습니다.' });
+  const uploaderId = String(req.query.uploaderId || '');
+  const limitMs = (liveConfig.settings.cancelSec || 60) * 1000;
+
+  for (const [siteId, session] of liveSessions) {
+    const idx = session.photos.findIndex(p => p.id === req.params.id);
+    if (idx === -1) continue;
+    const photo = session.photos[idx];
+    if (photo.uploaderId && uploaderId !== photo.uploaderId) return res.status(403).json({ error: '본인이 올린 사진만 취소할 수 있습니다.' });
+    if (Date.now() - photo.ts > limitMs) return res.status(410).json({ error: '취소 가능 시간이 지났습니다. 관리자에게 요청해 주세요.' });
+
+    session.photos.splice(idx, 1);
+    liveDeleteFile(photo);
+    pushLive(siteId, {
+      type: 'live_update',
+      removedId: photo.id,
+      session: { photos: livePublicPhotos(session) },
+      settings: liveConfig.settings
+    });
+    broadcastToAdmins({ type: 'live_update' });
+    console.log(`[Live] 사진 취소: ${photo.id} (${photo.uploaderName || '익명'})`);
+    return res.json({ success: true });
+  }
+  res.status(404).json({ error: '이미 사라진 사진입니다.' });
+});
+
+// ─── 관리 API (관리자 인증) ────────────────────────────────
+
+app.get('/api/live', (req, res) => {
+  const sessions = [];
+  liveSessions.forEach((session, siteId) => {
+    const site = sites.find(s => s.id === siteId);
+    if (!session.photos.length) return;
+    sessions.push({
+      siteId,
+      siteName: site ? site.name : siteId,
+      count: session.photos.length,
+      lastAt: session.lastAt,
+      photos: session.photos.slice(-6).reverse().map(p => ({
+        id: p.id, url: p.url, message: p.message, uploaderName: p.uploaderName, ts: p.ts
+      }))
+    });
+  });
+  sessions.sort((a, b) => b.lastAt - a.lastAt);
+  res.json({
+    enabled: liveConfig.enabled,
+    token: liveConfig.token,
+    link: `/m?t=${liveConfig.token}`,
+    settings: liveConfig.settings,
+    sessions,
+    log: liveUploadLog.slice(0, 20)
+  });
+});
+
+app.put('/api/live', (req, res) => {
+  if (req.body.enabled !== undefined) liveConfig.enabled = !!req.body.enabled;
+  if (req.body.settings) {
+    const s = req.body.settings;
+    const num = (v, min, max, dflt) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : dflt;
+    };
+    const cur = liveConfig.settings;
+    liveConfig.settings = {
+      heroMs:      s.heroMs      !== undefined ? num(s.heroMs, 2000, 30000, cur.heroMs)        : cur.heroMs,
+      heroBusyMs:  s.heroBusyMs  !== undefined ? num(s.heroBusyMs, 1500, 20000, cur.heroBusyMs) : cur.heroBusyMs,
+      returnMs:    s.returnMs    !== undefined ? num(s.returnMs, 10000, 600000, cur.returnMs)   : cur.returnMs,
+      cornerMs:    s.cornerMs    !== undefined ? num(s.cornerMs, 0, 900000, cur.cornerMs)       : cur.cornerMs,
+      gridMax:     s.gridMax     !== undefined ? num(s.gridMax, 1, 4, cur.gridMax)              : cur.gridMax,
+      photoTtlMin: s.photoTtlMin !== undefined ? num(s.photoTtlMin, 5, 1440, cur.photoTtlMin)   : cur.photoTtlMin,
+      cancelSec:   s.cancelSec   !== undefined ? num(s.cancelSec, 10, 600, cur.cancelSec)       : cur.cancelSec
+    };
+  }
+  saveLiveConfig();
+
+  // 라이브를 끄면 진행 중인 모든 세션을 즉시 정리한다
+  if (!liveConfig.enabled) liveClearAll();
+  else liveSessions.forEach((session, siteId) => {
+    if (session.photos.length) pushLive(siteId, { type: 'live_update', session: { photos: livePublicPhotos(session) }, settings: liveConfig.settings });
+  });
+
+  broadcastToAdmins({ type: 'live_update' });
+  console.log(`[Live] 설정 변경 — 송출: ${liveConfig.enabled ? 'ON' : 'OFF'}`);
+  res.json({ success: true, enabled: liveConfig.enabled, settings: liveConfig.settings });
+});
+
+// 토큰 재발급 — 기존 폰 링크는 모두 무효가 된다
+app.post('/api/live/token/rotate', (req, res) => {
+  liveConfig.token = newLiveToken();
+  saveLiveConfig();
+  broadcastToAdmins({ type: 'live_update' });
+  console.log('[Live] 토큰 재발급 — 기존 링크 무효');
+  res.json({ success: true, token: liveConfig.token, link: `/m?t=${liveConfig.token}` });
+});
+
+function liveClearSite(siteId) {
+  const session = liveSessions.get(siteId);
+  if (!session) return 0;
+  const n = session.photos.length;
+  session.photos.forEach(liveDeleteFile);
+  session.photos = [];
+  session.lastAt = 0;
+  pushLive(siteId, { type: 'live_clear' });
+  return n;
+}
+
+function liveClearAll() {
+  let n = 0;
+  liveSessions.forEach((_, siteId) => { n += liveClearSite(siteId); });
+  return n;
+}
+
+// 라이브 즉시 종료 — 화면에서 내리고 사진 파일까지 삭제 (사고 대응용)
+app.post('/api/live/clear', (req, res) => {
+  const siteId = req.body && req.body.siteId;
+  const n = siteId ? liveClearSite(siteId) : liveClearAll();
+  broadcastToAdmins({ type: 'live_update' });
+  console.log(`[Live] 즉시 종료${siteId ? ` (${siteId})` : ' (전체)'} — 사진 ${n}장 삭제`);
+  res.json({ success: true, removed: n });
+});
+
+// 관리자가 개별 사진 삭제
+app.delete('/api/live/photo/:id', (req, res) => {
+  for (const [siteId, session] of liveSessions) {
+    const idx = session.photos.findIndex(p => p.id === req.params.id);
+    if (idx === -1) continue;
+    const [photo] = session.photos.splice(idx, 1);
+    liveDeleteFile(photo);
+    pushLive(siteId, { type: 'live_update', removedId: photo.id, session: { photos: livePublicPhotos(session) }, settings: liveConfig.settings });
+    broadcastToAdmins({ type: 'live_update' });
+    return res.json({ success: true });
+  }
+  res.status(404).json({ error: 'Not found' });
+});
+
+// ─── TTL 정리 (사진은 휘발성 — 콘텐츠 라이브러리에 남기지 않는다) ───
+setInterval(() => {
+  const ttl = (liveConfig.settings.photoTtlMin || 180) * 60 * 1000;
+  const cutoff = Date.now() - ttl;
+  const keep = new Set();
+  liveSessions.forEach((session, siteId) => {
+    const before = session.photos.length;
+    const expired = session.photos.filter(p => p.ts < cutoff);
+    if (expired.length) {
+      session.photos = session.photos.filter(p => p.ts >= cutoff);
+      expired.forEach(liveDeleteFile);
+      if (session.photos.length) {
+        pushLive(siteId, { type: 'live_update', session: { photos: livePublicPhotos(session) }, settings: liveConfig.settings });
+      } else {
+        pushLive(siteId, { type: 'live_clear' });
+      }
+      console.log(`[Live] TTL 정리: ${siteId} — ${before - session.photos.length}장 삭제`);
+      broadcastToAdmins({ type: 'live_update' });
+    }
+    session.photos.forEach(p => keep.add(p.filename));
+  });
+  // 세션에 없는 고아 파일 정리 (재시작 등으로 남은 것)
+  try {
+    for (const f of fs.readdirSync(LIVE_DIR)) {
+      if (keep.has(f)) continue;
+      const fp = path.join(LIVE_DIR, f);
+      try {
+        if (fs.statSync(fp).mtimeMs < cutoff) { fs.unlinkSync(fp); console.log(`[Live] 고아 파일 삭제: ${f}`); }
+      } catch (e) {}
+    }
+  } catch (e) {}
+}, 5 * 60 * 1000);
+
 // ─── WebSocket ──────────────────────────────────────────
 wss.on('connection', (ws) => {
   console.log('[WS] 새 연결 수립');
