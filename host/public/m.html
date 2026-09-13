@@ -219,8 +219,8 @@ footer { text-align: center; font-size: 11px; color: #5b6270; margin-top: 20px; 
 
     <input type="file" id="fileInput" accept="image/*" capture="environment">
     <button class="big-btn" id="shootBtn" onclick="pickPhoto()">📷 촬영하고 바로 올리기</button>
-    <button class="big-btn sub" id="galleryBtn" style="margin-top:10px" onclick="pickFromGallery()">🖼 앨범에서 고르기</button>
-    <input type="file" id="galleryInput" accept="image/*" style="display:none">
+    <button class="big-btn sub" id="galleryBtn" style="margin-top:10px" onclick="pickFromGallery()">🖼 앨범에서 고르기 (여러 장 가능)</button>
+    <input type="file" id="galleryInput" accept="image/*" multiple style="display:none">
   </div>
 
   <!-- 업로드 상태 -->
@@ -275,6 +275,7 @@ let sites = [];
 let liveEnabled = false;
 let cancelSec = 60;
 let busy = false;
+const MAX_BATCH = 12;   // 한 번에 보낼 수 있는 최대 장수
 // 막힌 이유 ({ label, detail }) 또는 null. 막혀도 버튼은 누를 수 있고,
 // 누르면 서버 상태를 다시 확인한다.
 let block = null;
@@ -546,84 +547,174 @@ el('msg').addEventListener('input', e => {
   ls(LS.draft, e.target.value);   // 탭이 폐기돼도 메시지가 남도록 저장
 });
 
-// 사진이 돌아왔을 때의 입구 — 여기서 조용히 끝나는 경우가 없도록 한다
+// 사진이 돌아왔을 때의 입구 — 여기서 조용히 끝나는 경우가 없도록 한다.
+// 앨범에서 여러 장을 고르면 고른 순서대로 하나씩 올린다.
 let fileArrived = false;
 function onPicked(files) {
   fileArrived = true;
   ls(LS.pending, null);
-  const file = files && files[0];
-  if (!file) {
-    // 카메라 앱이 결과를 돌려주지 못한 경우 (일부 안드로이드에서 발생)
+
+  const list = Array.from(files || []);
+  if (!list.length) {
+    // 카메라/앨범이 결과를 돌려주지 못한 경우 (일부 안드로이드에서 발생)
     showStatus('err', '<div class="big">⚠️</div><div class="t">사진을 받지 못했습니다</div>' +
       '<div class="d">카메라가 사진을 넘겨주지 못했습니다. 다시 시도하거나 <b>앨범에서 고르기</b>를 이용해 주세요.</div>' +
       '<button class="big-btn sub" style="margin-top:14px" onclick="resetComposer()">돌아가기</button>');
     return;
   }
-  if (!file.size) {
+
+  const valid = list.filter(f => f && f.size > 0);
+  if (!valid.length) {
     showStatus('err', '<div class="big">⚠️</div><div class="t">사진 파일이 비어 있습니다</div>' +
       '<div class="d">저장이 끝나기 전에 넘어온 것 같습니다. 다시 찍어 주세요.</div>' +
       '<button class="big-btn sub" style="margin-top:14px" onclick="resetComposer()">돌아가기</button>');
     return;
   }
-  handleFile(file);
+
+  handleFiles(valid, list.length - valid.length);
 }
 
-async function handleFile(file) {
+// 한 장만 넘어오는 경우도 같은 경로를 쓴다 (호출부 호환)
+function handleFile(file) {
+  return onPicked(file ? [file] : []);
+}
+
+async function handleFiles(files, skipped) {
   if (busy) {
     // 이전 업로드가 아직 진행 중 — 조용히 무시하지 않고 알려준다
     showBanner('warn', '앞서 올린 사진을 <b>아직 보내는 중</b>입니다. 잠시만 기다려 주세요.');
     return;
   }
-  if (!file) return onPicked(null);
   if (!ls(LS.siteId)) {
     alert('먼저 송출할 모니터를 선택해 주세요.');
     el('siteList').classList.add('show');
     return;
   }
+
+  const total = Math.min(files.length, MAX_BATCH);
+  const overflow = files.length - total;
+  const message = el('msg').value.trim();
+  const siteName = ls(LS.siteName) || '';
+  const done = [];      // 올린 사진 { id }
+  const failed = [];    // 실패 사유
+  let screensSeen = 0;
+
   setBusy(true);
-
   try {
-    showStatus('', '<div class="spin"></div><div class="t">사진 준비 중...</div>');
-    const blob = await resizeImage(file, 1920, 0.85);
+    for (let i = 0; i < total; i++) {
+      const nth = total > 1 ? `<div class="d">${i + 1} / ${total} 장</div>` : '';
+      showStatus('', `<div class="spin"></div><div class="t">사진 준비 중...</div>${nth}`);
 
-    // 미리보기
-    const url = URL.createObjectURL(blob);
-    el('previewImg').src = url;
-    el('preview').classList.add('show');
+      let blob;
+      try {
+        blob = await resizeImage(files[i], 1920, 0.85);
+      } catch (e) {
+        failed.push((files[i].name || (i + 1) + '번째') + ': 읽을 수 없는 사진');
+        continue;
+      }
 
-    const siteName = ls(LS.siteName) || '';
-    showStatus('', `<div class="spin"></div><div class="t">${escapeHtml(siteName)} 화면으로 보내는 중...</div>
-      <div class="d">${(blob.size / 1024).toFixed(0)} KB</div>`);
+      // 미리보기 — 지금 보내는 사진을 보여준다
+      try {
+        el('previewImg').src = URL.createObjectURL(blob);
+        el('preview').classList.add('show');
+      } catch (e) {}
 
-    const fd = new FormData();
-    fd.append('t', token);
-    fd.append('siteId', ls(LS.siteId));
-    fd.append('message', el('msg').value.trim());
-    fd.append('uploaderId', uploaderId);
-    fd.append('uploaderName', uploaderName);
-    fd.append('photo', blob, 'photo.jpg');
+      showStatus('', `<div class="spin"></div><div class="t">${escapeHtml(siteName)} 화면으로 보내는 중...</div>
+        <div class="d">${total > 1 ? (i + 1) + ' / ' + total + ' 장 · ' : ''}${(blob.size / 1024).toFixed(0)} KB</div>`);
 
-    const res = await fetch('/live/api/photo', { method: 'POST', body: fd });
-    const data = await res.json();
+      try {
+        const fd = new FormData();
+        fd.append('t', token);
+        fd.append('siteId', ls(LS.siteId));
+        fd.append('message', message);
+        fd.append('uploaderId', uploaderId);
+        fd.append('uploaderName', uploaderName);
+        fd.append('batchTotal', String(total));   // 의도적으로 고른 묶음임을 화면에 알린다
+        fd.append('photo', blob, 'photo.jpg');
 
-    if (!res.ok) {
-      showStatus('err', `<div class="big">⚠️</div><div class="t">${escapeHtml(data.error || '업로드 실패')}</div>
-        <button class="big-btn sub" style="margin-top:14px" onclick="resetComposer()">다시 시도</button>`);
-      return;
+        const res = await fetch('/live/api/photo', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) { failed.push(data.error || '업로드 실패'); continue; }
+        done.push(data.photo);
+        screensSeen = Math.max(screensSeen, data.screens || 0);
+      } catch (e) {
+        failed.push('전송 실패 — 인터넷 연결을 확인해 주세요');
+      }
     }
-
-    el('msg').value = '';
-    el('msgCount').textContent = '0';
-    ls(LS.draft, null);
-    ls(LS.pending, null);
-    showUploaded(data);
-  } catch (e) {
-    showStatus('err', `<div class="big">⚠️</div><div class="t">사진 처리 중 문제가 생겼습니다</div>
-      <div class="d">${escapeHtml(e.message || '')}</div>
-      <button class="big-btn sub" style="margin-top:14px" onclick="resetComposer()">다시 시도</button>`);
   } finally {
     setBusy(false);
   }
+
+  if (done.length) {
+    el('msg').value = '';
+    el('msgCount').textContent = '0';
+    ls(LS.draft, null);
+  }
+  ls(LS.pending, null);
+
+  showUploadResult({ done, failed, total, overflow, skipped, screens: screensSeen, siteName });
+}
+
+function showUploadResult(r) {
+  const n = r.done.length;
+
+  if (!n) {
+    showStatus('err', `<div class="big">⚠️</div><div class="t">올리지 못했습니다</div>
+      <div class="d">${escapeHtml(r.failed[0] || '알 수 없는 오류')}</div>
+      <button class="big-btn sub" style="margin-top:14px" onclick="resetComposer()">다시 시도</button>`);
+    return;
+  }
+
+  const where = escapeHtml(r.siteName || '');
+  const detail = r.screens > 0
+    ? `${where} 화면에 지금 떴습니다.`
+    : `${where} 는 지금 꺼져 있어 화면에 나오지 않았습니다.`;
+
+  const notes = [];
+  if (r.failed.length) notes.push(`${r.failed.length}장은 올리지 못했습니다 (${escapeHtml(r.failed[0])})`);
+  if (r.skipped) notes.push(`${r.skipped}장은 빈 파일이라 건너뜀`);
+  if (r.overflow) notes.push(`한 번에 ${MAX_BATCH}장까지만 보냅니다 — ${r.overflow}장은 보내지 않음`);
+
+  showStatus('ok', `
+    <div class="big">✅</div>
+    <div class="t">${n > 1 ? n + '장 올렸어요!' : '화면에 나왔어요!'}</div>
+    <div class="d">${detail}<br>${n > 1
+      ? '고른 순서대로 한 장씩 크게 보인 뒤 함께 배치됩니다.'
+      : '잠시 크게 보인 뒤 다른 사진들과 함께 배치됩니다.'}
+      ${notes.length ? '<br><span style="color:#e0a066">' + notes.join(' · ') + '</span>' : ''}</div>
+    <button class="big-btn" style="margin-top:16px" onclick="resetComposer()">📷 더 올리기</button>
+    <button class="big-btn danger" style="margin-top:10px" id="cancelBtn">${n > 1 ? n + '장 모두 ' : ''}취소하기 (<span id="cdown">${cancelSec}</span>초)</button>
+  `);
+
+  const btn = el('cancelBtn');
+  let left = cancelSec;
+  const timer = setInterval(() => {
+    left--;
+    const cd = el('cdown');
+    if (cd) cd.textContent = left;
+    if (left <= 0) { clearInterval(timer); if (btn) btn.remove(); }
+  }, 1000);
+
+  btn.onclick = async () => {
+    clearInterval(timer);
+    btn.disabled = true;
+    btn.textContent = '취소 중...';
+    let removed = 0, lastErr = '';
+    for (const p of r.done) {
+      try {
+        const res = await fetch(`/live/api/photo/${p.id}?t=${encodeURIComponent(token)}&uploaderId=${encodeURIComponent(uploaderId)}`, { method: 'DELETE' });
+        const j = await res.json();
+        if (res.ok) removed++; else lastErr = j.error || '취소할 수 없습니다';
+      } catch (e) { lastErr = '취소 실패 — 관리자에게 문의'; }
+    }
+    if (removed) {
+      showStatus('', `<div class="big">🗑</div><div class="t">${removed > 1 ? removed + '장을 ' : ''}화면에서 내렸습니다</div>
+        ${removed < r.done.length ? `<div class="d">${r.done.length - removed}장은 내리지 못했습니다 (${escapeHtml(lastErr)})</div>` : ''}
+        <button class="big-btn" style="margin-top:16px" onclick="resetComposer()">📷 다시 올리기</button>`);
+    } else {
+      btn.textContent = lastErr || '취소할 수 없습니다';
+    }
+  };
 }
 
 // busy 는 잠깁니다 — 어떤 이유로든 해제되지 않으면 이후 모든 촬영이 조용히 무시되므로
@@ -641,52 +732,6 @@ function setBusy(on) {
       showBanner('warn', '업로드가 응답하지 않아 중단했습니다. 다시 시도해 주세요.');
     }, 90000);
   }
-}
-
-function showUploaded(data) {
-  const screens = data.screens || 0;
-  const where = escapeHtml(data.siteName || '');
-  const detail = screens > 0
-    ? `${where} 화면에 지금 떴습니다.`
-    : `${where} 는 지금 꺼져 있어 화면에 나오지 않았습니다.`;
-
-  showStatus('ok', `
-    <div class="big">✅</div>
-    <div class="t">화면에 나왔어요!</div>
-    <div class="d">${detail}<br>10초쯤 크게 보인 뒤 다른 사진들과 함께 배치됩니다.</div>
-    <button class="big-btn" style="margin-top:16px" onclick="resetComposer()">📷 한 장 더 올리기</button>
-    <button class="big-btn danger" style="margin-top:10px" id="cancelBtn">취소하기 (<span id="cdown">${cancelSec}</span>초)</button>
-  `);
-
-  const btn = el('cancelBtn');
-  let left = cancelSec;
-  const timer = setInterval(() => {
-    left--;
-    const cd = el('cdown');
-    if (cd) cd.textContent = left;
-    if (left <= 0) {
-      clearInterval(timer);
-      if (btn) btn.remove();
-    }
-  }, 1000);
-
-  btn.onclick = async () => {
-    clearInterval(timer);
-    btn.disabled = true;
-    btn.textContent = '취소 중...';
-    try {
-      const res = await fetch(`/live/api/photo/${data.photo.id}?t=${encodeURIComponent(token)}&uploaderId=${encodeURIComponent(uploaderId)}`, { method: 'DELETE' });
-      const r = await res.json();
-      if (res.ok) {
-        showStatus('', `<div class="big">🗑</div><div class="t">화면에서 내렸습니다</div>
-          <button class="big-btn" style="margin-top:16px" onclick="resetComposer()">📷 다시 올리기</button>`);
-      } else {
-        btn.textContent = r.error || '취소할 수 없습니다';
-      }
-    } catch (e) {
-      btn.textContent = '취소 실패 — 관리자에게 문의';
-    }
-  };
 }
 
 function resetComposer() {

@@ -147,7 +147,7 @@ signage/
 |--------|------|------|
 | GET | `/m?t=토큰` | 폰 촬영·업로드 페이지 |
 | GET | `/live/api/hello?t=토큰` | 송출 가능 모니터 목록 + 라이브 ON/OFF 상태 |
-| POST | `/live/api/photo` | 사진 업로드 (multipart: `photo`, `siteId`, `message`, `uploaderId`, `uploaderName`, `t`) |
+| POST | `/live/api/photo` | 사진 업로드 (multipart: `photo`, `siteId`, `message`, `uploaderId`, `uploaderName`, `batchTotal`, `t`). 앨범에서 여러 장을 고른 경우 폰이 한 장씩 순서대로 전송하며 `batchTotal` 에 묶음 장수를 담는다(최대 12장, 서버는 30 으로 클램프) |
 | DELETE | `/live/api/photo/:id?t=&uploaderId=` | 업로더 본인 취소 (`cancelSec` 이내) |
 
 #### 라이브 사진 — 관리용
@@ -380,7 +380,8 @@ IDLE(편성표) --사진 도착--> 히어로(새 사진 풀스크린)
 |------|------|
 | 첫 장 | 지연 없이 즉시 히어로 ("찍자마자 뜬다") |
 | 히어로 중 도착 | 현재 히어로를 `heroBusyMs` 기준으로 단축 (최소 0.6초는 더 표출) |
-| 대기 3장 이상 | 히어로를 건너뛰고 바로 그리드 (풀스크린 홍수 방지) |
+| 대기 3장 이상 | 히어로를 건너뛰고 바로 그리드 (여러 사람이 몰릴 때의 풀스크린 홍수 방지) |
+| 앨범 묶음 | 한 사람이 여러 장을 골라 보낸 경우(`batchTotal` > 1)는 순차로 보여주려는 의도이므로 대기 9장까지 히어로를 생략하지 않음 |
 | 칸 배치 | `gridMax` 까지 칸을 늘리고, 가득 차면 가장 오래된 칸을 **제자리 교체** |
 | 3칸 | 2x2 에 빈칸을 남기지 않고 좌1(세로 2칸)+우2 로 배치 |
 | 세로 사진 | 같은 사진을 blur+cover 로 배경에 깔고 위에 contain (폰 사진 기본이 9:16) |

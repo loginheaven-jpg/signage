@@ -594,7 +594,9 @@ function stopPlayback(showStopped) {
 // ═══════════════════════════════════════════════════════
 const LIVE_DEFAULTS = { heroMs: 8000, heroBusyMs: 4000, returnMs: 50000, cornerMs: 120000, gridMax: 4 };
 const LIVE_HERO_MIN_MS = 1200;   // 풀스크린이 깜빡이듯 지나가지 않도록 하한
-const LIVE_RETURN_MIN_MS = 5000; // 복귀 타이머 하한
+const LIVE_RETURN_MIN_MS = 5000;
+const LIVE_BURST = 3;         // 여러 사람이 몰릴 때: 대기 3장부터 히어로 생략
+const LIVE_BATCH_BURST = 9;   // 한 사람이 고른 묶음: 9장까지는 순차 표출 // 복귀 타이머 하한
 
 const liveLayer = document.getElementById('live-layer');
 const liveStage = document.getElementById('live-stage');
@@ -680,8 +682,11 @@ function placeInSlot(photo) {
 
 function liveDrive() {
   if (!liveSlots.length) { endLive(); return; }
-  // 3장 이상 한꺼번에 도착 — 히어로를 생략하고 바로 그리드로 (풀스크린 홍수 방지)
-  if (liveQueue.length >= 3) {
+  // 풀스크린 홍수 방지 — 대기가 쌓이면 히어로를 건너뛰고 바로 그리드로 보낸다.
+  // 단, 한 사람이 앨범에서 여러 장을 골라 보낸 '묶음' 은 순차로 보여주려는 의도이므로
+  // 한계를 높게 둔다 (여러 사람이 동시에 몰리는 경우와 구분).
+  const isBatch = liveQueue.some(function (p) { return ((p && p.batchTotal) || 1) > 1; });
+  if (liveQueue.length >= (isBatch ? LIVE_BATCH_BURST : LIVE_BURST)) {
     liveQueue.length = 0;
     showLiveGrid();
     return;

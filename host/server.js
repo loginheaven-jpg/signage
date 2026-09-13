@@ -708,7 +708,10 @@ function liveSession(siteId) {
 
 // 화면에 보내는 사진 정보 — 업로더 이름은 내보내지 않는다(화면에는 메시지만 표시).
 function livePublicPhotos(session) {
-  return session.photos.map(p => ({ id: p.id, url: p.url, message: p.message || '', ts: p.ts }));
+  return session.photos.map(p => ({
+    id: p.id, url: p.url, message: p.message || '', ts: p.ts,
+    batchTotal: p.batchTotal || 1
+  }));
 }
 
 function pushLive(siteId, msg) {
@@ -812,11 +815,17 @@ app.post('/live/api/photo', (req, res) => {
       return res.status(400).json({ error: chk.error });
     }
 
+    // 한 사람이 앨범에서 여러 장을 골라 보낸 '묶음'인지 — 화면이 순차 표출 여부를 결정한다
+    let batchTotal = parseInt(req.body.batchTotal, 10);
+    if (!Number.isFinite(batchTotal) || batchTotal < 1) batchTotal = 1;
+    batchTotal = Math.min(batchTotal, 30);
+
     const photo = {
       id: uuidv4(),
       filename: req.file.filename,
       url: `/uploads/live/${req.file.filename}`,
       message: chk.message,
+      batchTotal,
       uploaderId: String(req.body.uploaderId || '').slice(0, 64),
       uploaderName: String(req.body.uploaderName || '').replace(/[\x00-\x1f]/g, '').slice(0, 20),
       ts: Date.now()
@@ -837,7 +846,7 @@ app.post('/live/api/photo', (req, res) => {
 
     const sent = pushLive(siteId, {
       type: 'live_photo',
-      photo: { id: photo.id, url: photo.url, message: photo.message, ts: photo.ts },
+      photo: { id: photo.id, url: photo.url, message: photo.message, ts: photo.ts, batchTotal: photo.batchTotal },
       session: { photos: livePublicPhotos(session) },
       settings: liveConfig.settings
     });
