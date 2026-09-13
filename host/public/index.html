@@ -742,7 +742,17 @@ function navigateTo(page) {
   const navItem = document.querySelector(`.sidebar-item[data-page="${page}"]`);
   if (navItem) navItem.classList.add('active');
   document.getElementById(`page-${page}`).classList.add('active');
+  // 주소에 남겨 두어 새로고침·북마크·링크 공유가 되도록 한다 (예: /#live)
+  try { if (location.hash !== '#' + page) history.replaceState(null, '', '#' + page); } catch (e) {}
 }
+
+// URL 해시로 특정 페이지를 바로 열기 — /#live 로 라이브 송출 화면 직접 접근
+function applyHashPage() {
+  const p = (location.hash || '').replace(/^#/, '');
+  if (p && document.getElementById('page-' + p)) navigateTo(p);
+}
+window.addEventListener('hashchange', applyHashPage);
+applyHashPage();
 
 // ═══════════════════════════════════════════════════════════
 // Data Refresh

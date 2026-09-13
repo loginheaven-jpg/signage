@@ -113,6 +113,20 @@ header .sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
   font-family: inherit;
 }
 .big-btn:disabled { opacity: 0.45; box-shadow: none; }
+/* 막힌 상태 — 비활성(disabled)이 아니라 "이유가 적힌 누를 수 있는 버튼".
+   눌러서 서버 상태를 다시 확인할 수 있어야 한다. */
+.big-btn.blocked {
+  background: var(--card2);
+  border: 1px solid rgba(255,255,255,0.14);
+  box-shadow: none;
+  color: var(--dim);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+  flex-direction: column;
+  gap: 4px;
+}
+.big-btn.blocked .tap { font-size: 12px; color: #6b7280; font-weight: 400; }
 .big-btn.sub {
   background: var(--card2);
   border: 1px solid var(--line);
@@ -258,28 +272,74 @@ let sites = [];
 let liveEnabled = false;
 let cancelSec = 60;
 let busy = false;
+// 막힌 이유 ({ label, detail }) 또는 null. 막혀도 버튼은 누를 수 있고,
+// 누르면 서버 상태를 다시 확인한다.
+let block = null;
+let recheckTimer = null;
 
 const el = id => document.getElementById(id);
+
+// 버튼 표시 갱신 — 업로드 중(busy)에만 실제 disabled, 막힌 상태는 이유를 적어 보여준다
+function applyButtons() {
+  const shoot = el('shootBtn');
+  const gal = el('galleryBtn');
+  shoot.disabled = busy;
+  gal.disabled = busy;   // 막힌 상태에서도 눌러서 재확인할 수 있어야 한다
+  shoot.classList.toggle('blocked', !!block);
+  gal.classList.toggle('blocked', !!block);
+  if (block) {
+    shoot.innerHTML = '🚫 ' + escapeHtml(block.label) + '<span class="tap">눌러서 다시 확인</span>';
+    gal.textContent = '🖼 앨범에서 고르기';
+  } else {
+    shoot.innerHTML = '📷 촬영하고 바로 올리기';
+    gal.textContent = '🖼 앨범에서 고르기';
+  }
+}
+
+function setBlock(info) {
+  block = info || null;
+  applyButtons();
+  if (block && block.detail) showBanner(block.kind || 'warn', block.detail);
+  else hideBanner();
+  // 막힌 동안에는 주기적으로 다시 확인 — 관리자가 스위치를 켜면 저절로 풀린다
+  if (block && token) startRecheck();
+  else stopRecheck();
+}
+
+function startRecheck() {
+  if (recheckTimer) return;
+  recheckTimer = setInterval(() => { init(true); }, 15000);
+}
+function stopRecheck() {
+  if (recheckTimer) { clearInterval(recheckTimer); recheckTimer = null; }
+}
 
 // ═══════════════════════════════════════════════════════════
 // 초기 로드
 // ═══════════════════════════════════════════════════════════
-async function init() {
+// quiet=true 면 자동 재확인(주기 폴링) — 이름 묻기 같은 방해 동작을 하지 않는다
+async function init(quiet) {
   if (!token) {
-    showBanner('err', '이 페이지는 관리자가 준 링크로 열어야 합니다. (링크에 <b>?t=</b> 부분이 필요합니다)');
-    setComposerEnabled(false);
+    setBlock({
+      label: '링크가 필요합니다',
+      kind: 'err',
+      detail: '이 페이지는 관리자가 준 링크로 열어야 합니다. (링크에 <b>?t=</b> 부분이 필요합니다)'
+    });
     return;
   }
 
-  if (!uploaderName) askName(true);
+  if (!uploaderName && !quiet) askName(true);
   renderWhoami();
 
   try {
     const res = await fetch(`/live/api/hello?t=${encodeURIComponent(token)}`);
     const data = await res.json();
     if (!res.ok) {
-      showBanner('err', data.error || '링크가 유효하지 않습니다.');
-      setComposerEnabled(false);
+      setBlock({
+        label: '링크를 다시 받아주세요',
+        kind: 'err',
+        detail: data.error || '링크가 유효하지 않습니다.'
+      });
       return;
     }
     sites = data.sites || [];
@@ -287,21 +347,29 @@ async function init() {
     cancelSec = data.cancelSec || 60;
 
     if (!liveEnabled) {
-      showBanner('warn', '지금은 <b>라이브 송출이 꺼져 있습니다.</b> 관리자가 켜면 바로 올릴 수 있습니다.');
-      setComposerEnabled(false);
+      setBlock({
+        label: '지금은 송출이 꺼져 있습니다',
+        kind: 'warn',
+        detail: '관리자가 <b>라이브 송출</b>을 켜면 바로 올릴 수 있습니다. 켜지는지 자동으로 확인하고 있습니다.'
+      });
     } else if (!sites.length) {
-      showBanner('warn', '등록된 모니터가 없습니다. 관리자에게 문의해 주세요.');
-      setComposerEnabled(false);
+      setBlock({
+        label: '등록된 모니터가 없습니다',
+        kind: 'warn',
+        detail: '보낼 수 있는 모니터가 없습니다. 관리자에게 문의해 주세요.'
+      });
     } else {
-      hideBanner();
-      setComposerEnabled(true);
+      setBlock(null);
     }
 
     restoreTarget();
     renderSiteList();
   } catch (e) {
-    showBanner('err', '서버에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.');
-    setComposerEnabled(false);
+    setBlock({
+      label: '서버에 연결할 수 없습니다',
+      kind: 'err',
+      detail: '인터넷 연결을 확인해 주세요. 자동으로 다시 시도합니다.'
+    });
   }
 }
 
@@ -384,8 +452,32 @@ function selectSite(id) {
 // ═══════════════════════════════════════════════════════════
 // 촬영 → 리사이즈 → 업로드
 // ═══════════════════════════════════════════════════════════
-function pickPhoto() { el('fileInput').value = ''; el('fileInput').click(); }
-function pickFromGallery() { el('galleryInput').value = ''; el('galleryInput').click(); }
+async function pickPhoto() {
+  // 막힌 상태에서 누르면: 서버 상태를 다시 확인하고, 풀렸으면 바로 카메라를 연다
+  if (block) {
+    const prev = block.label;
+    el('shootBtn').innerHTML = '확인 중...';
+    await init(true);
+    if (block) {
+      // 여전히 막혀 있음 — 이유가 화면에 그대로 보이므로 추가 안내만 짧게
+      if (block.label === prev) showBanner(block.kind || 'warn', block.detail + ' <b>(방금 확인함)</b>');
+      return;
+    }
+  }
+  if (!ls(LS.siteId)) {
+    alert('먼저 송출할 모니터를 선택해 주세요.');
+    el('siteList').classList.add('show');
+    return;
+  }
+  el('fileInput').value = '';
+  el('fileInput').click();
+}
+
+function pickFromGallery() {
+  if (block) return pickPhoto();
+  el('galleryInput').value = '';
+  el('galleryInput').click();
+}
 
 el('fileInput').addEventListener('change', e => handleFile(e.target.files[0]));
 el('galleryInput').addEventListener('change', e => handleFile(e.target.files[0]));
@@ -495,8 +587,9 @@ function resetComposer() {
   el('preview').classList.remove('show');
   el('previewImg').removeAttribute('src');
   el('composer').style.display = '';
-  setComposerEnabled(liveEnabled);
-  init(); // 사이트 온라인 상태 갱신
+  busy = false;
+  applyButtons();
+  init(true); // 사이트 온라인 상태 및 송출 ON/OFF 갱신
 }
 
 function showStatus(kind, html) {
@@ -507,8 +600,8 @@ function showStatus(kind, html) {
 }
 
 function setComposerEnabled(on) {
-  el('shootBtn').disabled = !on;
-  el('galleryBtn').disabled = !on;
+  busy = !on;
+  applyButtons();
 }
 
 function showBanner(kind, html) {
