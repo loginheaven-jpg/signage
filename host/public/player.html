@@ -125,6 +125,107 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font
   z-index: 200;
 }
 .fullscreen-btn:hover { background: rgba(255,255,255,0.2); }
+
+/* ═══════════════════════════════════════════════════════
+   라이브 레이어 — 폰에서 올린 사진을 편성표 "위에" 띄운다.
+   (client/player.html 의 라이브 레이어와 같은 동작. 두 플레이어는
+    원래 독립 파일이라 전환 CSS 처럼 각자 사본을 갖는다)
+   ═══════════════════════════════════════════════════════ */
+#live-layer { position: fixed; inset: 0; z-index: 150; display: none; pointer-events: none; }
+#live-layer.on { display: block; }
+
+#live-stage {
+  position: absolute; inset: 0;
+  background: #000;
+  overflow: hidden;
+  border-radius: 0;
+  transform-origin: 100% 100%;
+  transition: transform 0.9s cubic-bezier(.4,0,.2,1), border-radius 0.9s ease,
+              box-shadow 0.9s ease, opacity 0.7s ease;
+}
+#live-stage.corner {
+  transform: translate(-2.2vw, -2.2vh) scale(0.27);
+  border-radius: 40px;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.75), 0 0 0 4px rgba(255,255,255,0.16);
+}
+#live-stage.gone { opacity: 0; }
+
+.lphoto { position: relative; overflow: hidden; background: #000; }
+.lphoto .lbg {
+  position: absolute; inset: -10%;
+  background-size: cover; background-position: center;
+  filter: blur(30px) brightness(0.4);
+  transform: scale(1.08);
+}
+.lphoto img { position: relative; width: 100%; height: 100%; object-fit: contain; display: block; }
+.lphoto .lcap {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(to top, rgba(0,0,0,0.86) 10%, rgba(0,0,0,0));
+  color: #fff;
+  font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
+  font-weight: 700;
+  line-height: 1.35;
+  word-break: keep-all;
+  text-shadow: 0 2px 16px rgba(0,0,0,0.85);
+}
+
+#live-hero {
+  position: absolute; inset: 0; z-index: 2;
+  opacity: 0;
+  transition: opacity 0.45s ease, transform 0.7s cubic-bezier(.4,0,.2,1);
+}
+#live-hero.in { opacity: 1; }
+#live-hero.out { opacity: 0; transform: scale(0.93); }
+#live-hero .lphoto { width: 100%; height: 100%; }
+#live-hero .lcap {
+  font-size: 3vw;
+  padding: 2.4vh 4vw 3.4vh;
+  border-left: 0.45vw solid #4c8dff;
+  margin-left: 3.2vw;
+  padding-left: 2vw;
+}
+
+#live-grid {
+  position: absolute; inset: 0; z-index: 1;
+  display: grid; gap: 0.5vh;
+  background: #000;
+  opacity: 0;
+  transition: opacity 0.55s ease;
+}
+#live-grid.in { opacity: 1; }
+#live-grid[data-n="1"] { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+#live-grid[data-n="2"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+#live-grid[data-n="3"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+#live-grid[data-n="3"] .lphoto:first-child { grid-row: span 2; }
+#live-grid[data-n="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+#live-grid .lphoto .lcap { font-size: 1.5vw; padding: 5% 6% 6%; }
+#live-grid[data-n="1"] .lphoto .lcap { font-size: 3vw; padding: 2.4vh 4vw 3.4vh; }
+#live-grid[data-n="2"] .lphoto .lcap { font-size: 2vw; padding: 4% 7% 5%; }
+#live-grid[data-n="3"] .lphoto:first-child .lcap { font-size: 2vw; }
+@keyframes lpop { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
+#live-grid .lphoto.pop { animation: lpop 0.55s cubic-bezier(.2,.8,.2,1) both; }
+
+#live-badge {
+  position: absolute; top: 3vh; left: 3vw; z-index: 3;
+  display: flex; align-items: center; gap: 0.8vw;
+  background: rgba(231,76,60,0.94);
+  color: #fff;
+  font-family: 'Segoe UI', sans-serif; font-weight: 800;
+  font-size: 1.4vw; letter-spacing: 0.14em;
+  padding: 0.8vh 1.6vw; border-radius: 100px;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.45);
+}
+#live-badge .rec {
+  width: 0.85vw; height: 0.85vw; border-radius: 50%; background: #fff;
+  animation: recblink 1.4s ease-in-out infinite;
+}
+@keyframes recblink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+#live-stage.corner #live-badge { font-size: 4.4vw; padding: 2.6vh 5.4vw; gap: 2.4vw; border-radius: 400px; }
+#live-stage.corner #live-badge .rec { width: 2.9vw; height: 2.9vw; }
+
+#live-flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 190; }
+#live-flash.fire { animation: lflash 0.5s ease-out; }
+@keyframes lflash { 0% { opacity: 0; } 12% { opacity: 0.9; } 100% { opacity: 0; } }
 </style>
 </head>
 <body>
@@ -166,6 +267,16 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font
   <div class="screen" id="screen1"></div>
   <div class="screen" id="screen2" style="display:none;"></div>
 </div>
+
+<!-- 라이브 레이어 (폰 촬영 사진) -->
+<div id="live-layer">
+  <div id="live-stage">
+    <div id="live-grid"></div>
+    <div id="live-hero"></div>
+    <div id="live-badge"><span class="rec"></span>LIVE</div>
+  </div>
+</div>
+<div id="live-flash"></div>
 
 <!-- 오버레이 -->
 <div class="info-overlay" id="infoOverlay"></div>
@@ -276,6 +387,7 @@ function handleMessage(msg) {
       break;
 
     case 'schedule_update':
+      webStopped = false;
       if (msg.schedule && msg.schedule.entries && msg.schedule.entries.length > 0) {
         applySchedule(msg.schedule);
       }
@@ -286,6 +398,7 @@ function handleMessage(msg) {
       break;
 
     case 'stop':
+      webStopped = true;
       stopPlayback();
       break;
 
@@ -295,6 +408,28 @@ function handleMessage(msg) {
 
     case 'sync_now':
       showInfo('🔄 동기화 명령 수신');
+      break;
+
+    // ─── 라이브 사진 (폰 촬영 → 즉시 송출) ────────────────
+    case 'live_photo':
+      if (webStopped) { showInfo('⏹ 멈춤 상태 — 라이브 사진 생략'); break; }
+      applyLiveSettings(msg.settings);
+      if (!msg.photo) break;
+      placeInSlot(msg.photo);
+      liveQueue.push(msg.photo);
+      armLiveReturn();
+      if (liveState === 'hero') shortenHero();
+      else liveDrive();
+      showInfo('📸 라이브 사진 수신' + (msg.photo.message ? ': ' + msg.photo.message : ''));
+      break;
+
+    case 'live_update':
+      applyLiveSettings(msg.settings);
+      if (msg.removedId) removeLivePhoto(msg.removedId);
+      break;
+
+    case 'live_clear':
+      endLive();
       break;
   }
 }
@@ -478,6 +613,231 @@ function stopPlayback() {
   updateStatus('호스트 연결됨 — 재생 대기 중', 'green');
   showInfo('⏹ 정지');
   reportPlaying(null);
+}
+
+// ═══════════════════════════════════════════════════════
+// 라이브 레이어 — 폰 촬영 사진
+//   히어로(새 사진 풀스크린) → 그리드(최근 사진 1/2/3/4 적응 배치)
+//   새 사진이 오면 다시 히어로. 무입력이 이어지면 코너로 축소된 뒤 소멸.
+//   편성표 재생 루프는 이 레이어 아래에서 계속 돌고 있다.
+//   (client/player.html 의 라이브 레이어와 같은 동작 — 두 플레이어는 독립 파일)
+// ═══════════════════════════════════════════════════════
+const LIVE_DEFAULTS = { heroMs: 8000, heroBusyMs: 4000, returnMs: 50000, cornerMs: 120000, gridMax: 4 };
+const LIVE_HERO_MIN_MS = 1200;
+const LIVE_RETURN_MIN_MS = 5000;
+
+let webStopped = false;      // 호스트에서 '멈추기' 를 받은 상태
+let liveSettings = Object.assign({}, LIVE_DEFAULTS);
+let liveSlots = [];
+let liveSlotCursor = 0;
+let liveQueue = [];
+let liveState = 'off';       // off | hero | grid | corner
+let liveHeroTimer = null;
+let liveHeroStartedAt = 0;
+let liveHeroFullMs = 0;
+let liveReturnTimer = null;
+let liveCornerTimer = null;
+let liveGoneTimer = null;
+
+function liveEl(id) { return document.getElementById(id); }
+
+function applyLiveSettings(s) {
+  if (s) liveSettings = Object.assign({}, LIVE_DEFAULTS, s);
+}
+
+// 칸 배치: 최대 칸수까지는 칸을 늘리고, 가득 차면 가장 오래된 칸을 제자리 교체
+function placeInSlot(photo) {
+  const max = Math.max(1, Math.min(4, liveSettings.gridMax || 4));
+  if (liveSlots.length < max) {
+    liveSlots.push(photo);
+    liveSlotCursor = liveSlots.length % max;
+  } else {
+    liveSlots[liveSlotCursor] = photo;
+    liveSlotCursor = (liveSlotCursor + 1) % max;
+  }
+}
+
+function removeLivePhoto(id) {
+  liveQueue = liveQueue.filter(function (p) { return p.id !== id; });
+  const idx = liveSlots.findIndex(function (p) { return p && p.id === id; });
+  if (idx === -1) return;
+  liveSlots.splice(idx, 1);
+  if (liveSlotCursor > liveSlots.length) liveSlotCursor = liveSlots.length;
+  if (!liveSlots.length) { endLive(); return; }
+  if (liveState === 'hero' && liveEl('live-hero').dataset.photoId === id) {
+    clearTimeout(liveHeroTimer);
+    heroDone();
+  } else if (liveState === 'grid' || liveState === 'corner') {
+    renderLiveGrid(-1);
+  }
+}
+
+function liveDrive() {
+  if (!liveSlots.length) { endLive(); return; }
+  // 3장 이상 한꺼번에 도착 — 히어로를 건너뛰고 바로 그리드로 (풀스크린 홍수 방지)
+  if (liveQueue.length >= 3) {
+    liveQueue.length = 0;
+    showLiveGrid();
+    return;
+  }
+  const next = liveQueue.shift();
+  if (!next) { showLiveGrid(); return; }
+  showLiveHero(next, liveQueue.length > 0 ? liveSettings.heroBusyMs : liveSettings.heroMs);
+}
+
+function liveOn() {
+  clearTimeout(liveGoneTimer);
+  const stage = liveEl('live-stage');
+  stage.classList.remove('corner', 'gone');
+  liveEl('live-layer').classList.add('on');
+  if (liveCornerTimer) { clearTimeout(liveCornerTimer); liveCornerTimer = null; }
+}
+
+function livePhotoEl(photo, extraClass) {
+  // hostBaseUrl 은 connectToHost() 에서 설정되지만, 그에 의존하지 않도록 origin 으로 폴백
+  const base = hostBaseUrl || location.origin || '';
+  const url = /^https?:\/\//i.test(photo.url) ? photo.url : base + photo.url;
+  const box = document.createElement('div');
+  box.className = 'lphoto' + (extraClass ? ' ' + extraClass : '');
+
+  const bg = document.createElement('div');
+  bg.className = 'lbg';
+  // 세로 사진(폰 기본)이 가로 화면에서 좌우로 비지 않도록 같은 사진을 블러 배경으로 깐다
+  bg.style.backgroundImage = 'url("' + url.replace(/"/g, '%22') + '")';
+  box.appendChild(bg);
+
+  const img = document.createElement('img');
+  img.src = url;
+  box.appendChild(img);
+
+  if (photo.message) {
+    const cap = document.createElement('div');
+    cap.className = 'lcap';
+    cap.textContent = photo.message;
+    box.appendChild(cap);
+  }
+  return box;
+}
+
+function showLiveHero(photo, ms) {
+  liveState = 'hero';
+  liveOn();
+
+  const hero = liveEl('live-hero');
+  hero.innerHTML = '';
+  hero.dataset.photoId = photo.id || '';
+  hero.classList.remove('in', 'out');
+  hero.appendChild(livePhotoEl(photo));
+
+  // 셔터 플래시
+  const flash = liveEl('live-flash');
+  flash.classList.remove('fire');
+  void flash.offsetWidth;
+  flash.classList.add('fire');
+
+  requestAnimationFrame(function () { requestAnimationFrame(function () { hero.classList.add('in'); }); });
+
+  clearTimeout(liveHeroTimer);
+  liveHeroFullMs = Math.max(LIVE_HERO_MIN_MS, ms || LIVE_DEFAULTS.heroMs);
+  liveHeroStartedAt = Date.now();
+  liveHeroTimer = setTimeout(heroDone, liveHeroFullMs);
+}
+
+// 히어로 중 새 사진이 도착하면 현재 히어로를 '대기 있을 때' 시간으로 줄인다
+function shortenHero() {
+  if (liveState !== 'hero') return;
+  const busy = Math.max(LIVE_HERO_MIN_MS, liveSettings.heroBusyMs || LIVE_DEFAULTS.heroBusyMs);
+  const elapsed = Date.now() - liveHeroStartedAt;
+  const target = Math.max(600, busy - elapsed);
+  if (target >= liveHeroFullMs - elapsed) return;
+  clearTimeout(liveHeroTimer);
+  liveHeroFullMs = elapsed + target;
+  liveHeroTimer = setTimeout(heroDone, target);
+}
+
+function heroDone() {
+  if (liveQueue.length) { liveDrive(); return; }
+  showLiveGrid();
+}
+
+function showLiveGrid() {
+  if (!liveSlots.length) { endLive(); return; }
+  liveState = 'grid';
+  liveOn();
+
+  const newestIdx = liveSlots.length ? (liveSlotCursor - 1 + liveSlots.length) % liveSlots.length : -1;
+  renderLiveGrid(newestIdx);
+
+  const hero = liveEl('live-hero');
+  hero.classList.remove('in');
+  hero.classList.add('out');
+  setTimeout(function () {
+    if (liveState === 'hero') return;   // 그 사이 새 히어로가 떴으면 건드리지 않는다
+    hero.innerHTML = '';
+    hero.classList.remove('out');
+    hero.dataset.photoId = '';
+  }, 700);
+}
+
+function renderLiveGrid(popIndex) {
+  const grid = liveEl('live-grid');
+  grid.innerHTML = '';
+  grid.dataset.n = String(liveSlots.length);
+  liveSlots.forEach(function (photo, i) {
+    if (!photo) return;
+    grid.appendChild(livePhotoEl(photo, i === popIndex ? 'pop' : ''));
+  });
+  requestAnimationFrame(function () { grid.classList.add('in'); });
+}
+
+// 무입력 복귀 타이머 — 새 사진이 올 때마다 다시 센다
+function armLiveReturn() {
+  clearTimeout(liveReturnTimer);
+  clearTimeout(liveCornerTimer);
+  liveCornerTimer = null;
+  liveEl('live-stage').classList.remove('corner');
+  liveReturnTimer = setTimeout(toLiveCorner, Math.max(LIVE_RETURN_MIN_MS, liveSettings.returnMs || LIVE_DEFAULTS.returnMs));
+}
+
+// 편성표로 복귀 — 뚝 끊지 않고 코너에 잠시 축소되어 남는다
+function toLiveCorner() {
+  const cornerMs = liveSettings.cornerMs;
+  if (!cornerMs || cornerMs <= 0) { endLive(); return; }
+  if (liveState === 'hero') {
+    clearTimeout(liveHeroTimer);
+    showLiveGrid();
+  }
+  liveState = 'corner';
+  liveEl('live-stage').classList.add('corner');
+  liveCornerTimer = setTimeout(endLive, cornerMs);
+}
+
+function endLive() {
+  clearTimeout(liveHeroTimer);
+  clearTimeout(liveReturnTimer);
+  clearTimeout(liveCornerTimer);
+  liveHeroTimer = liveReturnTimer = liveCornerTimer = null;
+
+  liveState = 'off';
+  liveQueue = [];
+  liveSlots = [];
+  liveSlotCursor = 0;
+
+  const stage = liveEl('live-stage');
+  stage.classList.add('gone');
+  clearTimeout(liveGoneTimer);
+  liveGoneTimer = setTimeout(function () {
+    liveEl('live-layer').classList.remove('on');
+    stage.classList.remove('corner', 'gone');
+    const grid = liveEl('live-grid');
+    grid.innerHTML = '';
+    grid.classList.remove('in');
+    grid.removeAttribute('data-n');
+    const hero = liveEl('live-hero');
+    hero.innerHTML = '';
+    hero.classList.remove('in', 'out');
+    hero.dataset.photoId = '';
+  }, 750);
 }
 
 // ─── UI 헬퍼 ────────────────────────────────────────────

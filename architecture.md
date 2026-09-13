@@ -36,7 +36,7 @@ signage/
 │   ├── public/
 │   │   ├── index.html       ← 호스트 관리 UI (SPA)
 │   │   ├── m.html           ← 폰 촬영·업로드 페이지 (라이브 송출, 토큰 기반)
-│   │   └── player.html      ← 웹 브라우저 테스트 플레이어
+│   │   └── player.html      ← 웹 브라우저 테스트 플레이어 (라이브 레이어 포함)
 │   └── data/
 │       ├── sites.json       ← 사이트 목록 (동적 생성)
 │       ├── schedule.json    ← 편성표 데이터
@@ -538,7 +538,7 @@ Railway 배포 환경에서는 파일 시스템이 ephemeral이므로, 재배포
 | 관리자 인증 | 구현 | ADMIN_PASSWORD 설정 시 HTTP Basic 인증. WebSocket 구독(읽기 전용 알림)은 미인증 |
 | 라이브 사진 승인 | 미적용(의도) | 즉시성을 위해 사전 승인을 두지 않는다. 대신 마스터 스위치·토큰(재발급 가능)·업로더 기록·사후 즉시 철회로 대응 (§4.9) |
 | 라이브 QR | 보조 | 관리 UI 에서 CDN(cdnjs) 라이브러리로 브라우저에서만 생성한다(토큰 외부 전송 없음). 오프라인이면 링크 복사로 대체 |
-| 웹 플레이어 | 보조 | host/public/player.html은 테스트용, 실 운영은 Electron 클라이언트 |
+| 웹 플레이어 | 보조 | host/public/player.html은 테스트용, 실 운영은 Electron 클라이언트. 라이브 레이어는 두 플레이어 모두 지원(각자 사본 보유 — 전환 CSS 와 같은 기존 패턴) |
 | HTTPS WebSocket | 자동 | Railway가 TLS 처리, 클라이언트는 wss:// 자동 사용 |
 
 ---
