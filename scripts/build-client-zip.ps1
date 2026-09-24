@@ -16,7 +16,7 @@ $staging   = Join-Path $env:TEMP ('signage-client-' + [guid]::NewGuid().ToString
 # 한글 파일명(사용설명서.txt)은 이 스크립트의 인코딩에 따라 직접 매칭이 깨질 수 있으므로
 # 아래 $includePatterns 의 와일드카드로 포함한다.
 $include = @(
-  'main.js', 'preload.js',
+  'main.js', 'preload.js', 'live-delivery.js',
   'setup.html', 'waiting.html', 'player.html',
   'package.json',
   'install.bat', 'start.bat', 'uninstall.bat'
@@ -25,6 +25,7 @@ $includePatterns = @('*.txt')
 
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 New-Item -ItemType Directory -Force -Path $outDir  | Out-Null
+Copy-Item -LiteralPath (Join-Path $clientDir 'live-delivery.js') -Destination (Join-Path $root 'host\public\live-delivery.js') -Force
 
 foreach ($f in $include) {
   $src = Join-Path $clientDir $f
@@ -46,7 +47,10 @@ foreach ($pat in $includePatterns) {
 
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath -Force
-Remove-Item $staging -Recurse -Force
+$resolvedStaging = [System.IO.Path]::GetFullPath($staging)
+$resolvedTemp = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+if (-not $resolvedStaging.StartsWith($resolvedTemp, [StringComparison]::OrdinalIgnoreCase)) { throw 'Staging path is outside TEMP' }
+Remove-Item -LiteralPath $resolvedStaging -Recurse -Force
 
 $size = [math]::Round((Get-Item $zipPath).Length / 1KB, 1)
 Write-Host "완료: $zipPath ($size KB)"

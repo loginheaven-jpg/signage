@@ -718,12 +718,52 @@ function pushLive(siteId, msg) {
   const data = JSON.stringify(msg);
   let n = 0;
   clients.forEach((info) => {
-    if (info.siteId === siteId && info.ws.readyState === WebSocket.OPEN) { info.ws.send(data); n++; }
+    if (info.approved && info.siteId === siteId && info.ws.readyState === WebSocket.OPEN) {
+      try { info.ws.send(data); n++; }
+      catch (e) { console.warn('[Live] 전송 실패:', e.message); }
+    }
   });
   return n;
 }
 
+// Socket 연결과 렌더러 준비는 다르다. 준비 완료/재접속 후 빠진 사진을 복원한다.
+// 이미 표시한 사진은 반복하지 않고, 현재 라이브 시간 안에서만 재전송한다.
+function syncLiveClient(info) {
+  if (!liveConfig.enabled || !info.approved || !info.liveReady || info.ws.readyState !== WebSocket.OPEN) return;
+  const session = liveSessions.get(info.siteId);
+  if (!session || Date.now() - session.lastAt > liveConfig.settings.returnMs) return;
+  for (const photo of session.photos) {
+    if (Date.now() - photo.ts > liveConfig.settings.returnMs) continue;
+    if (info.liveSeen.has(photo.id)) continue;
+    const previous = info.liveAttempts.get(photo.id);
+    if (previous && (previous.count >= 6 || Date.now() - previous.at < 5000)) continue;
+    info.liveAttempts.set(photo.id, { at: Date.now(), count: (previous?.count || 0) + 1 });
+    try {
+      info.ws.send(JSON.stringify({ type: 'live_photo',
+        photo: { id: photo.id, url: photo.url, message: photo.message, ts: photo.ts, batchTotal: photo.batchTotal },
+        settings: liveConfig.settings }));
+    } catch (e) { console.warn('[Live] 복원 전송 실패:', e.message); }
+  }
+}
+
+setInterval(() => { clients.forEach(syncLiveClient); }, 5000);
+
+function recordLiveResult(info, photoId, status) {
+  if (!info.approved || !['displayed', 'image_error', 'stopped'].includes(status)) return;
+  const photo = liveSessions.get(info.siteId)?.photos.find(p => p.id === photoId);
+  if (!photo) return;
+  if (!photo.delivery) photo.delivery = new Map();
+  photo.delivery.set(info.clientId, status);
+  if (status === 'displayed') info.liveSeen.add(photoId);
+  else info.liveSeen.delete(photoId);
+  console.log(`[Live] 표시 결과: ${photoId} / ${info.name} / ${status}`);
+}
+
 function liveDeleteFile(photo) {
+  clients.forEach(info => {
+    info.liveSeen?.delete(photo.id);
+    info.liveAttempts?.delete(photo.id);
+  });
   try {
     const p = path.join(LIVE_DIR, photo.filename);
     if (fs.existsSync(p)) fs.unlinkSync(p);
@@ -786,6 +826,23 @@ app.get('/live/api/hello', (req, res) => {
     msgMax: LIVE_MSG_MAX,
     cancelSec: liveConfig.settings.cancelSec
   });
+});
+
+app.get('/live/api/delivery', (req, res) => {
+  if (!checkLiveToken(req)) return res.status(401).json({ error: '링크가 유효하지 않습니다.' });
+  res.set('Cache-Control', 'no-store');
+  const ids = new Set(String(req.query.ids || '').split(',').slice(0, 12));
+  const photos = [];
+  liveSessions.forEach((session, siteId) => {
+    const online = Array.from(clients.values()).filter(c => c.approved && c.siteId === siteId && c.ws.readyState === WebSocket.OPEN).length;
+    session.photos.forEach(p => {
+      if (!ids.has(p.id)) return;
+      const results = Array.from(p.delivery?.values() || []);
+      photos.push({ id: p.id, online, displayed: results.filter(s => s === 'displayed').length,
+        errors: results.filter(s => s !== 'displayed') });
+    });
+  });
+  res.json({ photos });
 });
 
 // 사진 업로드 → 지정 사이트로 즉시 송출
@@ -1031,6 +1088,8 @@ setInterval(() => {
 // ─── WebSocket ──────────────────────────────────────────
 wss.on('connection', (ws) => {
   console.log('[WS] 새 연결 수립');
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
 
   ws.on('message', (data) => {
     try {
@@ -1048,7 +1107,8 @@ wss.on('connection', (ws) => {
         const assignedSiteId = wasApproved ? (approvedClients[clientId].siteId || siteId) : siteId;
 
         clients.set(clientId, {
-          ws, name: clientName, monitors, siteId: assignedSiteId,
+          ws, clientId, name: clientName, monitors, siteId: assignedSiteId,
+          liveReady: false, liveSeen: new Set(), liveAttempts: new Map(),
           lastSeen: new Date().toISOString(),
           scheduleVersion, currentPlaying: null,
           approved: wasApproved
@@ -1075,6 +1135,22 @@ wss.on('connection', (ws) => {
         }
 
         broadcastToAdmins({ type: 'client_update' });
+      }
+
+      if (msg.type === 'live_ready' || msg.type === 'live_result') {
+        // 결과는 clientId 자기신고가 아닌, 이 소켓에 등록된 화면에 연결한다.
+        const info = Array.from(clients.values()).find(c => c.ws === ws);
+        if (info && info.approved) {
+          if (msg.type === 'live_ready') {
+            info.liveReady = true;
+            info.liveSeen = new Set();
+            info.liveAttempts.clear();
+            for (const id of (Array.isArray(msg.seen) ? msg.seen.slice(-100) : [])) recordLiveResult(info, id, 'displayed');
+            syncLiveClient(info);
+          } else {
+            recordLiveResult(info, msg.photoId, msg.status);
+          }
+        }
       }
 
       if (msg.type === 'heartbeat') {
@@ -1111,6 +1187,14 @@ wss.on('connection', (ws) => {
 });
 
 // ─── 헬퍼 함수 ──────────────────────────────────────────
+// Wi-Fi 단절 등 close 이벤트가 늦는 연결도 정리해 클라이언트 재접속을 유도한다.
+setInterval(() => {
+  wss.clients.forEach(socket => {
+    if (!socket.isAlive) { socket.terminate(); return; }
+    socket.isAlive = false;
+    if (socket.readyState === WebSocket.OPEN) socket.ping();
+  });
+}, 30000);
 
 function broadcastToAdmins(msg) {
   const data = JSON.stringify(msg);

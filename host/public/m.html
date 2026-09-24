@@ -666,9 +666,7 @@ function showUploadResult(r) {
   }
 
   const where = escapeHtml(r.siteName || '');
-  const detail = r.screens > 0
-    ? `${where} 화면에 지금 떴습니다.`
-    : `${where} 는 지금 꺼져 있어 화면에 나오지 않았습니다.`;
+  const detail = `${where} · 서버에 저장했습니다. 모니터 표시 여부를 확인하고 있습니다.`;
 
   const notes = [];
   if (r.failed.length) notes.push(`${r.failed.length}장은 올리지 못했습니다 (${escapeHtml(r.failed[0])})`);
@@ -677,8 +675,8 @@ function showUploadResult(r) {
 
   showStatus('ok', `
     <div class="big">✅</div>
-    <div class="t">${n > 1 ? n + '장 올렸어요!' : '화면에 나왔어요!'}</div>
-    <div class="d">${detail}<br>${n > 1
+    <div class="t">${n > 1 ? n + '장 저장했어요!' : '사진을 저장했어요!'}</div>
+    <div class="d"><span id="deliveryStatus">${detail}</span><br>${n > 1
       ? '고른 순서대로 한 장씩 크게 보인 뒤 함께 배치됩니다.'
       : '잠시 크게 보인 뒤 다른 사진들과 함께 배치됩니다.'}
       ${notes.length ? '<br><span style="color:#e0a066">' + notes.join(' · ') + '</span>' : ''}</div>
@@ -686,6 +684,7 @@ function showUploadResult(r) {
     <button class="big-btn danger" style="margin-top:10px" id="cancelBtn">${n > 1 ? n + '장 모두 ' : ''}취소하기 (<span id="cdown">${cancelSec}</span>초)</button>
   `);
 
+  watchDelivery(r.done.map(p => p.id));
   const btn = el('cancelBtn');
   let left = cancelSec;
   const timer = setInterval(() => {
@@ -715,6 +714,42 @@ function showUploadResult(r) {
       btn.textContent = lastErr || '취소할 수 없습니다';
     }
   };
+}
+
+async function watchDelivery(ids) {
+  const label = el('deliveryStatus');
+  if (!label) return;
+  const end = Date.now() + 45000;
+  while (label.isConnected && Date.now() < end) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const res = await fetch(`/live/api/delivery?t=${encodeURIComponent(token)}&ids=${encodeURIComponent(ids.join(','))}`,
+        { signal: controller.signal, cache: 'no-store' });
+      if (!res.ok) throw new Error('status unavailable');
+      const data = await res.json();
+      if (!label.isConnected) return;
+      const photos = data.photos || [];
+      const displayed = photos.filter(p => p.displayed > 0).length;
+      if (displayed === ids.length) {
+        label.textContent = `${displayed}장 · 모니터 플레이어에서 이미지 표시를 확인했습니다.`;
+        return;
+      }
+      if (photos.some(p => p.errors.includes('stopped'))) {
+        label.textContent = '서버 저장 완료 · 모니터가 멈춤 상태입니다. 모니터에서 재생을 시작해 주세요.';
+      } else if (photos.some(p => p.errors.includes('image_error'))) {
+        label.textContent = '서버 저장 완료 · 모니터가 사진을 불러오지 못했습니다. 재전송을 시도하고 있습니다.';
+      } else if (photos.length && photos.every(p => p.online === 0)) {
+        label.textContent = '서버 저장 완료 · 연결된 모니터가 없습니다. 연결이 복구되면 라이브 시간 안에서 다시 보냅니다.';
+      } else {
+        label.textContent = `서버 저장 완료 · ${displayed}/${ids.length}장 표시 확인. 나머지 사진의 표시 응답을 기다립니다.`;
+      }
+    } catch (e) {
+      if (label.isConnected) label.textContent = '서버 저장 완료 · 모니터 표시 상태를 조회하지 못했습니다.';
+    } finally { clearTimeout(timer); }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  if (label.isConnected) label.textContent += ' 표시가 확인되지 않으면 모니터 연결과 설치형 프로그램 업데이트를 확인해 주세요.';
 }
 
 // busy 는 잠깁니다 — 어떤 이유로든 해제되지 않으면 이후 모든 촬영이 조용히 무시되므로
@@ -782,8 +817,9 @@ async function resizeImage(file, maxEdge, quality) {
 
   const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
   if (!blob) throw new Error('이미지 변환 실패');
-  // 리사이즈 결과가 원본보다 크면(작은 원본) 원본을 그대로 보낸다
-  return (blob.size < file.size || file.size > 3 * 1024 * 1024) ? blob : file;
+  // 전송 파일명은 photo.jpg다. 작은 HEIC 원본을 되돌리면 폰에서는 읽혀도
+  // 설치형 Chromium 플레이어에서는 디코딩되지 않을 수 있으므로 JPEG를 유지한다.
+  return blob;
 }
 
 async function decodeImage(file) {

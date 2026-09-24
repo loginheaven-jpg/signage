@@ -149,6 +149,12 @@ signage/
 | GET | `/live/api/hello?t=토큰` | 송출 가능 모니터 목록 + 라이브 ON/OFF 상태 |
 | POST | `/live/api/photo` | 사진 업로드 (multipart: `photo`, `siteId`, `message`, `uploaderId`, `uploaderName`, `batchTotal`, `t`). 앨범에서 여러 장을 고른 경우 폰이 한 장씩 순서대로 전송하며 `batchTotal` 에 묶음 장수를 담는다(최대 12장, 서버는 30 으로 클램프) |
 | DELETE | `/live/api/photo/:id?t=&uploaderId=` | 업로더 본인 취소 (`cancelSec` 이내) |
+| GET | `/live/api/delivery?t=&ids=` | 사진별 플레이어 표시 확인 수, 온라인 화면 수, 이미지 오류/멈춤 상태 조회 |
+
+설치형 2.0.1 / 최신 웹 플레이어는 `live_ready`로 렌더러 준비와 이미 표시한 사진 ID를 보고한다.
+서버는 현재 라이브 세션(`returnMs` 이내)의 누락 사진을 복원하고, 표시 확인이 없으면 5초 간격으로 최대 6회 재전송한다.
+플레이어는 사진 ID로 중복을 제거하고 이미지 로드 후 화면에 배치되면 `live_result` (`displayed`, `image_error`, `stopped`)를 보고한다.
+기존 플레이어는 기존 송출은 유지되지만 표시 확인과 준비 완료 기반 복원을 사용하려면 프로그램 업데이트가 필요하다.
 
 #### 라이브 사진 — 관리용
 

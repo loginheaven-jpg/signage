@@ -241,6 +241,8 @@ function ensureSecondWindow() {
       nodeIntegration: false
     }
   });
+  const secondContents = secondWindow.webContents;
+  secondContents.on('did-start-loading', () => liveReadyWindows.delete(secondContents.id));
   secondWindow.loadFile('player.html', { query: { screen: '2' } });
   secondWindow.on('closed', () => { secondWindow = null; dualMonitor = false; });
   dualMonitor = true;
@@ -257,8 +259,35 @@ function closeSecondWindow() {
 // 단일 화면이면 주 창이 편성표 위에 오버레이로 띄운다.
 let liveOccupying = false;
 let playerStopped = false;   // 주 창이 "멈추기" 상태면 라이브도 띄우지 않는다
+const liveReadyWindows = new Set();
 
-ipcMain.on('player-stopped', (event, v) => { playerStopped = !!v; });
+function sendLiveMessage(message) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+}
+
+function requestLiveReady() {
+  liveTarget().forEach(w => {
+    if (liveReadyWindows.has(w.webContents.id)) w.webContents.send('live-ready-request');
+  });
+}
+
+ipcMain.on('live-delivery', (event, message) => {
+  if (!message || !['live_ready', 'live_result'].includes(message.type)) return;
+  if (message.type === 'live_ready') liveReadyWindows.add(event.sender.id);
+  if (!liveTarget().some(w => w.webContents === event.sender)) return;
+  if (message.type === 'live_ready' && playerStopped) return;
+  sendLiveMessage(message);
+});
+
+ipcMain.on('player-stopped', (event, v) => {
+  const wasStopped = playerStopped;
+  playerStopped = !!v;
+  if (playerStopped) {
+    liveTarget().forEach(w => w.webContents.send('live-clear'));
+    setLiveOccupy(false);
+  }
+  if (wasStopped && !playerStopped) requestLiveReady();
+});
 
 function liveTarget() {
   const useSecond = dualMonitor && secondWindow && !secondWindow.isDestroyed() && secondWindow.webContents;
@@ -278,12 +307,19 @@ function setLiveOccupy(on) {
 }
 
 function routeLive(channel, payload) {
-  if (playerStopped) { console.log('[Live] 멈춤 상태 — 라이브 사진 표출 생략'); return; }
+  if (playerStopped) {
+    if (payload?.photo) sendLiveMessage({ type: 'live_result', photoId: payload.photo.id, status: 'stopped' });
+    return;
+  }
   const targets = liveTarget();
   if (!targets.length) return;
   const onSecond = dualMonitor && targets[0] === secondWindow;
-  if (onSecond) setLiveOccupy(true);
-  targets.forEach(w => w.webContents.send(channel, payload));
+  targets.forEach(w => {
+    if (liveReadyWindows.has(w.webContents.id) && !w.webContents.isLoading()) {
+      if (onSecond) setLiveOccupy(true);
+      w.webContents.send(channel, payload);
+    }
+  });
 }
 
 // 보조 창의 라이브 레이어가 끝났다고 보고 → 2번 화면 점유 해제
@@ -335,6 +371,7 @@ function createWindow() {
       nodeIntegration: false
     }
   });
+  mainWindow.webContents.on('did-start-loading', () => liveReadyWindows.delete(mainWindow.webContents.id));
 
   // 페이지 로드가 끝나면 캐시된 편성표를 전달 (플레이어면 즉시 재생 시작)
   mainWindow.webContents.on('did-finish-load', () => {
@@ -499,6 +536,7 @@ function handleMessage(msg) {
       console.log(`[WS] 등록 완료: ${msg.clientId}`);
       config.clientId = msg.clientId;
       saveConfig();
+      requestLiveReady();
       break;
 
     case 'approved':
@@ -509,11 +547,16 @@ function handleMessage(msg) {
       saveConfig();
       
       // 플레이어 화면으로 전환
-      mainWindow.loadFile('player.html');
-      setTimeout(() => {
-        mainWindow.setFullScreen(true);
-        ensureSecondWindow();
-      }, 1000);
+      // A reconnect re-approves the same client. Reloading here discards live IPC
+      // listeners and photos already on screen while the socket remains online.
+      const alreadyPlaying = /\/player\.html(?:\?|$)/.test(mainWindow.webContents.getURL());
+      if (!alreadyPlaying) {
+        liveReadyWindows.delete(mainWindow.webContents.id);
+        mainWindow.loadFile('player.html');
+      }
+      mainWindow.setFullScreen(true);
+      ensureSecondWindow();
+      requestLiveReady();
       break;
 
     case 'rejected':

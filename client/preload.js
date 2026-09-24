@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('signage', {
   onLivePhoto: (callback) => ipcRenderer.on('live-photo', (e, data) => callback(data)),
   onLiveUpdate: (callback) => ipcRenderer.on('live-update', (e, data) => callback(data)),
   onLiveClear: (callback) => ipcRenderer.on('live-clear', () => callback()),
+  onLiveReadyRequest: (callback) => ipcRenderer.on('live-ready-request', () => callback()),
+  liveDelivery: (message) => ipcRenderer.send('live-delivery', message),
   // 듀얼 모니터에서 라이브가 2번 화면을 점유/해제했음을 주 창에 알림
   onLiveOccupy: (callback) => ipcRenderer.on('live-occupy', (e, data) => callback(data)),
   // 라이브 레이어가 끝났음을 메인 프로세스에 보고 (보조 창 → 주 창 점유 해제)

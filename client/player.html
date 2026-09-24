@@ -283,6 +283,7 @@ body.controls-visible { cursor: default; }
   <button id="btn-quit" class="danger" title="앱 종료 (Ctrl+Shift+Q)">⏻ 앱 종료</button>
 </div>
 
+<script src="live-delivery.js"></script>
 <script>
 const player = document.getElementById('player');
 const idleScreen = document.getElementById('idle-screen');
@@ -615,24 +616,36 @@ let liveHeroFullMs = 0;
 let liveReturnTimer = null;
 let liveCornerTimer = null;
 let liveGoneTimer = null;
+const liveDelivery = LiveDelivery.create({
+  send: message => window.signage.liveDelivery(message),
+  url: resolveUrl,
+  visible: img => liveLayer.classList.contains('on') &&
+    (img.closest('#live-hero') ? liveState === 'hero' : ['grid', 'corner'].includes(liveState))
+});
+window.signage.onLiveReadyRequest(() => liveDelivery.ready());
+configReady.then(() => {
+  if (!isSecondary) window.signage.setPlayerStopped(stopped);
+  liveDelivery.ready();
+});
 
 window.signage.onLivePhoto((data) => {
   configReady.then(() => {
     applyLiveSettings(data.settings);
-    if (!data.photo) return;
-    placeInSlot(data.photo);
-    liveQueue.push(data.photo);
-    armLiveReturn();
-    // 히어로 중이면 현재 히어로를 단축해 대기열을 빨리 흘리고,
-    // 아니면 즉시 시작한다(지연 없이 "찍자마자 뜬다").
-    if (liveState === 'hero') shortenHero();
-    else liveDrive();
+    liveDelivery.receive(data.photo, photo => {
+      placeInSlot(photo);
+      liveQueue.push(photo);
+      armLiveReturn();
+      // 히어로 중이면 현재 히어로를 단축해 대기열을 빨리 흘린다.
+      if (liveState === 'hero') shortenHero();
+      else liveDrive();
+    });
   });
 });
 
 window.signage.onLiveUpdate((data) => {
   applyLiveSettings(data.settings);
   if (!data.removedId) return;
+  liveDelivery.remove(data.removedId);
   liveQueue = liveQueue.filter(p => p.id !== data.removedId);
   const idx = liveSlots.findIndex(p => p && p.id === data.removedId);
   if (idx === -1) return;
@@ -715,6 +728,7 @@ function photoEl(photo, extraClass) {
   box.appendChild(bg);
 
   const img = document.createElement('img');
+  liveDelivery.bind(img, photo);
   img.src = url;
   box.appendChild(img);
 
@@ -821,6 +835,7 @@ function toLiveCorner() {
 }
 
 function endLive() {
+  liveDelivery.clear();
   clearTimeout(liveHeroTimer);
   clearTimeout(liveReturnTimer);
   clearTimeout(liveCornerTimer);
