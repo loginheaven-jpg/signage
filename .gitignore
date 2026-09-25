@@ -13,3 +13,4 @@ client/.signage/
 
 # 호스트 런타임 상태 (영구 볼륨/로컬에 저장, 저장소에 커밋하지 않음)
 host/data/*.json
+host/data/photo-archive/

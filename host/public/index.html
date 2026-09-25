@@ -347,6 +347,7 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
     <div class="subtitle">교회 디지털 사이니지 중앙 제어</div>
   </div>
   <div class="header-right">
+    <a class="btn" href="/photos" target="_blank" rel="noopener" style="background:#fff;color:#24354e;text-decoration:none;white-space:nowrap;">사진 보관함</a>
     <div class="sync-status" id="headerSync">
       <span class="sync-dot"></span>
       <span id="headerSyncText">연결 중...</span>
@@ -557,7 +558,7 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
           </div>
           <div class="setting-card">
             <h3>보관 / 취소</h3>
-            <p style="font-size:12px; color:#666; margin-bottom:8px;">사진은 콘텐츠 라이브러리에 남지 않고 보관 시간이 지나면 파일까지 삭제됩니다. 취소 시간 안에는 올린 사람이 직접 내릴 수 있습니다.</p>
+            <p style="font-size:12px; color:#666; margin-bottom:8px;">아래 시간은 화면용 임시 파일의 유지 시간입니다. 사진과 문구는 별도의 사진 보관함에 남습니다. 업로더가 취소하면 보관함에서도 삭제됩니다.</p>
             <label style="font-size:12px;">보관 <input type="number" id="liveTtlMin" min="5" max="1440" step="5" style="width:70px; padding:6px; margin:0 4px;">분</label>
             <label style="font-size:12px; margin-left:10px;">본인 취소 <input type="number" id="liveCancelSec" min="10" max="600" step="10" style="width:70px; padding:6px; margin:0 4px;">초</label>
           </div>
@@ -1559,7 +1560,7 @@ function renderLive() {
               </div>
               <div style="font-size:10px; color:#aaa;">${escapeHtml(p.uploaderName || '익명')}</div>
               <button class="btn btn-secondary" style="padding:3px 8px; font-size:10px; margin-top:3px;"
-                      onclick="deleteLivePhoto('${p.id}')">삭제</button>
+                      onclick="deleteLivePhoto('${p.id}')">화면에서 내리기</button>
             </div>
           `).join('')}
         </div>
@@ -1666,14 +1667,14 @@ function copyLiveLink() {
 
 async function clearLive(siteId) {
   const what = siteId ? '이 화면의 라이브를' : '모든 화면의 라이브를';
-  if (!confirm(`${what} 즉시 종료하고 올라온 사진을 삭제합니다.\n계속할까요?`)) return;
+  if (!confirm(`${what} 즉시 종료합니다.\n사진 보관함의 사진은 유지됩니다.\n계속할까요?`)) return;
   const res = await fetch('/api/live/clear', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(siteId ? { siteId } : {})
   });
   const data = await res.json();
-  if (data.success) { showToast(`라이브 종료 — 사진 ${data.removed}장 삭제`); refreshLive(); }
+  if (data.success) { showToast(`라이브 종료 — 사진 ${data.removed}장 화면에서 내림`); refreshLive(); }
 }
 
 async function deleteLivePhoto(id) {

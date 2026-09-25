@@ -607,7 +607,7 @@ async function handleFiles(files, skipped) {
 
       let blob;
       try {
-        blob = await resizeImage(files[i], 1920, 0.85);
+        blob = await resizeImage(files[i], 3840, 0.90);
       } catch (e) {
         failed.push((files[i].name || (i + 1) + '번째') + ': 읽을 수 없는 사진');
         continue;

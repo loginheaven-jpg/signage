@@ -75,6 +75,9 @@ test('real HTTP/WebSocket: upload, delayed readiness, reconnect, acknowledgement
   const player = await connect('approved-player');
   await api('/api/clients/approved-player/approve', 'POST', { siteId: site.id });
   const { photo, screens } = await upload();
+  const archived = await api('/api/photos');
+  assert.ok(archived.photos.some(p => p.id === photo.id && p.status === 'pending'));
+  assert.equal((await fetch(base + `/api/photos/${photo.id}/image?download=1`)).status, 200);
   assert.equal(screens, 1);
   await waitFor(() => player.messages.some(m => m.photo?.id === photo.id));
   assert.equal((await delivery(photo.id)).photos[0].displayed, 0, 'sending a socket message is not display success');
@@ -115,6 +118,7 @@ test('real HTTP/WebSocket: upload, delayed readiness, reconnect, acknowledgement
   const file = await fetch(base + offline.photo.url);
   assert.equal(file.status, 200);
   await api(`/live/api/photo/${offline.photo.id}?t=${token}&uploaderId=test`, 'DELETE');
+  assert.equal((await fetch(base + `/api/photos/${offline.photo.id}/image`)).status, 404, 'uploader cancellation also removes archive access');
   assert.equal((await fetch(base + offline.photo.url)).status, 404);
   reconnected.messages.length = 0;
   reconnected.socket.send(JSON.stringify({ type: 'live_ready', seen: [] }));
@@ -122,4 +126,11 @@ test('real HTTP/WebSocket: upload, delayed readiness, reconnect, acknowledgement
   assert.equal(reconnected.messages.some(m => m.photo?.id === offline.photo.id), false);
   const denied = await fetch(base + `/live/api/delivery?t=invalid&ids=${photo.id}`);
   assert.equal(denied.status, 401);
+  await api('/api/live/clear', 'POST', {});
+  assert.equal((await fetch(base + photo.url)).status, 404);
+  assert.equal((await fetch(base + `/api/photos/${photo.id}/image`)).status, 200, 'live clear preserves the independent archive copy');
+  const crossSiteDelete = await fetch(base + `/api/photos/${photo.id}`, { method: 'DELETE', headers: { 'Sec-Fetch-Site': 'cross-site' } });
+  assert.equal(crossSiteDelete.status, 403);
+  await api(`/api/photos/${photo.id}`, 'DELETE');
+  assert.equal((await fetch(base + `/api/photos/${photo.id}/image`)).status, 404);
 });

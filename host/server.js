@@ -199,6 +199,10 @@ function requireAuth(req, res, next) {
 app.use(express.json());
 
 // 관리 UI 는 인증 뒤에서 제공 (정적 미들웨어보다 먼저 등록)
+app.get(['/photos', '/photos.html'], requireAuth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'public', 'photos.html'));
+});
 app.get(['/', '/index.html'], requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -663,7 +667,7 @@ const LIVE_DEFAULT_SETTINGS = {
   returnMs: 50000,    // 이 시간 동안 새 사진이 없으면 편성표로 복귀
   cornerMs: 120000,   // 복귀 후 코너에 축소되어 남는 시간 (0이면 즉시 소멸)
   gridMax: 4,         // 그리드 최대 칸 수 (1→풀, 2→좌우, 3~4→2x2 적응)
-  photoTtlMin: 180,   // 사진 보관 시간(분) — 지나면 파일까지 삭제
+  photoTtlMin: 180,   // 화면용 임시 파일 유지 시간(분) — 사진 보관함과 독립
   cancelSec: 60       // 업로더 본인이 취소할 수 있는 시간(초)
 };
 
@@ -702,6 +706,20 @@ console.log(`[Live] 라이브 송출: ${liveConfig.enabled ? 'ON' : 'OFF'} — �
 const liveSessions = new Map();
 // 책임 추적용 최근 업로드 로그 (메모리, 최근 50건)
 const liveUploadLog = [];
+const { PhotoArchive } = require('./photo-archive');
+const { mountPhotoRoutes } = require('./photo-routes');
+const photoArchive = new PhotoArchive({ dataDir: DATA_DIR });
+photoArchive.start();
+mountPhotoRoutes(app, photoArchive, (id) => {
+  for (const [siteId, session] of liveSessions) {
+    const idx = session.photos.findIndex(p => p.id === id);
+    if (idx < 0) continue;
+    const [photo] = session.photos.splice(idx, 1);
+    liveDeleteFile(photo);
+    pushLive(siteId, { type: 'live_update', removedId: photo.id, session: { photos: livePublicPhotos(session) }, settings: liveConfig.settings });
+  }
+  broadcastToAdmins({ type: 'live_update' });
+});
 
 function liveSession(siteId) {
   if (!liveSessions.has(siteId)) liveSessions.set(siteId, { photos: [], lastAt: 0 });
@@ -890,6 +908,12 @@ app.post('/live/api/photo', (req, res) => {
       ts: Date.now()
     };
 
+    try { photoArchive.enqueue(photo, req.file.path, site); }
+    catch (e) {
+      try { fs.unlinkSync(req.file.path); } catch {}
+      return res.status(503).json({ error: '사진을 서버에 보관하지 못했습니다. 잠시 후 다시 올려 주세요.' });
+    }
+    photoArchive.cycle().catch(() => {});
     const session = liveSession(siteId);
     session.photos.push(photo);
     session.lastAt = photo.ts;
@@ -913,7 +937,7 @@ app.post('/live/api/photo', (req, res) => {
     broadcastToAdmins({ type: 'live_update' });
     console.log(`[Live] 사진 → ${site.name}: "${photo.message || '(메시지 없음)'}" by ${photo.uploaderName || '익명'}(${photo.uploaderId.slice(0, 8)}) → ${sent}개 화면`);
 
-    res.json({ success: true, photo: { id: photo.id, url: photo.url, message: photo.message }, screens: sent, siteName: site.name });
+    res.json({ success: true, photo: { id: photo.id, url: photo.url, message: photo.message }, screens: sent, siteName: site.name, archive: 'pending' });
   });
 });
 
@@ -930,6 +954,8 @@ app.delete('/live/api/photo/:id', (req, res) => {
     if (photo.uploaderId && uploaderId !== photo.uploaderId) return res.status(403).json({ error: '본인이 올린 사진만 취소할 수 있습니다.' });
     if (Date.now() - photo.ts > limitMs) return res.status(410).json({ error: '취소 가능 시간이 지났습니다. 관리자에게 요청해 주세요.' });
 
+    photoArchive.markDelete(photo.id);
+    photoArchive.cycle().catch(() => {});
     session.photos.splice(idx, 1);
     liveDeleteFile(photo);
     pushLive(siteId, {
@@ -1031,7 +1057,7 @@ function liveClearAll() {
   return n;
 }
 
-// 라이브 즉시 종료 — 화면에서 내리고 사진 파일까지 삭제 (사고 대응용)
+// 라이브 즉시 종료 — 화면용 임시 파일만 정리하며 사진 보관함은 유지
 app.post('/api/live/clear', (req, res) => {
   const siteId = req.body && req.body.siteId;
   const n = siteId ? liveClearSite(siteId) : liveClearAll();
@@ -1040,7 +1066,7 @@ app.post('/api/live/clear', (req, res) => {
   res.json({ success: true, removed: n });
 });
 
-// 관리자가 개별 사진 삭제
+// 관리자가 개별 사진을 화면에서 내림 (보관함에서는 별도로 삭제)
 app.delete('/api/live/photo/:id', (req, res) => {
   for (const [siteId, session] of liveSessions) {
     const idx = session.photos.findIndex(p => p.id === req.params.id);
@@ -1054,7 +1080,7 @@ app.delete('/api/live/photo/:id', (req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-// ─── TTL 정리 (사진은 휘발성 — 콘텐츠 라이브러리에 남기지 않는다) ───
+// ─── 화면용 임시 파일 TTL 정리 (사진 보관함과 독립) ───
 setInterval(() => {
   const ttl = (liveConfig.settings.photoTtlMin || 180) * 60 * 1000;
   const cutoff = Date.now() - ttl;

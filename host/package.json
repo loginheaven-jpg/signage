@@ -1,6 +1,6 @@
 {
   "name": "digital-signage-host",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "디지털 게시판 호스트 서버 (MVP)",
   "main": "server.js",
   "scripts": {
