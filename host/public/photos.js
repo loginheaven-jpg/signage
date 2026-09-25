@@ -26,8 +26,9 @@ function renderStatus(status) {
   const waiting = status.counts.pending + status.counts.error;
   $('connectionText').textContent = status.error || `${status.folderName || '지정 폴더'} · 보관 완료 ${status.counts.saved}장${waiting ? ' · 전송 대기 ' + waiting + '장' : ''}`;
   if (!status.ready && !status.oauthConfigured) $('connectionText').textContent += ' 개인 드라이브를 사용하려면 서버 관리자가 Google 계정 연결 설정을 먼저 완료해야 합니다.';
+  if (status.oauthConfigured && status.pickerConfigured === false) $('connectionText').textContent += ' Google 폴더 선택 기능 설정이 필요합니다.';
   $('driveLink').href = 'https://drive.google.com/drive/folders/' + encodeURIComponent(status.folderId);
-  $('connect').hidden = !status.oauthConfigured || (status.ready && status.authMode === 'service-account');
+  $('connect').hidden = !status.oauthConfigured || status.pickerConfigured === false || (status.ready && status.authMode === 'service-account');
   $('connect').textContent = status.authMode === 'oauth' ? 'Google 계정 다시 연결' : 'Google 계정 연결';
 }
 async function pngForClipboard(url) {
@@ -123,6 +124,12 @@ $('refresh').addEventListener('click', async () => {
 });
 $('closePreview').addEventListener('click', () => $('preview').close());
 const connection = new URLSearchParams(location.search).get('connection');
-if (connection) { toast(({ success: 'Google 계정 연결 완료. 대기 사진을 자동 보관합니다.', cancelled: 'Google 계정 연결을 취소했습니다.', failed: '계정 연결에 실패했습니다. 폴더 편집 권한과 자동 보관 권한을 확인해 주세요.' })[connection] || ''); history.replaceState(null, '', '/photos'); }
+if (connection === 'select-folder') {
+  $('folderSelection').hidden = false;
+  toast('사진 보관 폴더를 선택해 연결을 마무리해 주세요.');
+} else if (connection) {
+  toast(({ success: 'Google 계정 연결 완료. 대기 사진을 자동 보관합니다.', cancelled: 'Google 계정 연결을 취소했습니다.', failed: '계정 연결에 실패했습니다. 자동 보관 권한과 Google 연결 설정을 확인해 주세요.', 'scope-required': 'Google 계정에서 이 앱의 기존 접근 권한을 해제한 뒤 사진 전용 권한으로 다시 연결해 주세요.' })[connection] || '');
+  history.replaceState(null, '', '/photos');
+}
 load();
 setInterval(() => { if (!document.hidden && !$('preview').open && !document.querySelector('.actions button:disabled')) load(); }, 15000);

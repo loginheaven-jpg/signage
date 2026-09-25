@@ -9,6 +9,7 @@ const DEFAULT_FOLDER = '1CvycMd8O3KTb7sFpMJj9IL6DUlWE5mzK';
 const META_PREFIX = 'SIGNAGE_PHOTO_V1\n';
 const FIELDS = 'id,name,mimeType,description,createdTime,parents,trashed,size,appProperties';
 const REQUEST = { timeout: 60000, retry: false };
+const PHOTO_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
 function atomicJSON(file, value) {
   const temp = file + '.tmp';
@@ -49,6 +50,8 @@ class PhotoArchive {
     this.oauthFile = path.join(this.root, 'google-oauth.json');
     this.clientId = process.env.GOOGLE_PHOTO_OAUTH_CLIENT_ID || '';
     this.clientSecret = process.env.GOOGLE_PHOTO_OAUTH_CLIENT_SECRET || '';
+    this.pickerKey = process.env.GOOGLE_PICKER_API_KEY || process.env.GOOGLE_PHOTO_PICKER_API_KEY || '';
+    this.pickerAppId = process.env.GOOGLE_PICKER_APP_ID || process.env.GOOGLE_PHOTO_PICKER_APP_ID || this.clientId.split('-')[0];
     this.redirectUri = (process.env.PUBLIC_BASE_URL || 'https://signage.yebom.org').replace(/\/$/, '') + '/api/photos/oauth/callback';
   }
 
@@ -87,8 +90,13 @@ class PhotoArchive {
   async initialize() {
     if (!this.drive) {
       if (fs.existsSync(this.oauthFile) && this.clientId && this.clientSecret) {
+        const saved = JSON.parse(fs.readFileSync(this.oauthFile, 'utf8'));
+        if (saved.scope !== PHOTO_SCOPE || saved.folderId !== this.folderId) {
+          this.error = '사진 전용 권한으로 Google 계정을 다시 연결하고 보관 폴더를 선택해 주세요.';
+          return;
+        }
         const auth = this.oauthClient();
-        auth.setCredentials(JSON.parse(fs.readFileSync(this.oauthFile, 'utf8')));
+        auth.setCredentials({ refresh_token: saved.refresh_token });
         this.drive = google.drive({ version: 'v3', auth });
         this.authMode = 'oauth';
       } else {
@@ -96,8 +104,9 @@ class PhotoArchive {
         const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY || (fs.existsSync(keyPath) ? fs.readFileSync(keyPath, 'utf8') : '');
         if (!key) { this.error = 'Google 계정을 연결해 주세요.'; return; }
         this.drive = google.drive({ version: 'v3', auth: new google.auth.GoogleAuth({
-          credentials: JSON.parse(key), scopes: ['https://www.googleapis.com/auth/drive']
+          credentials: JSON.parse(key), scopes: ['https://www.googleapis.com/auth/drive.readonly']
         }) });
+        this.authMode = 'service-account-readonly';
       }
     }
     await this.checkFolder();
@@ -109,7 +118,7 @@ class PhotoArchive {
     if (data.trashed || data.mimeType !== 'application/vnd.google-apps.folder') throw new Error('Invalid photo folder');
     if (drive !== this.drive) return data;
     this.folder = data;
-    this.ready = !!data.capabilities?.canAddChildren && (mode === 'oauth' || !!data.driveId);
+    this.ready = !!data.capabilities?.canAddChildren && (mode === 'oauth' || (mode === 'service-account' && !!data.driveId));
     this.error = this.ready ? '' : mode !== 'oauth' && !data.driveId
       ? '내 드라이브에 보관하려면 폴더 소유자의 Google 계정을 연결해 주세요. 서버 보관 사진은 연결 후 자동 전송됩니다.'
       : '사진 폴더의 편집 권한을 확인해 주세요.';
@@ -121,11 +130,22 @@ class PhotoArchive {
     const { tokens } = await auth.getToken(code);
     if (!tokens.refresh_token) throw new Error('자동 보관 권한이 없습니다. Google 계정을 다시 연결해 주세요.');
     auth.setCredentials(tokens);
+    const info = await auth.getTokenInfo(tokens.access_token);
+    if (!info.scopes.includes(PHOTO_SCOPE) || info.scopes.some(s => s !== PHOTO_SCOPE)) {
+      throw Object.assign(new Error('사진 전용 권한이 필요합니다. Google 계정에서 기존 앱 권한을 해제한 뒤 다시 연결해 주세요.'), { code: 'PHOTO_SCOPE_MISMATCH' });
+    }
+    // Folder access does not exist until the user selects it in Google Picker.
+    // Keep this auth only in a short-lived browser-bound session until then.
+    return auth;
+  }
+
+  async completeConnection(auth, folderId) {
+    if (folderId !== this.folderId) throw new Error('지정한 사진 보관 폴더를 선택해 주세요.');
     const drive = google.drive({ version: 'v3', auth });
     const folder = await this.checkFolder(drive, 'oauth');
     if (!folder.capabilities?.canAddChildren) throw new Error('선택한 Google 계정에 사진 폴더 편집 권한이 없습니다.');
     // Persist only the refresh token, never expose it through status/metadata APIs.
-    atomicJSON(this.oauthFile, { refresh_token: tokens.refresh_token });
+    atomicJSON(this.oauthFile, { refresh_token: auth.credentials.refresh_token, scope: PHOTO_SCOPE, folderId });
     this.drive = drive;
     this.authMode = 'oauth';
     this.folder = folder;
@@ -145,6 +165,7 @@ class PhotoArchive {
     for (const r of this.records.values()) if (r.folderId === this.folderId && r.status in counts) counts[r.status]++;
     return { folderId: this.folderId, folderName: this.folder?.name || '', ready: this.ready,
       authMode: this.authMode, oauthConfigured: !!(this.clientId && this.clientSecret),
+      pickerConfigured: !!(this.pickerKey && /^\d+$/.test(this.pickerAppId)), scope: PHOTO_SCOPE,
       error: this.error, counts, lastSync: this.lastSync || null };
   }
 
@@ -272,11 +293,12 @@ class PhotoArchive {
     this.cycling = this.serialize(async () => {
       try {
         await this.initialize();
-        if (this.drive && (force || Date.now() - this.lastSync > 180000)) await this.importFiles();
+        if (this.ready && this.drive && (force || Date.now() - this.lastSync > 180000)) await this.importFiles();
       } catch (e) { this.ready = false; this.error = errorText(e); }
       const due = [...this.records.values()].filter(r => r.folderId === this.folderId && ['pending', 'error', 'deleting'].includes(r.status) && (force || !r.nextAttempt || r.nextAttempt <= Date.now())).slice(0, 10);
       for (const r of due) {
         if (r.status !== 'deleting' && !this.ready) continue;
+        if (r.status === 'deleting' && r.driveId && !this.ready) continue;
         try {
           if (r.status === 'deleting') await this.trash(r); else await this.upload(r);
         } catch (e) {
@@ -317,4 +339,4 @@ class PhotoArchive {
   }
 }
 
-module.exports = { PhotoArchive, DEFAULT_FOLDER, META_PREFIX, atomicJSON, errorText };
+module.exports = { PhotoArchive, DEFAULT_FOLDER, META_PREFIX, PHOTO_SCOPE, atomicJSON, errorText };

@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { Readable } = require('node:stream');
-const { PhotoArchive, META_PREFIX } = require('../host/photo-archive');
+const { PhotoArchive, META_PREFIX, PHOTO_SCOPE } = require('../host/photo-archive');
 
 function fixture(t, { shared = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'signage-archive-test-'));
@@ -143,4 +143,42 @@ test('a moved file is never trashed outside the specified archive folder', async
   remote.get(r.driveId).parents = ['other-folder'];
   archive.markDelete(r.id); await archive.cycle();
   assert.equal(r.status, 'deleting'); assert.equal(calls.trash.length, 0);
+});
+
+test('OAuth only stages narrow credentials; folder selection is required before persisting them', async t => {
+  const { archive } = fixture(t);
+  const auth = {
+    credentials: {},
+    getToken: async () => ({ tokens: { access_token: 'short-token', refresh_token: 'refresh-secret' } }),
+    setCredentials(value) { this.credentials = value; },
+    getTokenInfo: async () => ({ scopes: [PHOTO_SCOPE] })
+  };
+  archive.oauthClient = () => auth;
+  const pending = await archive.connect('code');
+  assert.equal(pending, auth);
+  assert.equal(fs.existsSync(archive.oauthFile), false);
+  assert.equal(archive.ready, false);
+  await assert.rejects(archive.completeConnection(pending, 'different-folder'), /지정한/);
+  archive.checkFolder = async () => ({ capabilities: { canAddChildren: true }, name: 'photos' });
+  await archive.completeConnection(pending, 'folder');
+  const saved = JSON.parse(fs.readFileSync(archive.oauthFile));
+  assert.deepEqual(saved, { refresh_token: 'refresh-secret', scope: PHOTO_SCOPE, folderId: 'folder' });
+  assert.equal(archive.ready, true);
+  assert.equal(JSON.stringify(archive.status()).includes('refresh-secret'), false);
+});
+
+test('broad or missing OAuth scope is rejected, and legacy broad tokens are not silently reused', async t => {
+  const { archive, root } = fixture(t);
+  const auth = { getToken: async () => ({ tokens: { access_token: 'a', refresh_token: 'r' } }), setCredentials() {},
+    getTokenInfo: async () => ({ scopes: [PHOTO_SCOPE, 'https://www.googleapis.com/auth/drive'] }) };
+  archive.oauthClient = () => auth;
+  await assert.rejects(archive.connect('code'), /전용 권한/);
+  auth.getTokenInfo = async () => ({ scopes: [] });
+  await assert.rejects(archive.connect('code'), /전용 권한/);
+  fs.writeFileSync(archive.oauthFile, JSON.stringify({ refresh_token: 'old-broad-token' }));
+  const restored = new PhotoArchive({ dataDir: root, folderId: 'folder' });
+  restored.clientId = '123-client'; restored.clientSecret = 'secret';
+  await restored.initialize();
+  assert.equal(restored.drive, null); assert.equal(restored.ready, false);
+  assert.match(restored.error, /다시 연결/);
 });

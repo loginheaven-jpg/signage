@@ -199,6 +199,9 @@ function requireAuth(req, res, next) {
 app.use(express.json());
 
 // 관리 UI 는 인증 뒤에서 제공 (정적 미들웨어보다 먼저 등록)
+// OAuth branding policies must remain public, including before Google login.
+app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
+app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
 app.get(['/photos', '/photos.html'], requireAuth, (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.sendFile(path.join(__dirname, 'public', 'photos.html'));

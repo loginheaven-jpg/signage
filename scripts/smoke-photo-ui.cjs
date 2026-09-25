@@ -28,7 +28,7 @@ server = http.createServer((req,res) => {
   if (req.url.startsWith('/api/photos/photo/image')) { res.setHeader('Content-Type','image/jpeg'); return res.end(jpeg); }
   if (req.url.startsWith('/api/photos?')) { res.setHeader('Content-Type','application/json'); return res.end(JSON.stringify({photos:rows,total:rows.length,status:statuses})); }
   const name = req.url === '/photos' ? 'photos.html' : req.url.slice(1);
-  if (!['photos.html','photos.js','m.html'].includes(name)) { res.statusCode=404; return res.end(); }
+  if (!['photos.html','photos.js','photo-picker.js','m.html'].includes(name)) { res.statusCode=404; return res.end(); }
   res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':'text/html; charset=utf-8');
   res.end(fs.readFileSync(path.join(publicDir,name)));
 });

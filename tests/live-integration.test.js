@@ -45,6 +45,11 @@ test('real HTTP/WebSocket: upload, delayed readiness, reconnect, acknowledgement
     try { await api('/api/sites'); up = true; break; } catch (e) { await sleep(100); }
   }
   assert.ok(up, logs);
+  for (const route of ['/privacy', '/terms']) {
+    const page = await fetch(base + route);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /예봄 사이니지/);
+  }
   const { site } = await api('/api/sites', 'POST', { name: 'test-display' });
   await api('/api/live', 'PUT', { enabled: true });
   const { token } = await api('/api/live');
