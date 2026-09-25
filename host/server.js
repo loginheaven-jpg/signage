@@ -211,6 +211,7 @@ app.get('/player', (req, res) => {
 // 모든 API 는 인증 필요
 app.use('/api', requireAuth);
 
+app.use('/updates', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
@@ -348,6 +349,7 @@ app.get('/api/clients', (req, res) => {
     const isApproved = !!approvedClients[id];
     list.push({
       id, name: info.name, monitors: info.monitors,
+      clientVersion: info.clientVersion || '',
       siteId: info.siteId || (approvedClients[id]?.siteId) || null,
       approved: isApproved,
       status: info.ws.readyState === WebSocket.OPEN ? 'online' : 'offline',
@@ -1108,6 +1110,7 @@ wss.on('connection', (ws) => {
 
         clients.set(clientId, {
           ws, clientId, name: clientName, monitors, siteId: assignedSiteId,
+          clientVersion: String(msg.clientVersion || '').slice(0, 32),
           liveReady: false, liveSeen: new Set(), liveAttempts: new Map(),
           lastSeen: new Date().toISOString(),
           scheduleVersion, currentPlaying: null,

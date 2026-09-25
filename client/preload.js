@@ -1,6 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
+// A main-process heartbeat alone cannot detect a frozen rendering page.
+let rendererReady = false;
+const reportHealth = () => ipcRenderer.send('player-health', { ready: rendererReady });
+window.addEventListener('DOMContentLoaded', reportHealth);
+setInterval(reportHealth, 5000);
 
 contextBridge.exposeInMainWorld('signage', {
+  rendererReady: () => { rendererReady = true; reportHealth(); },
   // 설정
   saveConfig: (config) => ipcRenderer.invoke('save-config', config),
   getConfig: () => ipcRenderer.invoke('get-config'),

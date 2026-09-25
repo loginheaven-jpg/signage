@@ -9,6 +9,7 @@ out/
 # 클라이언트 로컬 캐시 (편성표/미디어)
 client/cache/
 client/config.json
+client/.signage/
 
 # 호스트 런타임 상태 (영구 볼륨/로컬에 저장, 저장소에 커밋하지 않음)
 host/data/*.json

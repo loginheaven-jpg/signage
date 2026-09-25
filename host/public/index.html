@@ -947,7 +947,7 @@ function renderClientList() {
               <div class="cc-emoji">${site.icon || '📺'}</div>
               <div>
                 <div class="cc-name">${escapeHtml(site.name)}</div>
-                <div class="cc-meta">${pill} · 모니터 ${site.monitors}대</div>
+                <div class="cc-meta">${pill} · 모니터 ${site.monitors}대${cli && cli.clientVersion ? ' · v' + escapeHtml(cli.clientVersion) : ''}</div>
               </div>
             </div>
             <div class="cc-actions">${actions}</div>

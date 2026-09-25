@@ -1,4 +1,5 @@
 @echo off
-chcp 65001 >nul
+setlocal
 cd /d "%~dp0"
-call npx electron . 
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0bootstrap.ps1"
+exit /b %errorlevel%

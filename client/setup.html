@@ -158,6 +158,7 @@ window.signage.getConfig().then(cfg => {
       el.classList.toggle('active', parseInt(el.dataset.value) === monitors);
     });
   }
+  window.signage.rendererReady();
 });
 
 // 모니터 선택

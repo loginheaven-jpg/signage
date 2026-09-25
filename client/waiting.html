@@ -121,6 +121,7 @@ window.signage.getConfig().then(cfg => {
   document.getElementById('hostDisplay').textContent = cfg.hostUrl || '-';
   document.getElementById('monitorDisplay').textContent = `${cfg.monitors || 1}대`;
   document.getElementById('idDisplay').textContent = cfg.clientId || '-';
+  window.signage.rendererReady();
 });
 
 // 연결 상태 수신

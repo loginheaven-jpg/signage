@@ -1,6 +1,6 @@
 {
   "name": "signage-client",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "디지털 게시판 클라이언트 플레이어",
   "main": "main.js",
   "scripts": {

@@ -16,9 +16,10 @@ $staging   = Join-Path $env:TEMP ('signage-client-' + [guid]::NewGuid().ToString
 # 한글 파일명(사용설명서.txt)은 이 스크립트의 인코딩에 따라 직접 매칭이 깨질 수 있으므로
 # 아래 $includePatterns 의 와일드카드로 포함한다.
 $include = @(
-  'main.js', 'preload.js', 'live-delivery.js',
+  'main.js', 'preload.js', 'live-delivery.js', 'supervisor-health.js',
+  'updater.js', 'bootstrap.ps1', 'extract.ps1', 'runtime.json',
   'setup.html', 'waiting.html', 'player.html',
-  'package.json',
+  'package.json', 'package-lock.json',
   'install.bat', 'start.bat', 'uninstall.bat'
 )
 $includePatterns = @('*.txt')
@@ -32,7 +33,7 @@ foreach ($f in $include) {
   if (Test-Path $src) {
     Copy-Item $src -Destination (Join-Path $staging $f) -Force
   } else {
-    Write-Warning "누락: $f (건너뜀)"
+    throw "Missing required release file: $f"
   }
 }
 
@@ -54,3 +55,27 @@ Remove-Item -LiteralPath $resolvedStaging -Recurse -Force
 
 $size = [math]::Round((Get-Item $zipPath).Length / 1KB, 1)
 Write-Host "완료: $zipPath ($size KB)"
+
+# Publish the immutable package before the manifest. Clients verify both length and SHA-256.
+$clientPackage = Get-Content -LiteralPath (Join-Path $clientDir 'package.json') -Raw | ConvertFrom-Json
+$hostPackage = Get-Content -LiteralPath (Join-Path $root 'host\package.json') -Raw | ConvertFrom-Json
+$hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$releaseDir = Join-Path $outDir 'releases'
+$manifestDir = Join-Path $root 'host\public\updates'
+New-Item -ItemType Directory -Force -Path $releaseDir, $manifestDir | Out-Null
+$releaseName = 'signage-client-' + $clientPackage.version + '-' + $hash.Substring(0, 16) + '.zip'
+Copy-Item -LiteralPath $zipPath -Destination (Join-Path $releaseDir $releaseName) -Force
+$manifest = [ordered]@{
+  schema = 1
+  minUpdaterSchema = 1
+  minNodeMajor = 22
+  version = $clientPackage.version
+  serverVersion = $hostPackage.version
+  url = '/downloads/releases/' + $releaseName
+  sha256 = $hash
+  size = (Get-Item -LiteralPath $zipPath).Length
+  publishedAt = [DateTime]::UtcNow.ToString('o')
+}
+$utf8 = New-Object Text.UTF8Encoding($false)
+[IO.File]::WriteAllText((Join-Path $manifestDir 'client.json'), ($manifest | ConvertTo-Json), $utf8)
+Write-Host "Update manifest: $($clientPackage.version) / $hash"

@@ -15,10 +15,13 @@ const fs = require('fs');
 const http = require('http');
 const https = require('https');
 const { pathToFileURL } = require('url');
-const WebSocket = require('ws');
+const WebSocket = require(require.resolve('ws', { paths: [process.env.SIGNAGE_MODULES_DIR || __dirname] }));
+const { createHealthMonitor } = require('./supervisor-health');
+const CLIENT_VERSION = require('./package.json').version;
+const DATA_ROOT = process.env.SIGNAGE_DATA_DIR || __dirname;
 
 // ─── 설정 파일 관리 ─────────────────────────────────────
-const CONFIG_PATH = path.join(__dirname, 'config.json');
+const CONFIG_PATH = path.join(DATA_ROOT, 'config.json');
 let config = {
   clientName: '',
   hostUrl: 'https://signage.yebom.org',
@@ -41,7 +44,8 @@ function loadConfig() {
 
 function saveConfig() {
   try {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    fs.writeFileSync(CONFIG_PATH + '.tmp', JSON.stringify(config, null, 2));
+    fs.renameSync(CONFIG_PATH + '.tmp', CONFIG_PATH);
   } catch (e) {
     console.error('[Config] 저장 실패:', e.message);
   }
@@ -52,7 +56,7 @@ loadConfig();
 // ─── 로컬 캐시 관리 (오프라인/독립 재생) ─────────────────
 // 편성표와 미디어 파일을 로컬에 저장하여, 호스트가 꺼져 있거나
 // 인터넷이 끊겨도 마지막으로 받은 편성표로 계속 재생한다.
-const CACHE_DIR = path.join(__dirname, 'cache');
+const CACHE_DIR = path.join(DATA_ROOT, 'cache');
 const MEDIA_DIR = path.join(CACHE_DIR, 'media');
 const SCHEDULE_CACHE = path.join(CACHE_DIR, 'schedule.json');
 
@@ -212,6 +216,7 @@ let dualMonitor = false;   // 보조 창 활성 여부 (렌더러에 전달)
 let ws = null;
 let reconnectTimer = null;
 let heartbeatTimer = null;
+const healthMonitor = createHealthMonitor({ app, ipcMain, version: CLIENT_VERSION, windows: () => [mainWindow, secondWindow] });
 
 // ─── 듀얼 모니터 보조 창 관리 ────────────────────────────
 // config.monitors >= 2 이고 물리 디스플레이가 2개 이상일 때만 보조 창 생성.
@@ -355,7 +360,7 @@ function confirmQuit() {
     message: '디지털 게시판 플레이어를 종료할까요?',
     detail: '종료하면 이 화면의 재생이 멈춥니다. (부팅 시 자동으로 다시 실행됩니다)'
   });
-  if (res === 1) app.quit();
+  if (res === 1) healthMonitor.quit();
 }
 
 function createWindow() {
@@ -495,6 +500,7 @@ function connectToHost() {
       clientId: config.clientId,
       name: config.clientName,
       monitors: config.monitors,
+      clientVersion: CLIENT_VERSION,
       scheduleVersion: 0
     }));
 
@@ -617,7 +623,7 @@ function handleMessage(msg) {
     case 'quit':
       // 호스트에서 원격 종료 명령
       console.log('[WS] 호스트 원격 종료 명령 수신 — 앱 종료');
-      app.quit();
+      healthMonitor.quit();
       break;
   }
 }
@@ -659,12 +665,17 @@ function scheduleReconnect() {
 
 // ─── 앱 라이프사이클 ────────────────────────────────────
 
-app.whenReady().then(createWindow);
+if (!app.requestSingleInstanceLock()) app.exit(0);
+else app.whenReady().then(createWindow);
+
+app.on('render-process-gone', (_event, _contents, details) => {
+  if (details.reason !== 'clean-exit') app.exit(1);
+});
 
 app.on('window-all-closed', () => {
   globalShortcut.unregisterAll();
   if (ws) ws.close();
-  app.quit();
+  healthMonitor.quit();
 });
 
 app.on('will-quit', () => {

@@ -624,6 +624,7 @@ const liveDelivery = LiveDelivery.create({
 });
 window.signage.onLiveReadyRequest(() => liveDelivery.ready());
 configReady.then(() => {
+  window.signage.rendererReady();
   if (!isSecondary) window.signage.setPlayerStopped(stopped);
   liveDelivery.ready();
 });
