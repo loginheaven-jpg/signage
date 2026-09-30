@@ -7,6 +7,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>사진 올리기 — 디지털 게시판</title>
+<link rel="manifest" href="/camera.webmanifest">
+<link rel="apple-touch-icon" href="/camera-icon-192.png">
+<script src="/camera-install.js" defer></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 :root {
@@ -307,8 +310,7 @@ function setBlock(info) {
   if (block && block.detail) showBanner(block.kind || 'warn', block.detail);
   else hideBanner();
   // 막힌 동안에는 주기적으로 다시 확인 — 관리자가 스위치를 켜면 저절로 풀린다
-  if (block && token) startRecheck();
-  else stopRecheck();
+  startRecheck();
 }
 
 function startRecheck() {
@@ -324,21 +326,13 @@ function stopRecheck() {
 // ═══════════════════════════════════════════════════════════
 // quiet=true 면 자동 재확인(주기 폴링) — 이름 묻기 같은 방해 동작을 하지 않는다
 async function init(quiet) {
-  if (!token) {
-    setBlock({
-      label: '링크가 필요합니다',
-      kind: 'err',
-      detail: '이 페이지는 관리자가 준 링크로 열어야 합니다. (링크에 <b>?t=</b> 부분이 필요합니다)'
-    });
-    return;
-  }
-
   if (!uploaderName && !quiet) askName(true);
   renderWhoami();
   if (!quiet) recoverFromLostShot();
 
   try {
     const res = await fetch(`/live/api/hello?t=${encodeURIComponent(token)}`);
+    if (res.status === 401) { location.replace('/login?role=camera'); return; }
     const data = await res.json();
     if (!res.ok) {
       setBlock({
@@ -354,9 +348,9 @@ async function init(quiet) {
 
     if (!liveEnabled) {
       setBlock({
-        label: '지금은 송출이 꺼져 있습니다',
+        label: '지금은 사진 접수가 닫혀 있습니다',
         kind: 'warn',
-        detail: '관리자가 <b>라이브 송출</b>을 켜면 바로 올릴 수 있습니다. 켜지는지 자동으로 확인하고 있습니다.'
+        detail: '관리자가 <b>카메라 접수</b>를 켜면 올릴 수 있습니다. 자동으로 확인하고 있습니다.'
       });
     } else if (!sites.length) {
       setBlock({

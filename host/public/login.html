@@ -1,0 +1,12 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>예봄 사이니지 · 접속</title>
+<style>body{font:18px system-ui;background:#f2f5fa;color:#17263c;margin:0;display:grid;min-height:100dvh;place-items:center}main{width:min(340px,85vw);padding:28px;background:white;border-radius:20px}input,button{box-sizing:border-box;width:100%;padding:15px;font:inherit;border-radius:10px;border:1px solid #cbd5e1}button{background:#244ec7;color:white;margin-top:16px}p{font-size:14px;line-height:1.6}#error{color:#ae2538}</style>
+<main><h1 id="title">예봄 사이니지</h1><form><label for="password">접속 암호</label><input id="password" type="password" autocomplete="current-password" required autofocus><button>접속하기</button></form><p>이 브라우저에서는 접속을 기억합니다. 브라우저 데이터를 삭제하거나 다른 브라우저를 사용하면 다시 입력해 주세요.</p><p id="error" role="alert"></p><a href="/privacy">개인정보처리방침</a></main>
+<script>
+const role = new URLSearchParams(location.search).get('role') === 'camera' ? 'camera' : 'admin';
+document.getElementById('title').textContent = role === 'camera' ? '예봄 카메라' : '예봄 사이니지 관리';
+document.querySelector('form').onsubmit = async e => {
+ e.preventDefault(); const button = document.querySelector('button'); button.disabled = true;
+ try { const response = await fetch('/auth/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role,password:document.getElementById('password').value})}); const data = await response.json(); if(!response.ok) throw new Error(data.error); location.replace(data.redirect); }
+ catch(e){document.getElementById('error').textContent=e.message || '연결을 확인해 주세요.';} finally {button.disabled=false;}
+};
+</script></html>

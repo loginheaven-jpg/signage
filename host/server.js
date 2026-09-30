@@ -170,33 +170,26 @@ const gdrive = new GDriveSync({
   else console.warn('[Server] 구글 드라이브 연동 실패 — 로컬 업로드만 사용 가능');
 })();
 
-// ─── 관리자 인증 (선택) ──────────────────────────────────
-// ADMIN_PASSWORD 환경변수가 설정되면 관리 UI(/)와 모든 /api 호출에 HTTP Basic 인증을 요구한다.
-// 미설정 시 인증 없이 동작(로컬 개발/기존 배포 호환).
+// ─── 관리자 인증 ──────────────────────────────────
+// ADMIN_PASSWORD/CAMERA_PASSWORD는 서버 환경변수로만 설정한다.
+// 프로덕션에서는 암호가 없으면 접속을 차단한다.
 // 클라이언트가 쓰는 /uploads, /player.html, WebSocket 은 인증 대상이 아니다.
-const ADMIN_USER = process.env.ADMIN_USER || 'admin';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
-
-function checkAuth(req) {
-  if (!ADMIN_PASSWORD) return true;
-  const h = req.headers.authorization || '';
-  const m = h.match(/^Basic (.+)$/);
-  if (!m) return false;
-  const decoded = Buffer.from(m[1], 'base64').toString('utf8');
-  const idx = decoded.indexOf(':');
-  const user = decoded.slice(0, idx);
-  const pass = decoded.slice(idx + 1);
-  return user === ADMIN_USER && pass === ADMIN_PASSWORD;
-}
-
-function requireAuth(req, res, next) {
-  if (checkAuth(req)) return next();
-  res.set('WWW-Authenticate', 'Basic realm="Signage Admin"');
-  return res.status(401).send('인증이 필요합니다.');
-}
-
 // ─── 미들웨어 ────────────────────────────────────────────
 app.use(express.json());
+if (process.env.RAILWAY_ENVIRONMENT_ID) app.set('trust proxy', 1);
+const browserAuth = require('./browser-auth')(app, DATA_DIR);
+const requireAuth = browserAuth.guard('admin');
+const cameraPage = (req, res) => res.sendFile(path.join(__dirname, 'public', 'm.html'));
+app.get(['/', '/index.html'], (req, res, next) => {
+  if (req.hostname === 'camera.yebom.org') return browserAuth.guard('camera')(req, res, () => cameraPage(req, res));
+  next();
+});
+app.get(['/camera', '/m', '/m.html'], browserAuth.guard('camera'), cameraPage);
+app.use('/live/api', (req, res, next) => {
+  // Legacy token links are retained only for local tests/development without configured camera auth.
+  if (!browserAuth.configured('camera') && !process.env.RAILWAY_ENVIRONMENT_ID && process.env.NODE_ENV !== 'production') return next();
+  return browserAuth.guard('camera')(req, res, next);
+});
 
 // 관리 UI 는 인증 뒤에서 제공 (정적 미들웨어보다 먼저 등록)
 // OAuth branding policies must remain public, including before Google login.
@@ -702,7 +695,7 @@ function saveLiveConfig() {
 }
 
 loadLiveConfig();
-console.log(`[Live] 라이브 송출: ${liveConfig.enabled ? 'ON' : 'OFF'} — 폰 링크 /m?t=${liveConfig.token}`);
+console.log(`[Live] 라이브 송출: ${liveConfig.enabled ? 'ON' : 'OFF'}`);
 
 // 사이트별 라이브 세션. siteId -> { photos: [...], lastAt }
 // photos[]: { id, filename, url, message, uploaderId, uploaderName, ts }
@@ -752,7 +745,7 @@ function pushLive(siteId, msg) {
 // Socket 연결과 렌더러 준비는 다르다. 준비 완료/재접속 후 빠진 사진을 복원한다.
 // 이미 표시한 사진은 반복하지 않고, 현재 라이브 시간 안에서만 재전송한다.
 function syncLiveClient(info) {
-  if (!liveConfig.enabled || !info.approved || !info.liveReady || info.ws.readyState !== WebSocket.OPEN) return;
+  if (!info.approved || !info.liveReady || info.ws.readyState !== WebSocket.OPEN) return;
   const session = liveSessions.get(info.siteId);
   if (!session || Date.now() - session.lastAt > liveConfig.settings.returnMs) return;
   for (const photo of session.photos) {
@@ -824,16 +817,12 @@ const liveUpload = multer({
 });
 
 function checkLiveToken(req) {
+  if (browserAuth.configured('camera')) return browserAuth.check(req, 'camera');
   const t = req.query.t || req.body?.t || req.headers['x-live-token'] || '';
   return !!liveConfig.token && t === liveConfig.token;
 }
 
-// ─── 폰 페이지 ─────────────────────────────────────────────
-app.get(['/m', '/m.html'], (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'm.html'));
-});
-
-// ─── 폰 API (토큰 인증) ────────────────────────────────────
+// ─── 폰 API (브라우저 로그인 인증) ─────────────────────────
 
 // 초기 정보: 송출 가능 모니터(사이트) 목록 — 폰의 '대상 모니터' 선택에 사용
 app.get('/live/api/hello', (req, res) => {
@@ -995,7 +984,7 @@ app.get('/api/live', (req, res) => {
   res.json({
     enabled: liveConfig.enabled,
     token: liveConfig.token,
-    link: `/m?t=${liveConfig.token}`,
+    link: process.env.CAMERA_PUBLIC_URL || '/camera',
     settings: liveConfig.settings,
     sessions,
     log: liveUploadLog.slice(0, 20)
@@ -1023,9 +1012,8 @@ app.put('/api/live', (req, res) => {
   }
   saveLiveConfig();
 
-  // 라이브를 끄면 진행 중인 모든 세션을 즉시 정리한다
-  if (!liveConfig.enabled) liveClearAll();
-  else liveSessions.forEach((session, siteId) => {
+  // 접수 종료는 새 업로드만 차단하며 기존 사진은 유지한다.
+  liveSessions.forEach((session, siteId) => {
     if (session.photos.length) pushLive(siteId, { type: 'live_update', session: { photos: livePublicPhotos(session) }, settings: liveConfig.settings });
   });
 
@@ -1040,7 +1028,7 @@ app.post('/api/live/token/rotate', (req, res) => {
   saveLiveConfig();
   broadcastToAdmins({ type: 'live_update' });
   console.log('[Live] 토큰 재발급 — 기존 링크 무효');
-  res.json({ success: true, token: liveConfig.token, link: `/m?t=${liveConfig.token}` });
+  res.json({ success: true, token: liveConfig.token, link: process.env.CAMERA_PUBLIC_URL || '/camera' });
 });
 
 function liveClearSite(siteId) {
@@ -1117,7 +1105,7 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 // ─── WebSocket ──────────────────────────────────────────
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   console.log('[WS] 새 연결 수립');
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
@@ -1200,6 +1188,8 @@ wss.on('connection', (ws) => {
       }
 
       if (msg.type === 'admin_subscribe') {
+        if (!browserAuth.check(req, 'admin') || !browserAuth.sameOrigin(req)) return ws.close(1008, 'Login required');
+        ws._authRequest = req;
         ws._isAdmin = true;
       }
 
@@ -1231,7 +1221,10 @@ setInterval(() => {
 function broadcastToAdmins(msg) {
   const data = JSON.stringify(msg);
   wss.clients.forEach(client => {
-    if (client._isAdmin && client.readyState === WebSocket.OPEN) client.send(data);
+    if (client._isAdmin && client.readyState === WebSocket.OPEN) {
+      if (!browserAuth.check(client._authRequest, 'admin')) { client.close(1008, 'Login required'); return; }
+      client.send(data);
+    }
   });
 }
 

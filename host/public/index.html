@@ -486,7 +486,7 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 
       <div class="panel">
         <div class="panel-header">
-          <span class="panel-title">라이브 송출</span>
+          <span class="panel-title">카메라 접수</span>
           <button class="btn" id="liveToggleBtn" onclick="toggleLive()">불러오는 중...</button>
         </div>
         <div id="liveMasterBox" style="font-size:13px; color:#666; line-height:1.6;">
@@ -499,7 +499,7 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
       <div class="panel">
         <div class="panel-header">
           <span class="panel-title">폰 링크</span>
-          <button class="btn btn-secondary" onclick="rotateLiveToken()">🔑 링크 새로 발급</button>
+          <button class="btn btn-secondary" onclick="rotateLiveToken()">🔑 촬영 단말 전체 로그아웃</button>
         </div>
         <div class="settings-grid">
           <div class="setting-card">
@@ -509,8 +509,8 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
                    style="width:100%; padding:10px; border:1px solid #ddd; border-radius:8px; font-size:12px; font-family:monospace; margin-bottom:10px;">
             <button class="btn btn-primary" onclick="copyLiveLink()">📋 링크 복사</button>
             <p style="font-size:11px; color:#e67e22; margin-top:10px; line-height:1.5;">
-              ⚠ 링크를 가진 사람은 누구나 사진을 올릴 수 있습니다(승인 절차 없음). 상시 공개하지 말고 행사 때만 전달하세요.
-              문제가 생기면 아래 <b>라이브 즉시 종료</b> 로 화면에서 내리고, <b>링크 새로 발급</b> 으로 기존 링크를 무효화하세요.
+              촬영 암호를 통과한 단말만 사진을 올릴 수 있습니다. 접수를 닫아도 기존 사진과 편성표는 유지됩니다.
+              문제가 생기면 아래 <b>라이브 즉시 종료</b> 로 화면에서 내리고, <b>촬영 단말 전체 로그아웃</b>으로 암호를 다시 입력하게 할 수 있습니다.
             </p>
           </div>
           <div class="setting-card">
@@ -1514,7 +1514,7 @@ function renderLive() {
 
   // 마스터 스위치
   const btn = document.getElementById('liveToggleBtn');
-  btn.textContent = liveData.enabled ? '🔴 송출 중 — 끄기' : '⚪ 꺼져 있음 — 켜기';
+  btn.textContent = liveData.enabled ? '🟢 접수 중 — 닫기' : '⚪ 접수 닫힘 — 열기';
   btn.className = 'btn ' + (liveData.enabled ? 'btn-danger' : 'btn-primary');
 
   // 사이드바 표시등
@@ -1522,7 +1522,7 @@ function renderLive() {
   if (dot) dot.style.display = liveData.enabled ? '' : 'none';
 
   // 폰 링크
-  const link = location.origin + liveData.link;
+  const link = new URL(liveData.link, location.origin).href;
   document.getElementById('liveLink').value = link;
   renderLiveQr(link);
 
@@ -1616,7 +1616,7 @@ function renderLiveQr(link) {
 async function toggleLive() {
   if (!liveData) return;
   const next = !liveData.enabled;
-  if (next && !confirm('라이브 송출을 켭니다.\n링크를 가진 사람은 누구나 사진을 올릴 수 있습니다(승인 없음).\n계속할까요?')) return;
+
   const res = await fetch('/api/live', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -1624,7 +1624,7 @@ async function toggleLive() {
   });
   const data = await res.json();
   if (data.success) {
-    showToast(next ? '라이브 송출을 켰습니다' : '라이브 송출을 끄고 화면을 정리했습니다');
+    showToast(next ? '카메라 접수를 열었습니다' : '카메라 접수를 닫았습니다. 기존 사진은 유지됩니다');
     refreshLive();
   }
 }
@@ -1651,10 +1651,10 @@ async function saveLiveSettings() {
 }
 
 async function rotateLiveToken() {
-  if (!confirm('새 링크를 발급하면 지금까지 나눠준 링크는 모두 쓸 수 없게 됩니다.\n계속할까요?')) return;
-  const res = await fetch('/api/live/token/rotate', { method: 'POST' });
+  if (!confirm('모든 촬영 단말에서 암호를 다시 입력하도록 할까요?')) return;
+  const res = await fetch('/auth/revoke', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({role:'camera'}) });
   const data = await res.json();
-  if (data.success) { showToast('새 링크를 발급했습니다 — 기존 링크 무효'); refreshLive(); }
+  if (data.success) { showToast('모든 촬영 단말의 접속을 해제했습니다'); refreshLive(); }
 }
 
 function copyLiveLink() {
@@ -1698,5 +1698,6 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 3000);
 }
 </script>
+<script src="/admin-session.js"></script>
 </body>
 </html>
