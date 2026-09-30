@@ -769,10 +769,26 @@ function recordLiveResult(info, photoId, status) {
   const photo = liveSessions.get(info.siteId)?.photos.find(p => p.id === photoId);
   if (!photo) return;
   if (!photo.delivery) photo.delivery = new Map();
+  if (!photo.deliveryTimes) photo.deliveryTimes = new Map();
+  const changed = photo.delivery.get(info.clientId) !== status;
+  if (changed) photo.deliveryTimes.set(info.clientId, Date.now());
   photo.delivery.set(info.clientId, status);
   if (status === 'displayed') info.liveSeen.add(photoId);
   else info.liveSeen.delete(photoId);
   console.log(`[Live] 표시 결과: ${photoId} / ${info.name} / ${status}`);
+  if (changed) broadcastToAdmins({ type: 'live_update' });
+}
+
+function photoDisplayReceipts(photo, siteId) {
+  return Object.entries(approvedClients).filter(([, saved]) => saved.siteId === siteId).map(([id, saved]) => {
+    const info = clients.get(id);
+    return {
+      name: saved.name || info?.name || '모니터',
+      online: !!info && info.ws.readyState === WebSocket.OPEN,
+      status: photo.delivery?.get(id) || 'pending',
+      at: photo.deliveryTimes?.get(id) || null
+    };
+  });
 }
 
 function liveDeleteFile(photo) {
@@ -976,7 +992,8 @@ app.get('/api/live', (req, res) => {
       count: session.photos.length,
       lastAt: session.lastAt,
       photos: session.photos.slice(-6).reverse().map(p => ({
-        id: p.id, url: p.url, message: p.message, uploaderName: p.uploaderName, ts: p.ts
+        id: p.id, url: p.url, message: p.message, uploaderName: p.uploaderName, ts: p.ts,
+        receipts: photoDisplayReceipts(p, siteId)
       }))
     });
   });

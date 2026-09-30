@@ -77,6 +77,7 @@ test('real HTTP/WebSocket: upload, delayed readiness, reconnect, acknowledgement
     return res.json();
   }
   const delivery = id => api(`/live/api/delivery?t=${token}&ids=${id}`);
+  const receipts = async id => (await api('/api/live')).sessions.flatMap(s => s.photos).find(p => p.id === id).receipts;
   const player = await connect('approved-player');
   await api('/api/clients/approved-player/approve', 'POST', { siteId: site.id });
   const { photo, screens } = await upload();
@@ -86,6 +87,8 @@ test('real HTTP/WebSocket: upload, delayed readiness, reconnect, acknowledgement
   assert.equal(screens, 1);
   await waitFor(() => player.messages.some(m => m.photo?.id === photo.id));
   assert.equal((await delivery(photo.id)).photos[0].displayed, 0, 'sending a socket message is not display success');
+  assert.equal((await receipts(photo.id))[0].status, 'pending');
+  assert.equal((await receipts(photo.id))[0].at, null);
 
   // Initial IPC could be lost while the Electron renderer loads. Ready must replay it.
   player.messages.length = 0;
@@ -94,10 +97,13 @@ test('real HTTP/WebSocket: upload, delayed readiness, reconnect, acknowledgement
   player.socket.send(JSON.stringify({ type: 'live_result', photoId: photo.id, status: 'image_error' }));
   await sleep(50);
   assert.deepEqual((await delivery(photo.id)).photos[0].errors, ['image_error']);
+  assert.equal((await receipts(photo.id))[0].status, 'image_error');
   player.socket.send(JSON.stringify({ type: 'live_result', photoId: photo.id, status: 'displayed' }));
   await sleep(50);
   assert.equal((await delivery(photo.id)).photos[0].displayed, 1);
   assert.equal((await delivery(photo.id)).photos[0].errors.length, 0);
+  assert.equal((await receipts(photo.id))[0].status, 'displayed');
+  assert.ok((await receipts(photo.id))[0].at > 0);
 
   const rogue = await connect('unapproved-player');
   const missed = await upload();
@@ -109,6 +115,9 @@ test('real HTTP/WebSocket: upload, delayed readiness, reconnect, acknowledgement
   await new Promise(resolve => { player.socket.once('close', resolve); player.socket.close(); });
   const offline = await upload();
   assert.equal(offline.screens, 0);
+  assert.equal((await receipts(offline.photo.id))[0].status, 'pending');
+  assert.equal((await receipts(offline.photo.id))[0].online, false);
+  assert.equal((await receipts(photo.id))[0].status, 'displayed', 'disconnect does not erase the historical display receipt');
   const reconnected = await connect('approved-player');
   reconnected.socket.send(JSON.stringify({ type: 'live_ready', seen: [photo.id] }));
   await waitFor(() => reconnected.messages.some(m => m.photo?.id === offline.photo.id));
