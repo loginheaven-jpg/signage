@@ -525,6 +525,7 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
           <span class="panel-title">현재 라이브 현황</span>
           <button class="btn btn-danger" onclick="clearLive()">⏹ 라이브 즉시 종료 (전체)</button>
         </div>
+        <div id="liveMailStatus" style="font-size:12px; color:#666; margin-bottom:10px;"></div>
         <div id="liveSessions" style="font-size:13px;">라이브 중인 화면이 없습니다.</div>
       </div>
 
@@ -558,7 +559,7 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
           </div>
           <div class="setting-card">
             <h3>보관 / 취소</h3>
-            <p style="font-size:12px; color:#666; margin-bottom:8px;">아래 시간은 화면용 임시 파일의 유지 시간입니다. 사진과 문구는 별도의 사진 보관함에 남습니다. 업로더가 취소하면 보관함에서도 삭제됩니다.</p>
+            <p style="font-size:12px; color:#666; margin-bottom:8px;">아래 시간은 화면용 임시 파일의 유지 시간입니다. 사진과 문구는 별도의 사진 보관함에 남습니다. 업로더가 취소하면 보관함에서도 삭제됩니다. 받는 이메일을 입력한 사진은 본인 취소 시간이 지난 뒤에 발송됩니다.</p>
             <label style="font-size:12px;">보관 <input type="number" id="liveTtlMin" min="5" max="1440" step="5" style="width:70px; padding:6px; margin:0 4px;">분</label>
             <label style="font-size:12px; margin-left:10px;">본인 취소 <input type="number" id="liveCancelSec" min="10" max="600" step="10" style="width:70px; padding:6px; margin:0 4px;">초</label>
           </div>
@@ -1566,6 +1567,12 @@ function renderLive() {
   set('liveTtlMin', s.photoTtlMin || 180);
   set('liveCancelSec', s.cancelSec || 60);
   set('liveGridMax', String(s.gridMax || 4));
+
+  // 사진 메일 — 받는 주소는 관리 화면에도 보여주지 않는다
+  const mail = liveData.mail || {};
+  document.getElementById('liveMailStatus').textContent = !mail.configured
+    ? '📧 사진 메일: 꺼짐 — 서버에 SMTP_USER / SMTP_PASS 를 설정하면 촬영 화면에 받는 주소 입력란이 나타납니다.'
+    : `📧 사진 메일: 켜짐 · 오늘 ${mail.sentToday}/${mail.dailyLimit}통 발송 · 발송 대기 ${mail.waiting}통` + (mail.error ? ` · 최근 오류: ${mail.error}` : '');
 
   // 현황
   const box = document.getElementById('liveSessions');

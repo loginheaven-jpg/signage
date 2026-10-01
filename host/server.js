@@ -706,7 +706,13 @@ const { PhotoArchive } = require('./photo-archive');
 const { mountPhotoRoutes } = require('./photo-routes');
 const photoArchive = new PhotoArchive({ dataDir: DATA_DIR });
 photoArchive.start();
+// 찍힌 분에게 사진을 메일로 보내는 대기열 — SMTP_USER/SMTP_PASS 가 없으면 꺼져 있다.
+const { PhotoMail, normalizeEmail } = require('./photo-mail');
+const photoMail = new PhotoMail({ dataDir: DATA_DIR });
+photoMail.start();
+console.log(`[Mail] 사진 메일 발송: ${photoMail.configured ? 'ON' : 'OFF'}`);
 mountPhotoRoutes(app, photoArchive, (id) => {
+  photoMail.remove(id);   // 보관함에서 지운 사진은 아직 보내지 않은 메일에서도 뺀다
   for (const [siteId, session] of liveSessions) {
     const idx = session.photos.findIndex(p => p.id === id);
     if (idx < 0) continue;
@@ -852,8 +858,17 @@ app.get('/live/api/hello', (req, res) => {
     enabled: liveConfig.enabled,
     sites: list,
     msgMax: LIVE_MSG_MAX,
-    cancelSec: liveConfig.settings.cancelSec
+    cancelSec: liveConfig.settings.cancelSec,
+    mail: photoMail.configured
   });
+});
+
+// 메일 발송 상태 — 주소는 돌려주지 않는다
+app.get('/live/api/mail', (req, res) => {
+  if (!checkLiveToken(req)) return res.status(401).json({ error: '링크가 유효하지 않습니다.' });
+  res.set('Cache-Control', 'no-store');
+  const ids = String(req.query.ids || '').split(',').slice(0, 12);
+  res.json({ photos: ids.map(id => ({ id, status: photoMail.statusOf(id) })).filter(p => p.status) });
 });
 
 app.get('/live/api/delivery', (req, res) => {
@@ -900,6 +915,13 @@ app.post('/live/api/photo', (req, res) => {
       return res.status(400).json({ error: chk.error });
     }
 
+    // 사진 받을 주소(선택) — 한 곳만. 틀린 주소는 접수 단계에서 돌려보내 고칠 수 있게 한다.
+    const email = photoMail.configured ? normalizeEmail(req.body.email) : '';
+    if (email === null) {
+      try { fs.unlinkSync(req.file.path); } catch (e) {}
+      return res.status(400).json({ error: '이메일 주소를 확인해 주세요. 한 곳만 입력할 수 있습니다.' });
+    }
+
     // 한 사람이 앨범에서 여러 장을 골라 보낸 '묶음'인지 — 화면이 순차 표출 여부를 결정한다
     let batchTotal = parseInt(req.body.batchTotal, 10);
     if (!Number.isFinite(batchTotal) || batchTotal < 1) batchTotal = 1;
@@ -922,6 +944,13 @@ app.post('/live/api/photo', (req, res) => {
       return res.status(503).json({ error: '사진을 서버에 보관하지 못했습니다. 잠시 후 다시 올려 주세요.' });
     }
     photoArchive.cycle().catch(() => {});
+    // 메일은 본인 취소 시간이 지난 뒤에 나간다 — 취소한 사진이 이미 발송되는 일이 없도록.
+    const mailDelayMs = (liveConfig.settings.cancelSec || 60) * 1000;
+    let mail;
+    if (email) {
+      try { mail = photoMail.enqueue({ photo, source: req.file.path, site, email, delayMs: mailDelayMs }); }
+      catch (e) { mail = 'error'; console.warn('[Mail] 대기열 저장 실패:', e.code || e.name); }
+    }
     const session = liveSession(siteId);
     session.photos.push(photo);
     session.lastAt = photo.ts;
@@ -945,8 +974,18 @@ app.post('/live/api/photo', (req, res) => {
     broadcastToAdmins({ type: 'live_update' });
     console.log(`[Live] 사진 → ${site.name}: "${photo.message || '(메시지 없음)'}" by ${photo.uploaderName || '익명'}(${photo.uploaderId.slice(0, 8)}) → ${sent}개 화면`);
 
-    res.json({ success: true, photo: { id: photo.id, url: photo.url, message: photo.message }, screens: sent, siteName: site.name, archive: 'pending' });
+    res.json({ success: true, photo: { id: photo.id, url: photo.url, message: photo.message }, screens: sent, siteName: site.name, archive: 'pending',
+      mail, mailAfterSec: mail === 'queued' ? Math.round(mailDelayMs / 1000) : undefined });
   });
+});
+
+// 메일만 취소 — 사진은 화면과 보관함에 그대로 둔다 (주소를 잘못 넣었을 때)
+app.delete('/live/api/photo/:id/mail', (req, res) => {
+  if (!checkLiveToken(req)) return res.status(401).json({ error: '링크가 유효하지 않습니다.' });
+  if (!photoMail.remove(req.params.id, String(req.query.uploaderId || ''))) {
+    return res.status(410).json({ error: '이미 발송했거나 취소된 메일입니다.' });
+  }
+  res.json({ success: true });
 });
 
 // 업로더 본인 취소 (cancelSec 이내, 같은 uploaderId)
@@ -964,6 +1003,7 @@ app.delete('/live/api/photo/:id', (req, res) => {
 
     photoArchive.markDelete(photo.id);
     photoArchive.cycle().catch(() => {});
+    photoMail.remove(photo.id);
     session.photos.splice(idx, 1);
     liveDeleteFile(photo);
     pushLive(siteId, {
@@ -1004,7 +1044,8 @@ app.get('/api/live', (req, res) => {
     link: process.env.CAMERA_PUBLIC_URL || '/camera',
     settings: liveConfig.settings,
     sessions,
-    log: liveUploadLog.slice(0, 20)
+    log: liveUploadLog.slice(0, 20),
+    mail: photoMail.status()
   });
 });
 

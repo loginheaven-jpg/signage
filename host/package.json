@@ -1,6 +1,6 @@
 {
   "name": "digital-signage-host",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "디지털 게시판 호스트 서버 (MVP)",
   "main": "server.js",
   "scripts": {
@@ -11,6 +11,7 @@
     "express": "^4.18.2",
     "googleapis": "^173.0.0",
     "multer": "^1.4.5-lts.1",
+    "nodemailer": "^10.0.13",
     "uuid": "^9.0.0",
     "ws": "^8.16.0"
   }
