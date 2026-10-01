@@ -152,7 +152,7 @@ class PhotoMail {
       text: [
         '샬롬 ^^',
         '환영합니다.',
-        `${this.fromName}에서 찍은 사진을 보내드립니다.`,
+        `${this.fromName}에서 찍은 사진 ${job.photos.length}장을 보내드립니다.`,
         '',
         `등록 일시: ${when}`,
         ...words.map(w => `함께 올린 문구: ${w}`),

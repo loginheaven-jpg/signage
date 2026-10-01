@@ -100,8 +100,8 @@ header .sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
 }
 #msg:focus, #mail:focus { outline: none; border-color: var(--accent); }
 #msg::placeholder, #mail::placeholder { color: #6b7280; }
-#mailFix { color: #ffd9a8; }
-#mailFix a { color: inherit; font-weight: 700; }
+#mailFix, #mailKeep { color: #ffd9a8; }
+#mailFix a, #mailKeep a { color: inherit; font-weight: 700; }
 .counter { text-align: right; font-size: 11px; color: var(--dim); margin-top: 6px; }
 
 /* 촬영 버튼 */
@@ -228,6 +228,7 @@ footer { text-align: center; font-size: 11px; color: #5b6270; margin-top: 20px; 
       <input id="mail" type="email" inputmode="email" maxlength="254" placeholder="예: name@gmail.com"
              autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
       <div class="hint" id="mailFix" style="display:none"></div>
+      <div class="hint" id="mailKeep" style="display:none">방금 보낸 주소입니다. <b>다른 분의 사진이면</b> 고치거나 <a href="#" onclick="clearMail();return false">지우기</a></div>
       <div class="hint">찍힌 분의 주소 <b>한 곳</b>으로 사진을 보냅니다. 취소 가능 시간이 지난 뒤 발송하고, 주소는 발송 후 서버에서 지웁니다.</div>
     </div>
 
@@ -263,7 +264,9 @@ const LS = {
   uploaderName: 'live.uploaderName',
   pending: 'live.pending',   // 카메라 진입 후 아직 사진을 받지 못한 상태
   draft: 'live.draft',       // 입력 중이던 메시지 (탭이 폐기돼도 살리기 위해)
-  draftMail: 'live.draftMail' // 입력 중이던 받는 주소 — 올린 뒤에는 지운다(다음 사람에게 잘못 가지 않도록)
+  draftMail: 'live.draftMail', // 받는 주소 — 같은 분께 이어서 보낼 수 있게 잠시만 남긴다
+  mailAt: 'live.mailAt',       // 받는 주소를 마지막으로 쓰거나 고친 시각
+  mailKept: 'live.mailKept'    // 이미 한 번 보낸 주소가 남아 있는 상태인가
 };
 
 function ls(k, v) {
@@ -402,6 +405,8 @@ function recoverFromLostShot() {
   }
   const draftMail = ls(LS.draftMail);
   if (draftMail && !el('mail').value) el('mail').value = draftMail;
+  expireMail();
+  renderMailKeep();
 
   if (!pending) return;
   ls(LS.pending, null);
@@ -547,6 +552,34 @@ function mailAddress() {
   return mailEnabled ? el('mail').value.trim() : '';
 }
 
+// 같은 분을 이어서 찍는 일이 많아 주소를 남겨 두되, 오래 두면 다음 분의 사진이 잘못 간다.
+// 마지막으로 쓰거나 고친 뒤 이 시간이 지나면 지운다.
+const MAIL_KEEP_MS = 10 * 60 * 1000;
+
+function touchMail() {
+  ls(LS.draftMail, el('mail').value.trim() || null);
+  ls(LS.mailAt, el('mail').value.trim() ? String(Date.now()) : null);
+}
+
+function clearMail() {
+  el('mail').value = '';
+  ls(LS.mailKept, null);
+  touchMail();
+  suggestMail();
+  renderMailKeep();
+}
+
+function renderMailKeep() {
+  el('mailKeep').style.display = ls(LS.mailKept) && el('mail').value ? '' : 'none';
+}
+
+function expireMail() {
+  if (busy || !el('mail').value) return;
+  if (!(Date.now() - Number(ls(LS.mailAt)) <= MAIL_KEEP_MS)) clearMail();
+}
+setInterval(expireMail, 30000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') expireMail(); });
+
 function checkMail() {
   const v = mailAddress();
   if (!v || /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;.]{2,}$/.test(v)) return true;
@@ -574,7 +607,7 @@ function suggestMail() {
   el('mailFixLink').onclick = e => {
     e.preventDefault();
     el('mail').value = v.slice(0, at + 1) + fixed;
-    ls(LS.draftMail, el('mail').value);
+    touchMail();
     suggestMail();
   };
 }
@@ -586,7 +619,7 @@ function suggestMail() {
 function openPicker(inputId) {
   ls(LS.pending, String(Date.now()));
   ls(LS.draft, el('msg').value || '');
-  ls(LS.draftMail, el('mail').value.trim() || null);
+  touchMail();
   fileArrived = false;
   const input = el(inputId);
   input.value = '';
@@ -600,9 +633,11 @@ el('msg').addEventListener('input', e => {
   el('msgCount').textContent = e.target.value.length;
   ls(LS.draft, e.target.value);   // 탭이 폐기돼도 메시지가 남도록 저장
 });
-el('mail').addEventListener('input', e => {
-  ls(LS.draftMail, e.target.value.trim() || null);
+el('mail').addEventListener('input', () => {
+  ls(LS.mailKept, null);   // 고친 주소는 새 주소다
+  touchMail();
   suggestMail();
+  renderMailKeep();
 });
 
 // 사진이 돌아왔을 때의 입구 — 여기서 조용히 끝나는 경우가 없도록 한다.
@@ -713,10 +748,10 @@ async function handleFiles(files, skipped) {
     el('msg').value = '';
     el('msgCount').textContent = '0';
     ls(LS.draft, null);
-    // 받는 주소는 남기지 않는다 — 다음에 찍히는 분에게 잘못 가면 안 된다
-    el('mail').value = '';
-    ls(LS.draftMail, null);
-    suggestMail();
+    // 받는 주소는 잠시 남긴다 — 남아 있다는 것을 입력란 아래에 알린다
+    touchMail();
+    ls(LS.mailKept, email ? '1' : null);
+    renderMailKeep();
   }
   ls(LS.pending, null);
 
@@ -794,6 +829,7 @@ function showUploadResult(r) {
     const label = el('mailStatus');
     if (!label) return;
     if (stopped === mailed.length) label.id = '';   // 상태 조회를 멈춘다
+    if (stopped) clearMail();   // 틀린 주소일 가능성이 높으므로 남기지 않는다
     label.textContent = stopped === mailed.length
       ? '📧 메일은 보내지 않습니다. 사진은 화면에 그대로 나갑니다.'
       : '📧 이미 발송을 시작해 메일을 취소하지 못했습니다.';

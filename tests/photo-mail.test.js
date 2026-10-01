@@ -104,7 +104,7 @@ test('photos sent within the cancel window travel as one mail, only after the wi
   assert.equal(sent[0].to, 'guest@example.com');
   assert.equal(sent[0].attachments.length, 3);
   assert.match(sent[0].attachments[0].filename, /^photo_20261001_120000_1\.jpg$/, 'file name uses Korean time');
-  assert.match(sent[0].text, /^샬롬 \^\^\n환영합니다\.\n예봄교회에서 찍은 사진을 보내드립니다\.\n\n등록 일시: /);
+  assert.match(sent[0].text, /^샬롬 \^\^\n환영합니다\.\n예봄교회에서 찍은 사진 3장을 보내드립니다\.\n\n등록 일시: /);
   assert.match(sent[0].text, /함께 올린 문구: 축하합니다/);
   assert.equal(sent[0].text.match(/함께 올린 문구/g).length, 1, 'a repeated message is listed once');
   assert.equal(mail.statusOf(third.photo.id), 'sent');
