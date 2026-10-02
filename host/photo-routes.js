@@ -1,6 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
-const { PHOTO_SCOPE } = require('./photo-archive');
+const { PHOTO_SCOPE, connectReason } = require('./photo-archive');
 
 function mountPhotoRoutes(app, archive, removeFromScreen) {
   const oauthStates = new Map();
@@ -57,7 +57,12 @@ function mountPhotoRoutes(app, archive, removeFromScreen) {
       pickerSessions.set(id, { auth, expires: Date.now() + 600000 });
       res.cookie('photo_picker', id, { httpOnly: true, secure: archive.redirectUri.startsWith('https:'), sameSite: 'strict', maxAge: 600000, path: '/api/photos/picker' });
       res.redirect('/photos?connection=select-folder');
-    } catch (e) { res.redirect('/photos?connection=' + (e.code === 'PHOTO_SCOPE_MISMATCH' ? 'scope-required' : 'failed')); }
+    } catch (e) {
+      if (e.code === 'PHOTO_SCOPE_MISMATCH') return res.redirect('/photos?connection=scope-required');
+      const reason = connectReason(e);
+      console.warn('[Photos] Google 계정 연결 실패:', reason);
+      res.redirect('/photos?connection=failed&reason=' + reason);
+    }
   });
   app.use('/api/photos/picker', (req, res, next) => {
     res.set('Referrer-Policy', 'no-referrer');

@@ -63,4 +63,11 @@ test('photo APIs inherit administrator authentication; OAuth binds state to brow
   assert.equal((await select('configured-folder')).status, 200);
   assert.deepEqual(calls, ['valid', 'configured-folder']);
   assert.equal((await select('configured-folder')).status, 401, 'successful session cannot be replayed');
+  // A failed token exchange reports why as a fixed code, never Google's response text.
+  archive.connect = async () => { throw Object.assign(new Error('secret detail'), { response: { data: { error: 'invalid_client', error_description: 'secret detail' } } }); };
+  const fourth = await fetch(base + '/api/photos/oauth/start', { headers, redirect: 'manual' });
+  const state4 = new URL(fourth.headers.get('location')).searchParams.get('state');
+  const failed = await fetch(base + '/api/photos/oauth/callback?state=' + state4 + '&code=valid',
+    { headers: { ...headers, cookie: fourth.headers.get('set-cookie').split(';')[0] }, redirect: 'manual' });
+  assert.equal(failed.headers.get('location'), '/photos?connection=failed&reason=invalid_client');
 });

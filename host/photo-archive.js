@@ -25,6 +25,16 @@ function errorText(error) {
   // Never return a Google HTTP request/config or credentials to the browser/log.
   return '드라이브 처리에 실패했습니다. 잠시 후 자동으로 다시 시도합니다.';
 }
+// Why an account connection failed, as a fixed code only: Google's own response text,
+// the authorization code and the client secret never reach the browser or the log.
+const OAUTH_REASONS = ['invalid_client', 'invalid_grant', 'redirect_uri_mismatch', 'unauthorized_client', 'invalid_request', 'access_denied'];
+function connectReason(error) {
+  if (error?.code === 'NO_REFRESH_TOKEN') return 'no_refresh_token';
+  const reason = error?.response?.data?.error;
+  if (OAUTH_REASONS.includes(reason)) return reason;
+  if (error?.response) return 'google_rejected';
+  return /^E[A-Z_]+$/.test(String(error?.code || '')) ? 'network' : 'unknown';
+}
 
 class PhotoArchive {
   constructor({ dataDir, folderId = process.env.GDRIVE_PHOTO_FOLDER_ID || DEFAULT_FOLDER, drive = null, authMode = 'service-account' }) {
@@ -128,7 +138,7 @@ class PhotoArchive {
   async connect(code) {
     const auth = this.oauthClient();
     const { tokens } = await auth.getToken(code);
-    if (!tokens.refresh_token) throw new Error('자동 보관 권한이 없습니다. Google 계정을 다시 연결해 주세요.');
+    if (!tokens.refresh_token) throw Object.assign(new Error('자동 보관 권한이 없습니다. Google 계정을 다시 연결해 주세요.'), { code: 'NO_REFRESH_TOKEN' });
     auth.setCredentials(tokens);
     const info = await auth.getTokenInfo(tokens.access_token);
     if (!info.scopes.includes(PHOTO_SCOPE) || info.scopes.some(s => s !== PHOTO_SCOPE)) {
@@ -339,4 +349,4 @@ class PhotoArchive {
   }
 }
 
-module.exports = { PhotoArchive, DEFAULT_FOLDER, META_PREFIX, PHOTO_SCOPE, atomicJSON, errorText };
+module.exports = { PhotoArchive, DEFAULT_FOLDER, META_PREFIX, PHOTO_SCOPE, atomicJSON, errorText, connectReason };

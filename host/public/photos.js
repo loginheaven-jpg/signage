@@ -4,6 +4,19 @@ let offset = 0;
 let requestSequence = 0;
 let toastTimer;
 let lastGridSignature = '';
+let connectionFailure = '';
+// 서버가 알려 주는 연결 실패 사유 — 사라지는 안내 대신 연결될 때까지 상태 상자에 남긴다.
+const failures = {
+  invalid_client: '서버에 입력한 Google OAuth 클라이언트 ID 또는 보안 비밀이 Google Cloud의 값과 다릅니다. 서버 변수 GOOGLE_PHOTO_OAUTH_CLIENT_ID, GOOGLE_PHOTO_OAUTH_CLIENT_SECRET을 다시 입력해 주세요.',
+  unauthorized_client: '이 OAuth 클라이언트는 서버 연결용으로 쓸 수 없습니다. Google Cloud에서 ‘웹 애플리케이션’ 유형의 클라이언트인지 확인해 주세요.',
+  redirect_uri_mismatch: 'Google Cloud에 등록한 리디렉션 주소가 서버 주소와 다릅니다. 승인된 리디렉션 URI와 서버 변수 PUBLIC_BASE_URL을 확인해 주세요.',
+  invalid_grant: 'Google 로그인 확인이 만료되었거나 이미 사용되었습니다. Google 계정 연결을 다시 눌러 주세요.',
+  invalid_request: 'Google이 연결 요청을 받아들이지 않았습니다. 서버의 Google OAuth 설정을 확인해 주세요.',
+  access_denied: 'Google이 이 계정의 연결을 허용하지 않았습니다. 앱 게시 상태와 테스트 사용자 설정을 확인해 주세요.',
+  no_refresh_token: 'Google이 자동 보관 권한을 주지 않았습니다. Google 계정의 타사 연결에서 이 앱을 삭제한 뒤 다시 연결해 주세요.',
+  google_rejected: 'Google이 연결을 거절했습니다. 서버의 Google OAuth 설정을 확인해 주세요.',
+  network: '서버가 Google에 접속하지 못했습니다. 잠시 후 다시 연결해 주세요.'
+};
 const labels = { saved: '드라이브 보관 완료', pending: '서버 보관 · 드라이브 전송 대기', error: '서버 보관 · 전송 재시도 중', deleting: '삭제 처리 중' };
 const dates = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 function toast(message) {
@@ -25,6 +38,7 @@ function renderStatus(status) {
   $('connectionTitle').textContent = status.ready ? 'Google 드라이브 자동 보관' : 'Google 드라이브 연결이 필요합니다';
   const waiting = status.counts.pending + status.counts.error;
   $('connectionText').textContent = status.error || `${status.folderName || '지정 폴더'} · 보관 완료 ${status.counts.saved}장${waiting ? ' · 전송 대기 ' + waiting + '장' : ''}`;
+  if (connectionFailure && !status.ready) $('connectionText').textContent = '계정 연결 실패 — ' + connectionFailure;
   if (!status.ready && !status.oauthConfigured) $('connectionText').textContent += ' 개인 드라이브를 사용하려면 서버 관리자가 Google 계정 연결 설정을 먼저 완료해야 합니다.';
   if (status.oauthConfigured && status.pickerConfigured === false) $('connectionText').textContent += ' Google 폴더 선택 기능 설정이 필요합니다.';
   $('driveLink').href = 'https://drive.google.com/drive/folders/' + encodeURIComponent(status.folderId);
@@ -128,6 +142,7 @@ if (connection === 'select-folder') {
   $('folderSelection').hidden = false;
   toast('사진 보관 폴더를 선택해 연결을 마무리해 주세요.');
 } else if (connection) {
+  if (connection === 'failed') connectionFailure = failures[new URLSearchParams(location.search).get('reason')] || '자동 보관 권한과 Google 연결 설정을 확인해 주세요.';
   toast(({ success: 'Google 계정 연결 완료. 대기 사진을 자동 보관합니다.', cancelled: 'Google 계정 연결을 취소했습니다.', failed: '계정 연결에 실패했습니다. 자동 보관 권한과 Google 연결 설정을 확인해 주세요.', 'scope-required': 'Google 계정에서 이 앱의 기존 접근 권한을 해제한 뒤 사진 전용 권한으로 다시 연결해 주세요.' })[connection] || '');
   history.replaceState(null, '', '/photos');
 }

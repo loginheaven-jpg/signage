@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { Readable } = require('node:stream');
-const { PhotoArchive, META_PREFIX, PHOTO_SCOPE } = require('../host/photo-archive');
+const { PhotoArchive, META_PREFIX, PHOTO_SCOPE, connectReason } = require('../host/photo-archive');
 
 function fixture(t, { shared = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'signage-archive-test-'));
@@ -181,4 +181,14 @@ test('broad or missing OAuth scope is rejected, and legacy broad tokens are not 
   await restored.initialize();
   assert.equal(restored.drive, null); assert.equal(restored.ready, false);
   assert.match(restored.error, /다시 연결/);
+});
+
+test('connection failures are reduced to fixed reason codes', async t => {
+  const { archive } = fixture(t);
+  assert.equal(connectReason({ response: { data: { error: 'invalid_client' } } }), 'invalid_client');
+  assert.equal(connectReason({ response: { data: { error: '<script>' } } }), 'google_rejected');
+  assert.equal(connectReason({ code: 'ETIMEDOUT' }), 'network');
+  assert.equal(connectReason(new TypeError('bug')), 'unknown');
+  archive.oauthClient = () => ({ getToken: async () => ({ tokens: { access_token: 'a' } }) });
+  assert.equal(connectReason(await archive.connect('code').catch(e => e)), 'no_refresh_token');
 });
