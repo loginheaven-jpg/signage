@@ -36,6 +36,13 @@ function connectReason(error) {
   return /^E[A-Z_]+$/.test(String(error?.code || '')) ? 'network' : 'unknown';
 }
 
+// First 20 characters of the caption, minus what Windows forbids in a file name.
+// The full caption stays in the Drive description.
+function nameLabel(message) {
+  const text = String(message || '').normalize('NFC').replace(/[\\/:*?"<>|\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return [...text].slice(0, 20).join('').trim();
+}
+
 class PhotoArchive {
   constructor({ dataDir, folderId = process.env.GDRIVE_PHOTO_FOLDER_ID || DEFAULT_FOLDER, drive = null, authMode = 'service-account' }) {
     if (!/^[\w-]+$/.test(folderId)) throw new Error('Invalid photo folder ID');
@@ -79,10 +86,12 @@ class PhotoArchive {
   enqueue(photo, source, site) {
     const ext = path.extname(source).toLowerCase();
     if (!/^\.(jpe?g|png|gif|webp|heic|heif)$/.test(ext)) throw new Error('Invalid photo extension');
+    const label = nameLabel(photo.message);
     const record = {
       id: photo.id, message: photo.message, ts: photo.ts, siteId: site.id, siteName: site.name,
       localName: photo.id + ext, mimeType: ({ '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.heic': 'image/heic', '.heif': 'image/heif' })[ext],
-      name: new Date(photo.ts).toISOString().replace(/[:.]/g, '-') + '_' + photo.id.slice(0, 8) + ext,
+      // Korean time first, so sorting by name is chronological and matches the gallery.
+      name: new Date(photo.ts + 9 * 3600000).toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-') + (label ? '_' + label : '') + '_' + photo.id.slice(0, 8) + ext,
       folderId: this.folderId, status: 'pending', attempts: 0, nextAttempt: 0
     };
     // Archive has its own copy: live expiry/clear can never erase an unsaved upload.
@@ -349,4 +358,4 @@ class PhotoArchive {
   }
 }
 
-module.exports = { PhotoArchive, DEFAULT_FOLDER, META_PREFIX, PHOTO_SCOPE, atomicJSON, errorText, connectReason };
+module.exports = { PhotoArchive, DEFAULT_FOLDER, META_PREFIX, PHOTO_SCOPE, atomicJSON, errorText, connectReason, nameLabel };

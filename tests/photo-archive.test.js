@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { Readable } = require('node:stream');
-const { PhotoArchive, META_PREFIX, PHOTO_SCOPE, connectReason } = require('../host/photo-archive');
+const { PhotoArchive, META_PREFIX, PHOTO_SCOPE, connectReason, nameLabel } = require('../host/photo-archive');
 
 function fixture(t, { shared = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'signage-archive-test-'));
@@ -191,4 +191,15 @@ test('connection failures are reduced to fixed reason codes', async t => {
   assert.equal(connectReason(new TypeError('bug')), 'unknown');
   archive.oauthClient = () => ({ getToken: async () => ({ tokens: { access_token: 'a' } }) });
   assert.equal(connectReason(await archive.connect('code').catch(e => e)), 'no_refresh_token');
+});
+
+test('file name carries Korean time and the first 20 caption characters, safe for Windows', async t => {
+  const { add } = fixture(t);
+  const r = add('환영합니다: 김철수/이영희 성도님\n오늘도 좋은 하루 되세요');
+  assert.equal(r.name, '2026-09-26_01-30-00_환영합니다 김철수 이영희 성도님 오늘_' + r.id.slice(0, 8) + '.jpg');
+  assert.equal(r.message, '환영합니다: 김철수/이영희 성도님\n오늘도 좋은 하루 되세요', 'the full caption is kept');
+  const plain = add('');
+  assert.equal(plain.name, '2026-09-26_01-30-00_' + plain.id.slice(0, 8) + '.jpg');
+  assert.equal(nameLabel('\u1112\u1161\u11ab\u1100\u1173\u11af'), '한글', 'decomposed Hangul is composed');
+  assert.equal([...nameLabel('😀'.repeat(30))].length, 20);
 });
