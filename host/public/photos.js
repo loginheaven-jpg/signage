@@ -69,6 +69,9 @@ function card(photo) {
   image.addEventListener('error', () => { image.alt = '사진을 불러오지 못했습니다. 연결 후 새로고침해 주세요.'; });
   const details = node('div', 'details');
   details.append(node('p', 'caption', photo.message || '문구 없음'), node('div', 'meta', dates.format(new Date(photo.ts))), node('div', 'meta', photo.siteName || '드라이브 사진'));
+  if (photo.eventName) details.append(node('div', 'meta', photo.year + ' / ' + photo.eventName));
+  if (photo.uploaderName) details.append(node('div', 'meta', '업로더: ' + photo.uploaderName));
+  if (photo.capturedAt) details.append(node('div', 'meta', '사진 날짜: ' + dates.format(new Date(photo.capturedAt))));
   details.append(node('span', 'badge ' + photo.status, labels[photo.status] || photo.status));
   if (photo.error) details.append(node('p', 'error-note', photo.error));
   const actions = node('div', 'actions');
@@ -143,7 +146,7 @@ if (connection === 'select-folder') {
   toast('사진 보관 폴더를 선택해 연결을 마무리해 주세요.');
 } else if (connection) {
   if (connection === 'failed') connectionFailure = failures[new URLSearchParams(location.search).get('reason')] || '자동 보관 권한과 Google 연결 설정을 확인해 주세요.';
-  toast(({ success: 'Google 계정 연결 완료. 대기 사진을 자동 보관합니다.', cancelled: 'Google 계정 연결을 취소했습니다.', failed: '계정 연결에 실패했습니다. 자동 보관 권한과 Google 연결 설정을 확인해 주세요.', 'scope-required': 'Google 계정에서 이 앱의 기존 접근 권한을 해제한 뒤 사진 전용 권한으로 다시 연결해 주세요.' })[connection] || '');
+  toast(({ success: 'Google 계정 연결 완료. 대기 사진을 자동 보관합니다.', cancelled: 'Google 계정 연결을 취소했습니다.', failed: '계정 연결에 실패했습니다. 자동 보관 권한과 Google 연결 설정을 확인해 주세요.', 'scope-required': '연도·행사 폴더 보관 권한으로 Google 계정을 다시 연결해 주세요.' })[connection] || '');
   history.replaceState(null, '', '/photos');
 }
 load();

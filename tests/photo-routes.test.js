@@ -27,7 +27,7 @@ test('photo APIs inherit administrator authentication; OAuth binds state to brow
   assert.equal(start.status, 302);
   const auth = new URL(start.headers.get('location'));
   assert.equal(auth.searchParams.get('access_type'), 'offline');
-  assert.equal(auth.searchParams.get('scope'), 'https://www.googleapis.com/auth/drive.file');
+  assert.equal(auth.searchParams.get('scope'), 'https://www.googleapis.com/auth/drive');
   assert.equal(auth.searchParams.get('include_granted_scopes'), 'false');
   const state = auth.searchParams.get('state');
   const cookie = start.headers.get('set-cookie').split(';')[0];

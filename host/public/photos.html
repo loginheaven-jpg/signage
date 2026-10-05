@@ -12,10 +12,10 @@
 <script src="/photo-picker.js" defer></script>
 </head>
 <body>
-<header><div><h1>사진 보관함</h1><p>모니터에 전한 사진과 문구를 한곳에</p></div><a href="/">← 콘트롤 센터</a></header>
+<header><div><h1>사진 보관함</h1><p>행사별 교회사진과 모니터에 전한 사진을 한곳에</p></div><a href="/">← 콘트롤 센터</a></header>
 <main>
-<section id="folderSelection" class="connection" hidden><div><strong>사진 보관 폴더 선택</strong><p>Google 선택창에서 미리 지정한 photos 폴더를 선택하면 연결이 완료됩니다.</p></div><button id="selectFolder" class="primary">Google에서 폴더 선택</button></section>
-<section id="connection" class="connection" aria-live="polite"><div><strong id="connectionTitle">보관 상태 확인 중</strong><p id="connectionText">사진 목록을 불러오고 있습니다.</p><a id="driveLink" target="_blank" rel="noopener noreferrer">드라이브 폴더 열기 ↗</a></div><a id="connect" class="button primary" href="/api/photos/oauth/start" hidden>Google 계정 연결</a></section>
+<section id="folderSelection" class="connection" hidden><div><strong>교회사진 루트 선택</strong><p>Google 선택창에서 #교회사진영상 루트를 선택하면 연결이 완료됩니다.</p></div><button id="selectFolder" class="primary">Google에서 폴더 선택</button></section>
+<section id="connection" class="connection" aria-live="polite"><div><strong id="connectionTitle">보관 상태 확인 중</strong><p id="connectionText">사진 목록을 불러오고 있습니다.</p><p>기존 연도·행사 폴더를 사용하려면 Google Drive 조회·관리 권한으로 연결해야 합니다. 앱은 지정한 교회사진 루트와 기존 보관 기록을 관리합니다.</p><a id="driveLink" target="_blank" rel="noopener noreferrer">드라이브 폴더 열기 ↗</a></div><a id="connect" class="button primary" href="/api/photos/oauth/start" hidden>Google 계정 연결</a></section>
 <div class="toolbar"><label>등록 날짜 <input id="date" type="date"></label><button id="all">전체 날짜</button><button id="refresh">새로고침</button><span class="count" id="count"></span></div>
 <div id="grid" class="grid" aria-live="polite"></div>
 <div class="pagination"><button id="prev">이전</button><span id="page"></span><button id="next">다음</button></div>

@@ -83,7 +83,7 @@ function mountPhotoRoutes(app, archive, removeFromScreen) {
   app.post('/api/photos/picker/select', async (req, res) => {
     const session = req.pickerSession;
     if (session.saving) return res.status(409).json({ error: '폴더 연결을 저장하고 있습니다.' });
-    if (req.body?.folderId !== archive.folderId) return res.status(400).json({ error: '미리 지정한 photos 보관 폴더를 선택해 주세요.' });
+    if (req.body?.folderId !== archive.folderId) return res.status(400).json({ error: '미리 지정한 교회사진 루트를 선택해 주세요.' });
     session.saving = true;
     try {
       await archive.serialize(() => archive.completeConnection(session.auth, req.body.folderId));

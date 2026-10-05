@@ -38,7 +38,7 @@
 ## 설치 및 실행
 
 ### 사전 요구사항
-- Node.js 18+ (https://nodejs.org)
+- Node.js 22+ (https://nodejs.org)
 - 구글 드라이브 서비스 계정 키 (JSON)
 
 ### 호스트 (관리자 PC)

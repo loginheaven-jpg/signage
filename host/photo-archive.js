@@ -5,11 +5,13 @@ const path = require('node:path');
 const { finished } = require('node:stream/promises');
 const { google } = require('googleapis');
 
-const DEFAULT_FOLDER = '1CvycMd8O3KTb7sFpMJj9IL6DUlWE5mzK';
+const DEFAULT_FOLDER = '1sOi_69AEMwqoMbIyQ-vvZ2dpW7SD-Yfd';
 const META_PREFIX = 'SIGNAGE_PHOTO_V1\n';
 const FIELDS = 'id,name,mimeType,description,createdTime,parents,trashed,size,appProperties';
 const REQUEST = { timeout: 60000, retry: false };
-const PHOTO_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+// Existing year/event folders must be visible and writable after administrator consent.
+// All application operations remain confined to the configured archive hierarchy.
+const PHOTO_SCOPE = 'https://www.googleapis.com/auth/drive';
 
 function atomicJSON(file, value) {
   const temp = file + '.tmp';
@@ -17,6 +19,7 @@ function atomicJSON(file, value) {
   fs.renameSync(temp, file);
 }
 function errorText(error) {
+  if (error.publicMessage) return error.publicMessage;
   const reason = error?.response?.data?.error?.errors?.[0]?.reason;
   if (reason === 'storageQuotaExceeded') return 'Google 드라이브 저장 공간 또는 계정 연결을 확인해 주세요.';
   if (error?.response?.data?.error === 'invalid_grant') return 'Google 계정 연결이 만료되었습니다. 다시 연결해 주세요.';
@@ -44,7 +47,7 @@ function nameLabel(message) {
 }
 
 class PhotoArchive {
-  constructor({ dataDir, folderId = process.env.GDRIVE_PHOTO_FOLDER_ID || DEFAULT_FOLDER, drive = null, authMode = 'service-account' }) {
+  constructor({ dataDir, folderId = process.env.GDRIVE_CAMERA_ROOT_ID || DEFAULT_FOLDER, drive = null, authMode = 'service-account' }) {
     if (!/^[\w-]+$/.test(folderId)) throw new Error('Invalid photo folder ID');
     this.folderId = folderId;
     this.root = path.resolve(dataDir, 'photo-archive');
@@ -64,6 +67,7 @@ class PhotoArchive {
     this.folder = null;
     this.lastSync = 0;
     this.tail = Promise.resolve();
+    this.folders = new (require('./drive-folders').DriveFolders)(this);
     this.oauthFile = path.join(this.root, 'google-oauth.json');
     this.clientId = process.env.GOOGLE_PHOTO_OAUTH_CLIENT_ID || '';
     this.clientSecret = process.env.GOOGLE_PHOTO_OAUTH_CLIENT_SECRET || '';
@@ -83,22 +87,34 @@ class PhotoArchive {
     return fs.existsSync(file) ? file : null;
   }
 
-  enqueue(photo, source, site) {
+  enqueue(photo, source, site, extra = {}) {
     const ext = path.extname(source).toLowerCase();
-    if (!/^\.(jpe?g|png|gif|webp|heic|heif)$/.test(ext)) throw new Error('Invalid photo extension');
+    if (!/^\.(jpe?g|png|gif|webp|heic|heif|avif|tif)$/.test(ext)) throw new Error('Invalid photo extension');
     const label = nameLabel(photo.message);
     const record = {
       id: photo.id, message: photo.message, ts: photo.ts, siteId: site.id, siteName: site.name,
-      localName: photo.id + ext, mimeType: ({ '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.heic': 'image/heic', '.heif': 'image/heif' })[ext],
+      localName: photo.id + ext, mimeType: ({ '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.heic': 'image/heic', '.heif': 'image/heif', '.avif': 'image/avif', '.tif': 'image/tiff' })[ext],
       // Korean time first, so sorting by name is chronological and matches the gallery.
       name: new Date(photo.ts + 9 * 3600000).toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-') + (label ? '_' + label : '') + '_' + photo.id.slice(0, 8) + ext,
-      folderId: this.folderId, status: 'pending', attempts: 0, nextAttempt: 0
+      folderId: this.folderId, status: 'pending', attempts: 0, nextAttempt: 0, ...extra
     };
     // Archive has its own copy: live expiry/clear can never erase an unsaved upload.
     fs.copyFileSync(source, path.join(this.media, record.localName));
     try { this.save(record); }
     catch (e) { fs.unlinkSync(path.join(this.media, record.localName)); throw e; }
     return record;
+  }
+
+  enqueueCamera(photo, source, target) {
+    const stamp = ts => new Date(ts + 9 * 3600000).toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
+    const captured = photo.capturedAt ? stamp(photo.capturedAt) : '날짜미상';
+    const extension = path.extname(source).toLowerCase();
+    const base = captured + '_' + (nameLabel(photo.uploaderName) || '이름미상') + '_' + stamp(photo.ts);
+    let name = base + extension, suffix = 2;
+    while ([...this.records.values()].some(r => r.id !== photo.id && r.name === name)) name = base + '_' + String(suffix++).padStart(2, '0') + extension;
+    return this.enqueue(photo, source, { id: photo.siteId || '', name: photo.siteName || '' }, { name, rootId: this.folderId, target, owner: photo.owner, uploaderName: photo.uploaderName,
+      capturedAt: photo.capturedAt || null, dateSource: photo.dateSource, originalName: photo.originalName,
+      requestId: photo.requestId, fingerprint: photo.fingerprint });
   }
 
   oauthClient() {
@@ -111,7 +127,7 @@ class PhotoArchive {
       if (fs.existsSync(this.oauthFile) && this.clientId && this.clientSecret) {
         const saved = JSON.parse(fs.readFileSync(this.oauthFile, 'utf8'));
         if (saved.scope !== PHOTO_SCOPE || saved.folderId !== this.folderId) {
-          this.error = '사진 전용 권한으로 Google 계정을 다시 연결하고 보관 폴더를 선택해 주세요.';
+          this.error = '연도·행사 폴더를 사용할 수 있도록 Google 계정을 다시 연결하고 교회사진 루트를 선택해 주세요.';
           return;
         }
         const auth = this.oauthClient();
@@ -151,7 +167,7 @@ class PhotoArchive {
     auth.setCredentials(tokens);
     const info = await auth.getTokenInfo(tokens.access_token);
     if (!info.scopes.includes(PHOTO_SCOPE) || info.scopes.some(s => s !== PHOTO_SCOPE)) {
-      throw Object.assign(new Error('사진 전용 권한이 필요합니다. Google 계정에서 기존 앱 권한을 해제한 뒤 다시 연결해 주세요.'), { code: 'PHOTO_SCOPE_MISMATCH' });
+      throw Object.assign(new Error('연도·행사 폴더 보관 권한으로 Google 계정을 다시 연결해 주세요.'), { code: 'PHOTO_SCOPE_MISMATCH' });
     }
     // Folder access does not exist until the user selects it in Google Picker.
     // Keep this auth only in a short-lived browser-bound session until then.
@@ -181,49 +197,57 @@ class PhotoArchive {
 
   status() {
     const counts = { pending: 0, saved: 0, error: 0, deleting: 0 };
-    for (const r of this.records.values()) if (r.folderId === this.folderId && r.status in counts) counts[r.status]++;
+    for (const r of this.records.values()) if (r.status in counts) counts[r.status]++;
     return { folderId: this.folderId, folderName: this.folder?.name || '', ready: this.ready,
       authMode: this.authMode, oauthConfigured: !!(this.clientId && this.clientSecret),
       pickerConfigured: !!(this.pickerKey && /^\d+$/.test(this.pickerAppId)), scope: PHOTO_SCOPE,
-      error: this.error, counts, lastSync: this.lastSync || null };
+      error: this.error || this.syncError || '', counts, lastSync: this.lastSync || null };
   }
 
   list({ date = '', offset = 0, limit = 40 } = {}) {
-    const rows = [...this.records.values()].filter(r => r.folderId === this.folderId && !['deleted', 'missing'].includes(r.status))
+    const rows = [...this.records.values()].filter(r => !['deleted', 'missing'].includes(r.status))
       .filter(r => !date || new Date(r.ts + 9 * 3600000).toISOString().slice(0, 10) === date)
       .sort((a, b) => b.ts - a.ts || a.id.localeCompare(b.id));
     return { total: rows.length, photos: rows.slice(offset, offset + limit).map(r => ({
       id: r.id, message: r.message, ts: r.ts, siteName: r.siteName, name: r.name,
+      year: r.target?.year, eventName: r.target?.eventName, uploaderName: r.uploaderName, capturedAt: r.capturedAt,
       status: r.status, error: r.error || '', url: '/api/photos/' + encodeURIComponent(r.id) + '/image'
     })) };
   }
 
   get(id) {
     const r = this.records.get(id);
-    return r && r.folderId === this.folderId && !['deleted', 'missing', 'deleting'].includes(r.status) ? r : null;
+    return r && !['deleted', 'missing', 'deleting'].includes(r.status) ? r : null;
   }
 
   async upload(r) {
     const file = this.localPath(r);
     if (!file) throw new Error('Missing local photo');
+    if (r.target && !r.targetResolved) {
+      r.target = await this.folders.resolve(r.target);
+      r.folderId = r.target.eventId; r.targetResolved = true; this.save(r);
+    }
+    await this.folders.validateRecord(r);
     if (!r.driveId) {
       const { data } = await this.drive.files.generateIds({ count: 1, space: 'drive', type: 'files' }, REQUEST);
       r.driveId = data.ids[0];
       this.save(r); // Persist generated ID before sending media, so retries cannot duplicate photos.
     }
-    const metadata = { message: r.message, ts: r.ts, siteId: r.siteId, siteName: r.siteName };
+    const metadata = { message: r.message, ts: r.ts, siteId: r.siteId, siteName: r.siteName,
+      rootId: r.rootId, target: r.target, capturedAt: r.capturedAt, dateSource: r.dateSource,
+      uploaderName: r.uploaderName, originalName: r.originalName };
     const body = fs.createReadStream(file);
     const closed = finished(body).catch(() => {});
     try {
       await this.drive.files.create({ supportsAllDrives: true, fields: 'id', requestBody: {
-        id: r.driveId, name: r.name, parents: [this.folderId],
+        id: r.driveId, name: r.name, parents: [r.folderId],
         description: META_PREFIX + JSON.stringify(metadata), appProperties: { signagePhotoId: r.id }
       }, media: { mimeType: r.mimeType, body } }, REQUEST);
     } catch (e) {
       if (Number(e.code || e.response?.status) !== 409) throw e;
       // A timed-out request may already have succeeded. Verify identity before accepting conflict.
       const { data } = await this.drive.files.get({ fileId: r.driveId, supportsAllDrives: true, fields: FIELDS }, REQUEST);
-      if (data.trashed || !data.parents?.includes(this.folderId) || data.appProperties?.signagePhotoId !== r.id) throw e;
+      if (data.trashed || !data.parents?.includes(r.folderId) || data.appProperties?.signagePhotoId !== r.id) throw e;
     } finally { body.destroy(); await closed; }
     const deleting = r.status === 'deleting';
     r.status = deleting ? 'deleting' : 'saved'; r.error = ''; r.attempts = 0; r.savedAt = Date.now();
@@ -235,7 +259,7 @@ class PhotoArchive {
 
   markDelete(id) {
     const r = this.records.get(id);
-    if (!r || r.folderId !== this.folderId || ['deleted', 'missing'].includes(r.status)) return false;
+    if (!r || ['deleted', 'missing'].includes(r.status)) return false;
     r.status = 'deleting'; r.error = ''; r.nextAttempt = 0;
     this.save(r);
     return true;
@@ -244,6 +268,7 @@ class PhotoArchive {
   async trash(r) {
     if (r.driveId) {
       if (!this.drive) throw new Error('No Drive connection');
+      await this.folders.validateRecord(r);
       let data;
       try { ({ data } = await this.drive.files.get({ fileId: r.driveId, supportsAllDrives: true, fields: 'id,parents,trashed' }, REQUEST)); }
       catch (e) {
@@ -252,7 +277,7 @@ class PhotoArchive {
         if (Number(e.code || e.response?.status) !== 404 || r.savedAt) throw e;
       }
       if (data && !data.trashed) {
-        if (!data.parents?.includes(this.folderId)) throw new Error('Photo moved outside archive folder');
+        if (!data.parents?.includes(r.folderId)) throw new Error('Photo moved outside archive folder');
         await this.drive.files.update({ fileId: r.driveId, supportsAllDrives: true, requestBody: { trashed: true }, fields: 'id' }, REQUEST);
       }
     }
@@ -262,16 +287,25 @@ class PhotoArchive {
   }
 
   async importFiles() {
-    let pageToken;
+    const inventoryFolders = new Map([[this.folderId, null]]);
+    const years = (await this.folders.children(this.folderId)).filter(f => f.mimeType === 'application/vnd.google-apps.folder' && /^(19|20|21)\d{2}$/.test(f.name));
+    for (const year of years) {
+      for (const event of await this.folders.children(year.id)) {
+        if (event.mimeType === 'application/vnd.google-apps.folder') inventoryFolders.set(event.id, { year: year.name, yearId: year.id, eventId: event.id, eventName: event.name, folderName: event.name });
+      }
+    }
     const files = [];
+    for (const folderId of inventoryFolders.keys()) {
+    let pageToken;
     do {
       const { data } = await this.drive.files.list({
-        q: `'${this.folderId}' in parents and trashed = false and mimeType contains 'image/'`,
+        q: `'${folderId}' in parents and trashed = false and mimeType contains 'image/'`,
         pageSize: 1000, pageToken, fields: `nextPageToken,files(${FIELDS})`,
         supportsAllDrives: true, includeItemsFromAllDrives: true
       }, REQUEST);
       files.push(...(data.files || [])); pageToken = data.nextPageToken;
     } while (pageToken);
+    }
     const byDrive = new Map([...this.records.values()].map(r => [r.driveId, r]));
     const seen = new Set();
     for (const f of files) {
@@ -293,14 +327,17 @@ class PhotoArchive {
       const id = candidate && /^[\w-]{1,128}$/.test(candidate) && !this.records.has(candidate) ? candidate : 'drive_' + f.id;
       if (this.records.has(id)) continue;
       const ts = Number(meta.ts) || Date.parse(f.createdTime);
-      const r = { id, driveId: f.id, folderId: this.folderId, name: f.name, mimeType: f.mimeType,
+      const folderId = f.parents?.find(parent => inventoryFolders.has(parent)) || this.folderId;
+      const target = inventoryFolders.get(folderId);
+      const r = { id, driveId: f.id, folderId, rootId: this.folderId, target, targetResolved: !!target, name: f.name, mimeType: f.mimeType,
+        capturedAt: Number(meta.capturedAt) || null, dateSource: String(meta.dateSource || ''), uploaderName: String(meta.uploaderName || '').slice(0, 20), originalName: String(meta.originalName || '').slice(0, 255),
         message: String(meta.message ?? f.description ?? '').slice(0, 2000),
         ts: Number.isFinite(ts) && ts > 0 && ts < 8640000000000000 ? ts : Date.now(),
         siteId: String(meta.siteId || ''), siteName: String(meta.siteName || ''), status: 'saved', savedAt: Date.now() };
       this.save(r);
     }
     for (const r of this.records.values()) {
-      if (r.folderId === this.folderId && r.status === 'saved' && !seen.has(r.driveId)) {
+      if ((r.rootId === this.folderId || r.folderId === this.folderId) && r.status === 'saved' && !seen.has(r.driveId)) {
         r.status = 'missing'; this.save(r);
       }
     }
@@ -312,9 +349,8 @@ class PhotoArchive {
     this.cycling = this.serialize(async () => {
       try {
         await this.initialize();
-        if (this.ready && this.drive && (force || Date.now() - this.lastSync > 180000)) await this.importFiles();
       } catch (e) { this.ready = false; this.error = errorText(e); }
-      const due = [...this.records.values()].filter(r => r.folderId === this.folderId && ['pending', 'error', 'deleting'].includes(r.status) && (force || !r.nextAttempt || r.nextAttempt <= Date.now())).slice(0, 10);
+      const due = [...this.records.values()].filter(r => ['pending', 'error', 'deleting'].includes(r.status) && (force || !r.nextAttempt || r.nextAttempt <= Date.now())).slice(0, 10);
       for (const r of due) {
         if (r.status !== 'deleting' && !this.ready) continue;
         if (r.status === 'deleting' && r.driveId && !this.ready) continue;
@@ -326,6 +362,10 @@ class PhotoArchive {
           r.nextAttempt = Date.now() + Math.min(1800000, 30000 * 2 ** Math.min(r.attempts - 1, 6));
           this.save(r);
         }
+      }
+      if (this.ready && this.drive && (force || Date.now() - this.lastSync > 180000)) {
+        try { await this.importFiles(); this.syncError = ''; }
+        catch (e) { this.syncError = errorText(e); }
       }
     }).finally(() => { this.cycling = null; });
     return this.cycling;
@@ -348,8 +388,9 @@ class PhotoArchive {
     if (file) return res.sendFile(file);
     if (!this.drive || !r.driveId) return res.status(503).json({ error: '사진을 불러올 수 없습니다.' });
     try {
+      await this.folders.validateRecord(r);
       const { data } = await this.drive.files.get({ fileId: r.driveId, supportsAllDrives: true, fields: 'id,parents,trashed' }, REQUEST);
-      if (data.trashed || !data.parents?.includes(this.folderId)) return res.status(404).json({ error: '드라이브 폴더에 사진이 없습니다.' });
+      if (data.trashed || !data.parents?.includes(r.folderId)) return res.status(404).json({ error: '드라이브 폴더에 사진이 없습니다.' });
       const result = await this.drive.files.get({ fileId: r.driveId, alt: 'media', supportsAllDrives: true }, { ...REQUEST, responseType: 'stream' });
       result.data.on('error', () => res.destroy());
       res.on('close', () => result.data.destroy());

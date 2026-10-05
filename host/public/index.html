@@ -486,7 +486,7 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 
       <div class="panel">
         <div class="panel-header">
-          <span class="panel-title">카메라 접수</span>
+          <span class="panel-title">모니터 표출 접수</span>
           <button class="btn" id="liveToggleBtn" onclick="toggleLive()">불러오는 중...</button>
         </div>
         <div id="liveMasterBox" style="font-size:13px; color:#666; line-height:1.6;">
@@ -504,6 +504,8 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
         <div class="settings-grid">
           <div class="setting-card">
             <h3>이 링크를 사진 올릴 사람에게 전달하세요</h3>
+            <p style="font-size:13px;line-height:1.7">사진은 교회사진 루트의 연도·행사 폴더에 보관할 수 있습니다. 모니터 표출 접수와 별도로 제어합니다.</p>
+            <button class="btn" id="archiveToggleBtn" onclick="toggleArchiveIntake()">사진 보관 접수 확인 중...</button>
             <p style="font-size:12px; color:#666; margin-bottom:10px;">카톡방에 붙여넣거나 QR로 보여주면 됩니다. 폰에서 열고 <b>홈 화면에 추가</b>하면 앱처럼 씁니다.</p>
             <input type="text" id="liveLink" readonly onclick="this.select()"
                    style="width:100%; padding:10px; border:1px solid #ddd; border-radius:8px; font-size:12px; font-family:monospace; margin-bottom:10px;">
@@ -1547,6 +1549,9 @@ function renderLive() {
   const btn = document.getElementById('liveToggleBtn');
   btn.textContent = liveData.enabled ? '🟢 접수 중 — 닫기' : '⚪ 접수 닫힘 — 열기';
   btn.className = 'btn ' + (liveData.enabled ? 'btn-danger' : 'btn-primary');
+  const archiveBtn = document.getElementById('archiveToggleBtn');
+  archiveBtn.textContent = liveData.archiveEnabled === false ? '사진 보관 접수 닫힘 — 열기' : '사진 보관 접수 중 — 닫기';
+  archiveBtn.className = 'btn ' + (liveData.archiveEnabled === false ? 'btn-primary' : 'btn-danger');
 
   // 사이드바 표시등
   const dot = document.getElementById('liveNavDot');
@@ -1662,9 +1667,16 @@ async function toggleLive() {
   });
   const data = await res.json();
   if (data.success) {
-    showToast(next ? '카메라 접수를 열었습니다' : '카메라 접수를 닫았습니다. 기존 사진은 유지됩니다');
+    showToast(next ? '모니터 표출 접수를 열었습니다' : '모니터 표출 접수를 닫았습니다. 기존 사진은 유지됩니다');
     refreshLive();
   }
+}
+
+async function toggleArchiveIntake() {
+  if (!liveData) return;
+  const next = liveData.archiveEnabled === false;
+  const res = await fetch('/api/live', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archiveEnabled: next }) });
+  if (res.ok) { showToast(next ? '사진 보관 접수를 열었습니다' : '사진 보관 접수를 닫았습니다. 기존 보관과 재시도는 유지됩니다'); refreshLive(); }
 }
 
 async function saveLiveSettings() {

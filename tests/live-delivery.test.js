@@ -183,15 +183,5 @@ test('web and Electron use the same delivery implementation', () => {
   assert.equal(fs.readFileSync(path.join(__dirname, '../host/public/live-delivery.js'), 'utf8'), source);
 });
 
-test('mobile always uploads converted JPEG even when a small HEIC original is smaller', async () => {
-  const html = fs.readFileSync(path.join(__dirname, '../host/public/m.html'), 'utf8');
-  const code = html.slice(html.indexOf('async function resizeImage('), html.indexOf('async function decodeImage('));
-  const jpeg = { size: 2000, type: 'image/jpeg' };
-  const context = { decodeImage: async () => ({ width: 10, height: 10, close() {} }),
-    document: { createElement: () => ({ getContext: () => ({ drawImage() {} }), toBlob: cb => cb(jpeg) }) } };
-  vm.createContext(context);
-  vm.runInContext(code, context);
-  const result = await context.resizeImage({ size: 1000, type: 'image/heic' }, 1920, 0.85);
-  assert.equal(result.type, 'image/jpeg');
-  assert.equal(result, jpeg);
-});
+// Original retention and monitor JPEG conversion are exercised with real image
+// bytes and HTTP in camera-service.test.js, rather than a canvas implementation stub.

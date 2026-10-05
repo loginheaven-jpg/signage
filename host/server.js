@@ -185,6 +185,7 @@ app.get(['/', '/index.html'], (req, res, next) => {
   next();
 });
 app.get(['/camera', '/m', '/m.html'], browserAuth.guard('camera'), cameraPage);
+app.get('/camera-exif.js', (req, res) => res.sendFile(path.join(__dirname, 'node_modules', 'exifr', 'dist', 'full.umd.js')));
 app.use('/live/api', (req, res, next) => {
   // Legacy token links are retained only for local tests/development without configured camera auth.
   if (!browserAuth.configured('camera') && !process.env.RAILWAY_ENVIRONMENT_ID && process.env.NODE_ENV !== 'production') return next();
@@ -667,7 +668,7 @@ const LIVE_DEFAULT_SETTINGS = {
   cancelSec: 60       // 업로더 본인이 취소할 수 있는 시간(초)
 };
 
-let liveConfig = { enabled: false, token: '', settings: { ...LIVE_DEFAULT_SETTINGS } };
+let liveConfig = { enabled: false, archiveEnabled: true, token: '', settings: { ...LIVE_DEFAULT_SETTINGS } };
 
 function newLiveToken() {
   return crypto.randomBytes(9).toString('base64url'); // 12자
@@ -679,6 +680,7 @@ function loadLiveConfig() {
       const saved = JSON.parse(fs.readFileSync(LIVE_CONFIG_FILE, 'utf8'));
       liveConfig = {
         enabled: !!saved.enabled,
+        archiveEnabled: saved.archiveEnabled !== false,
         token: saved.token || '',
         settings: { ...LIVE_DEFAULT_SETTINGS, ...(saved.settings || {}) }
       };
@@ -843,6 +845,45 @@ function checkLiveToken(req) {
   const t = req.query.t || req.body?.t || req.headers['x-live-token'] || '';
   return !!liveConfig.token && t === liveConfig.token;
 }
+
+require('./camera-service').mountCameraService(app, {
+  archive: photoArchive,
+  auth: { check: checkLiveToken, sameOrigin: browserAuth.sameOrigin },
+  getConfig: () => liveConfig,
+  getSites: () => sites.map(s => ({ id: s.id, name: s.name, icon: s.icon || '📺',
+    online: Array.from(clients.values()).some(c => c.approved && c.siteId === s.id && c.ws.readyState === WebSocket.OPEN) })),
+  publish: (photo, buffer, site) => {
+    photo.filename = `live_${photo.id}.jpg`;
+    fs.writeFileSync(path.join(LIVE_DIR, photo.filename), buffer);
+    photo.url = `/uploads/live/${photo.filename}`;
+    const session = liveSession(site.id);
+    session.photos.push(photo); session.lastAt = photo.ts;
+    const keepMax = Math.max(8, (liveConfig.settings.gridMax || 4) * 3);
+    while (session.photos.length > keepMax) liveDeleteFile(session.photos.shift());
+    liveUploadLog.unshift({ ts: photo.ts, siteId: site.id, siteName: site.name, message: photo.message,
+      uploaderName: photo.uploaderName, uploaderId: photo.uploaderId, photoId: photo.id });
+    if (liveUploadLog.length > 50) liveUploadLog.length = 50;
+    const sent = pushLive(site.id, { type: 'live_photo', photo: { id: photo.id, url: photo.url, message: photo.message, ts: photo.ts, batchTotal: photo.batchTotal },
+      session: { photos: livePublicPhotos(session) }, settings: liveConfig.settings });
+    broadcastToAdmins({ type: 'live_update' }); return sent;
+  },
+  delivery: id => {
+    for (const [siteId, session] of liveSessions) {
+      const photo = session.photos.find(p => p.id === id);
+      if (photo) return photoDisplayReceipts(photo, siteId);
+    }
+    return [];
+  },
+  cancel: id => {
+    for (const [siteId, session] of liveSessions) {
+      const index = session.photos.findIndex(p => p.id === id);
+      if (index < 0) continue;
+      const [photo] = session.photos.splice(index, 1); liveDeleteFile(photo);
+      pushLive(siteId, { type: 'live_update', removedId: id, session: { photos: livePublicPhotos(session) }, settings: liveConfig.settings });
+    }
+    broadcastToAdmins({ type: 'live_update' });
+  }, mail: photoMail
+});
 
 // ─── 폰 API (브라우저 로그인 인증) ─────────────────────────
 
@@ -1040,6 +1081,7 @@ app.get('/api/live', (req, res) => {
   sessions.sort((a, b) => b.lastAt - a.lastAt);
   res.json({
     enabled: liveConfig.enabled,
+    archiveEnabled: liveConfig.archiveEnabled,
     token: liveConfig.token,
     link: process.env.CAMERA_PUBLIC_URL || '/camera',
     settings: liveConfig.settings,
@@ -1051,6 +1093,7 @@ app.get('/api/live', (req, res) => {
 
 app.put('/api/live', (req, res) => {
   if (req.body.enabled !== undefined) liveConfig.enabled = !!req.body.enabled;
+  if (req.body.archiveEnabled !== undefined) liveConfig.archiveEnabled = !!req.body.archiveEnabled;
   if (req.body.settings) {
     const s = req.body.settings;
     const num = (v, min, max, dflt) => {
@@ -1077,7 +1120,7 @@ app.put('/api/live', (req, res) => {
 
   broadcastToAdmins({ type: 'live_update' });
   console.log(`[Live] 설정 변경 — 송출: ${liveConfig.enabled ? 'ON' : 'OFF'}`);
-  res.json({ success: true, enabled: liveConfig.enabled, settings: liveConfig.settings });
+  res.json({ success: true, enabled: liveConfig.enabled, archiveEnabled: liveConfig.archiveEnabled, settings: liveConfig.settings });
 });
 
 // 토큰 재발급 — 기존 폰 링크는 모두 무효가 된다

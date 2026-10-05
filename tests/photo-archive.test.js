@@ -167,14 +167,14 @@ test('OAuth only stages narrow credentials; folder selection is required before 
   assert.equal(JSON.stringify(archive.status()).includes('refresh-secret'), false);
 });
 
-test('broad or missing OAuth scope is rejected, and legacy broad tokens are not silently reused', async t => {
+test('unexpected or missing OAuth scope is rejected, and old credentials require explicit reconnection', async t => {
   const { archive, root } = fixture(t);
   const auth = { getToken: async () => ({ tokens: { access_token: 'a', refresh_token: 'r' } }), setCredentials() {},
-    getTokenInfo: async () => ({ scopes: [PHOTO_SCOPE, 'https://www.googleapis.com/auth/drive'] }) };
+    getTokenInfo: async () => ({ scopes: [PHOTO_SCOPE, 'https://www.googleapis.com/auth/drive.file'] }) };
   archive.oauthClient = () => auth;
-  await assert.rejects(archive.connect('code'), /전용 권한/);
+  await assert.rejects(archive.connect('code'), /보관 권한/);
   auth.getTokenInfo = async () => ({ scopes: [] });
-  await assert.rejects(archive.connect('code'), /전용 권한/);
+  await assert.rejects(archive.connect('code'), /보관 권한/);
   fs.writeFileSync(archive.oauthFile, JSON.stringify({ refresh_token: 'old-broad-token' }));
   const restored = new PhotoArchive({ dataDir: root, folderId: 'folder' });
   restored.clientId = '123-client'; restored.clientSecret = 'secret';
