@@ -75,9 +75,11 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
 
   function row(r) {
     const record = archive.records.get(r.id);
+    const mailState = mail?.statusOf(r.id) || r.mail;
     return { id: r.id, name: record?.name || r.originalName, ts: r.ts, mode: r.mode, target: record?.target || r.target,
       archive: r.mode === 'live' ? 'none' : record?.status || 'pending', archiveError: record?.error || '',
-      live: r.live, liveError: r.liveError || '', delivery: delivery(r.id), mail: mail?.statusOf(r.id) || r.mail,
+      live: r.live, liveError: r.liveError || '', delivery: delivery(r.id), mail: mailState,
+      canCancelMail: !r.cancelled && r.mode !== 'archive' && mailState === 'queued',
       canRetryDisplay: !r.cancelled && r.mode !== 'archive' && ['error', 'pending'].includes(r.live),
       canChangeTarget: !r.cancelled && record?.status === 'error' && !record.driveId,
       cancelled: !!r.cancelled, canCancel: !r.cancelled && Date.now() - r.ts < getConfig().settings.cancelSec * 1000 };
@@ -136,6 +138,13 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     if (!record || !['pending', 'error'].includes(record.status)) throw fail('재시도할 사진이 없습니다.', 409);
     record.nextAttempt = 0; archive.save(record); archive.cycle().catch(() => {}); res.status(202).json({ success: true });
   }));
+  app.delete('/live/api/camera/uploads/:id/mail', safe(async (req, res) => {
+    const r = receipts.get(req.params.id);
+    if (!r || r.owner !== req.cameraOwner) throw fail('본인이 예약한 이메일만 취소할 수 있습니다.', 404);
+    if (r.mail === 'cancelled') return res.json({ success: true });
+    if (!row(r).canCancelMail || !mail?.remove(r.id, req.cameraOwner)) throw fail('이미 발송을 시작했거나 취소할 이메일이 없습니다.', 410);
+    r.mail = 'cancelled'; save(r); res.json({ success: true });
+  }));
   app.delete('/live/api/camera/uploads/:id', safe(async (req, res) => {
     const r = receipts.get(req.params.id);
     if (!r || r.owner !== req.cameraOwner) throw fail('본인이 올린 사진만 취소할 수 있습니다.', 404);
@@ -151,7 +160,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
   app.post('/live/api/camera/photo', (req, res) => {
     upload.single('photo')(req, res, error => {
       if (error) return res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? '사진은 한 장당 50MB까지 올릴 수 있습니다.' : '사진 파일을 확인해 주세요.' });
-      let source = req.file?.path, id, locked = false;
+      let source = req.file?.path, mailSource, id, locked = false;
       (async () => {
         if (!source) throw fail('사진을 선택해 주세요.');
         const { fileTypeFromFile } = await import('file-type');
@@ -191,7 +200,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
         if (mode !== 'live' && getConfig().archiveEnabled === false) throw fail('지금은 사진 보관 접수가 닫혀 있습니다.', 403);
         const site = mode === 'archive' ? null : getSites().find(s => s.id === req.body.siteId);
         if (mode !== 'archive' && !site) throw fail('표출할 모니터를 선택해 주세요.');
-        const email = mail?.configured ? require('./photo-mail').normalizeEmail(req.body.email) : '';
+        const email = mode !== 'archive' && mail?.configured ? require('./photo-mail').normalizeEmail(req.body.email) : '';
         if (email === null) throw fail('사진 받을 이메일 주소를 확인해 주세요.');
         // The deterministic record ID also recovers a crash between archive enqueue
         // and receipt persistence, without writing a second original.
@@ -204,24 +213,31 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
         const receipt = { ...photo, mode, target, live: mode === 'archive' ? 'none' : 'pending' };
         if (mode === 'live') { receipt.localName = id + '.' + kind.ext; fs.copyFileSync(source, path.join(liveOriginals, receipt.localName)); }
         save(receipt); // Persist before the side effect: response loss never republishes.
+        let display;
         if (mode !== 'archive') {
           if (!getConfig().enabled) { receipt.live = 'error'; receipt.liveError = '모니터 표출 접수가 닫혀 있습니다.'; }
           else {
             try {
-              const display = await sharp(source, { limitInputPixels: 80000000 }).rotate().resize({ width: 3840, height: 3840, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
+              display = await sharp(source, { limitInputPixels: 80000000 }).rotate().resize({ width: 3840, height: 3840, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
               if (!getConfig().enabled) throw fail('모니터 표출 접수가 닫혀 있습니다.');
               receipt.live = 'sent'; receipt.screens = publish(photo, display, site);
             } catch (e) { receipt.live = 'error'; receipt.liveError = e.publicMessage || '이 사진을 모니터용 이미지로 변환하지 못했습니다. Drive 보관 상태를 확인해 주세요.'; }
           }
         }
         if (email) {
-          try { receipt.mail = mail.enqueue({ photo, source, site: site || { name: target?.folderName || '교회사진' }, email, delayMs: getConfig().settings.cancelSec * 1000 }); }
+          try {
+            // Preserve the archived original while retaining the previous compact,
+            // widely supported JPEG email attachment (including HEIC/AVIF input).
+            display ||= await sharp(source, { limitInputPixels: 80000000 }).rotate().resize({ width: 3840, height: 3840, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
+            mailSource = source + '.mail.jpg'; fs.writeFileSync(mailSource, display);
+            receipt.mail = mail.enqueue({ photo, source: mailSource, site, email, delayMs: getConfig().settings.cancelSec * 1000 });
+          }
           catch { receipt.mail = 'error'; }
-        }
+        } else if (mode !== 'archive' && String(req.body.email || '').trim() && !mail?.configured) receipt.mail = 'off';
         save(receipt); if (record) archive.cycle().catch(() => {});
         res.json({ success: true, upload: row(receipt) });
       })().catch(error => res.status(error.status || 400).json({ error: error.publicMessage || '사진을 접수하지 못했습니다. 설정과 연결을 확인하고 다시 시도해 주세요.' }))
-        .finally(() => { if (locked) inflight.delete(id); if (source) try { fs.unlinkSync(source); } catch {} });
+        .finally(() => { if (locked) inflight.delete(id); for (const file of [source, mailSource]) if (file) try { fs.unlinkSync(file); } catch {} });
     });
   });
 }

@@ -8,15 +8,21 @@ const sharp = require('../host/node_modules/sharp');
 const { mountCameraService, parsePhotoDate } = require('../host/camera-service');
 const { PhotoArchive } = require('../host/photo-archive');
 const { fixture } = require('./helpers/camera-fixture');
+const { PhotoMail } = require('../host/photo-mail');
 
-async function service(t) {
+async function service(t, { email = false } = {}) {
   const f = fixture(t);
   const config = { enabled: false, archiveEnabled: true, settings: { cancelSec: 60 } };
   const published = [], cancelled = [];
+  const sent = [], clock = { now: Date.now() };
+  const mail = email ? new PhotoMail({ dataDir: f.root, env: {}, now: () => clock.now, transport: { sendMail: async message => {
+    for (const attachment of message.attachments) assert.equal((await sharp(attachment.path).metadata()).format, 'jpeg');
+    sent.push(message);
+  } } }) : null;
   const app = express(); app.use(express.json());
   mountCameraService(app, { archive: f.archive, auth: { check: req => req.get('x-auth') === 'camera', sameOrigin: req => req.get('sec-fetch-site') !== 'cross-site' },
     getConfig: () => config, getSites: () => [{ id: 'screen', name: '본당', online: true }],
-    publish: (photo, bytes) => { published.push({ photo, bytes }); return 1; }, delivery: () => [], cancel: id => cancelled.push(id) });
+    publish: (photo, bytes) => { published.push({ photo, bytes }); return 1; }, delivery: () => [], cancel: id => cancelled.push(id), mail });
   const server = app.listen(0, '127.0.0.1'); await new Promise(r => server.once('listening', r));
   t.after(() => new Promise(r => server.close(r)));
   const base = 'http://127.0.0.1:' + server.address().port;
@@ -31,8 +37,39 @@ async function service(t) {
     body.append('photo', new Blob([bytes], { type: 'image/png' }), name);
     return get('photo', { method: 'POST', body });
   };
-  return { ...f, config, published, cancelled, base, headers, get, upload, png };
+  return { ...f, config, published, cancelled, base, headers, get, upload, png, mail, sent, clock };
 }
+
+test('camera email is limited to display modes; owner-only mail cancellation preserves display/archive and retries do not enqueue twice', async t => {
+  const f = await service(t, { email: true }); f.config.enabled = true;
+  const requestId = crypto.randomUUID();
+  const both = await f.upload({ mode: 'both', requestId, email: 'guest@example.com' }).then(r => r.json());
+  assert.equal(both.upload.mail, 'queued'); assert.equal(both.upload.canCancelMail, true);
+  assert.equal((await f.upload({ mode: 'both', requestId, email: 'guest@example.com' }).then(r => r.json())).replay, true);
+  assert.equal(f.mail.jobOf(both.upload.id).photos.length, 1);
+  const live = await f.upload({ mode: 'live', email: 'guest@example.com' }).then(r => r.json());
+  assert.equal(live.upload.mail, 'queued'); assert.equal(f.mail.jobOf(live.upload.id).photos.length, 2);
+  const archive = await f.upload({ email: 'archive@example.com' }).then(r => r.json());
+  assert.equal(archive.upload.mail, undefined); assert.equal(f.mail.jobOf(archive.upload.id), null);
+  const cookie = f.headers.cookie; f.headers.cookie = '';
+  assert.equal((await f.get('uploads/' + both.upload.id + '/mail', { method: 'DELETE' })).status, 404);
+  f.headers.cookie = cookie;
+  assert.equal((await f.get('uploads/' + both.upload.id + '/mail', { method: 'DELETE', headers: { 'sec-fetch-site': 'cross-site' } })).status, 403);
+  assert.equal((await f.get('uploads/' + both.upload.id + '/mail', { method: 'DELETE' })).status, 200);
+  assert.equal((await f.get('uploads/' + both.upload.id + '/mail', { method: 'DELETE' })).status, 200);
+  assert.equal(f.published.length, 2); assert.equal(f.cancelled.length, 0);
+  await f.archive.cycle(true); assert.equal(f.archive.get(both.upload.id).status, 'saved');
+  assert.deepEqual(f.remote.get(f.archive.get(both.upload.id).driveId).bytes, f.png);
+  await f.mail.cycle(); assert.equal(f.sent.length, 0, 'wait for the cancellation window');
+  f.clock.now += 63000; await f.mail.cycle();
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].attachments.length, 1);
+  assert.equal(f.mail.statusOf(live.upload.id), 'sent');
+  assert.equal((await f.get('uploads/' + live.upload.id + '/mail', { method: 'DELETE' })).status, 410);
+  const rows = (await f.get('uploads').then(r => r.json())).uploads;
+  assert.equal(rows.find(r => r.id === both.upload.id).mail, 'cancelled');
+  assert.equal(rows.find(r => r.id === live.upload.id).canCancelMail, false);
+  assert.equal(fs.readdirSync(path.join(f.archive.root, 'camera-staging')).length, 0);
+});
 
 test('archive-only accepts private originals with live intake closed; retry survives response loss and restart', async t => {
   const f = await service(t), requestId = crypto.randomUUID();

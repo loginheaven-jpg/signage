@@ -7,11 +7,29 @@ let config, settings, mode = 'both', selected = [], events = [], foldersReady = 
 let currentPage = 'purpose', navigation = { camera: true, page: 'purpose', depth: 0 }, siteSequence = 0, sitesReady = false;
 let draftDb;
 let cameraStream;
+let shareBatch = null, shareUrls = [], sharing = false;
+let uploadStates = new Map(), batchCancelling = false;
+const MAIL_KEEP_MS = 10 * 60 * 1000;
+const mailLabels = { queued: '발송 대기', sent: '발송 완료', failed: '발송 실패', error: '발송 예약 실패', sending: '발송 중', cancelled: '취소됨', limit: '오늘의 발송 한도 초과', off: '메일 발송 설정 필요' };
+const MAIL_TYPOS = { 'gmial.com': 'gmail.com', 'gmai.com': 'gmail.com', 'gamil.com': 'gmail.com', 'gmail.co': 'gmail.com', 'gmail.con': 'gmail.com', 'gmail.cm': 'gmail.com', 'gmaill.com': 'gmail.com', 'naver.co': 'naver.com', 'naver.con': 'naver.com', 'naver.cm': 'naver.com', 'nave.com': 'naver.com', 'naver.coom': 'naver.com', 'hanmail.ne': 'hanmail.net', 'hanmail.con': 'hanmail.net', 'daum.ne': 'daum.net', 'daum.nte': 'daum.net', 'nate.con': 'nate.com', 'kakao.con': 'kakao.com' };
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 const storage = {
   get(key) { try { return JSON.parse(localStorage.getItem('camera.' + key)); } catch { return null; } },
   set(key, value) { try { localStorage.setItem('camera.' + key, JSON.stringify(value)); } catch {} }
 };
+function migrateLegacyState() {
+  if (storage.get('legacyMigrated')) return;
+  try {
+    for (const [oldKey, newKey] of [['live.token', 'token'], ['live.uploaderName', 'name'], ['live.siteId', 'lastSite']]) {
+      const value = localStorage.getItem(oldKey);
+      if (value && !storage.get(newKey)) storage.set(newKey, value);
+    }
+    const address = localStorage.getItem('live.draftMail'), at = Number(localStorage.getItem('live.mailAt'));
+    if (address && Date.now() - at < MAIL_KEEP_MS && !storage.get('email')) storage.set('email', { address, at, kept: !!localStorage.getItem('live.mailKept') });
+    for (const key of ['live.draftMail', 'live.mailAt', 'live.mailKept']) localStorage.removeItem(key);
+    storage.set('legacyMigrated', true);
+  } catch {}
+}
 function notice(text, error = false) { el('notice').textContent = text; el('notice').classList.toggle('error', error); el('notice').hidden = !text; }
 function node(tag, text, className) { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (className) n.className = className; return n; }
 function option(value, text) { const n = node('option', text); n.value = value; return n; }
@@ -63,11 +81,18 @@ async function api(route, options = {}) {
   const params = new URLSearchParams(location.search);
   const legacyToken = params.get('t') || storage.get('token');
   if (params.get('t')) storage.set('token', params.get('t'));
-  const res = await fetch('/live/api/camera/' + route, { cache: 'no-store', ...options, headers: { ...(legacyToken ? { 'x-live-token': legacyToken } : {}), ...options.headers } });
-  const data = await res.json().catch(() => ({}));
-  if (res.status === 401) { location.replace('/login?role=camera'); throw new Error('다시 로그인해 주세요.'); }
-  if (!res.ok) throw new Error(data.error || '연결을 확인하고 다시 시도해 주세요.');
-  return data;
+  const { timeoutMs = route === 'photo' ? 90000 : 15000, ...fetchOptions } = options;
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch('/live/api/camera/' + route, { cache: 'no-store', ...fetchOptions, signal: controller.signal, headers: { ...(legacyToken ? { 'x-live-token': legacyToken } : {}), ...options.headers } });
+    const data = await res.json().catch(error => { if (controller.signal.aborted) throw error; return {}; });
+    if (res.status === 401) { location.replace('/login?role=camera'); throw new Error('다시 로그인해 주세요.'); }
+    if (!res.ok) throw new Error(data.error || '연결을 확인하고 다시 시도해 주세요.');
+    return data;
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('응답 시간이 초과되었습니다. 같은 요청으로 다시 시도해 주세요.');
+    throw error;
+  } finally { clearTimeout(timer); }
 }
 function destination(s) {
   const lines = [labels[s.mode], '업로더: ' + s.uploaderName];
@@ -89,7 +114,7 @@ async function persistDraft() {
     const db = await openDb();
     await new Promise((resolve, reject) => {
       const tx = db.transaction('drafts', 'readwrite');
-      tx.objectStore('drafts').put({ settings, entries: selected.map(({ url, ...r }) => r), message: el('message').value, keepMessage: el('keepMessage').checked }, 'current');
+      tx.objectStore('drafts').put({ settings, entries: selected.map(({ url, ...r }) => r), message: el('message').value, keepMessage: el('keepMessage').checked, shareBatch }, 'current');
       tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
     });
   } catch { notice('이 기기에 사진 대기 목록을 저장하지 못했습니다. 전송을 마칠 때까지 화면을 닫지 마세요.', true); }
@@ -104,6 +129,93 @@ async function readDraft() {
   } catch { return null; }
 }
 function hasFrozen() { return selected.some(r => r.submission); }
+function rememberEmail(kept = false) {
+  const address = el('email').value.trim();
+  storage.set('email', address ? { address, at: Date.now(), kept } : null); renderEmail();
+}
+function clearEmail() { el('email').value = ''; storage.set('email', null); renderEmail(); }
+function expireEmail() {
+  if (!busy && !hasFrozen()) {
+    const saved = storage.get('email');
+    if (saved && Date.now() - saved.at >= MAIL_KEEP_MS) clearEmail();
+  }
+}
+function renderEmail() {
+  el('communication').hidden = mode === 'archive';
+  el('email').disabled = busy || hasFrozen() || !config?.mail;
+  el('clearEmail').disabled = busy || hasFrozen();
+  el('emailAvailability').textContent = config?.mail ? '' : '현재 서버의 이메일 발송이 설정되어 있지 않습니다. 관리자에게 연결 확인을 요청해 주세요. 카카오톡 공유는 이용할 수 있습니다.';
+  el('emailKeep').hidden = !el('email').value || !storage.get('email')?.kept;
+  const address = el('email').value.trim(), at = address.lastIndexOf('@'), fixed = at > 0 ? MAIL_TYPOS[address.slice(at + 1).toLowerCase()] : '';
+  el('emailSuggestion').hidden = !fixed;
+  el('emailSuggestion').replaceChildren();
+  if (fixed) {
+    const button = node('button', address.slice(0, at + 1) + fixed + '로 수정할까요?', 'link'); button.type = 'button'; button.disabled = busy || hasFrozen();
+    button.onclick = () => { el('email').value = address.slice(0, at + 1) + fixed; rememberEmail(); };
+    el('emailSuggestion').append(button);
+  }
+}
+async function sharingFile(file, id) {
+  let image;
+  try { image = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+  catch {
+    const url = URL.createObjectURL(file);
+    try { image = await new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = url; }); }
+    finally { URL.revokeObjectURL(url); }
+  }
+  try {
+    const scale = Math.min(1, 3840 / Math.max(image.width, image.height));
+    const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale));
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+    if (!blob) throw new Error('share conversion');
+    return new File([blob], 'photo_' + id.slice(-12) + '.jpg', { type: 'image/jpeg' });
+  } finally { image.close?.(); }
+}
+function renderShare() {
+  shareUrls.forEach(url => URL.revokeObjectURL(url)); shareUrls = [];
+  const photos = shareBatch?.photos || [];
+  el('shareResult').hidden = mode === 'archive' || !photos.length;
+  el('shareSummary').textContent = photos.length ? kst.format(new Date(shareBatch.ts)) + ' · ' + shareBatch.siteName + ' · 접수한 사진 ' + photos.length + '장' : '';
+  const files = photos.map(p => p.file);
+  let supported = false;
+  try { supported = !!navigator.share && !!navigator.canShare?.({ files }); } catch {}
+  el('sharePhotos').hidden = !supported; el('sharePhotos').disabled = busy || sharing;
+  el('sharePhotos').textContent = '카카오톡 등으로 사진 ' + photos.length + '장 보내기';
+  el('shareHint').textContent = supported ? '휴대폰 공유창에서 카카오톡과 받는 분을 선택하세요. 공유창으로 사진을 전달하며 실제 메시지 전송 여부는 선택한 앱에서 확인해 주세요.' : '이 브라우저는 사진 공유창을 지원하지 않습니다. 아래 사진을 내려받은 뒤 카카오톡에 첨부하거나 이메일 발송을 이용해 주세요.';
+  el('shareDownloads').replaceChildren(...photos.map((photo, index) => {
+    const url = URL.createObjectURL(photo.file); shareUrls.push(url);
+    const link = node('a', '사진 ' + (index + 1) + ' 내려받기'); link.href = url; link.download = photo.file.name; return link;
+  }));
+  for (const [id, flag, title] of [['cancelBatch', 'canCancel', '사진'], ['cancelBatchMail', 'canCancelMail', '이메일']]) {
+    const count = photos.filter(p => uploadStates.get(p.id)?.[flag]).length;
+    el(id).hidden = !count; el(id).disabled = busy || batchCancelling;
+    el(id).textContent = '이번 ' + title + ' ' + count + '장 모두 취소';
+  }
+}
+async function cancelBatch(mailOnly) {
+  if (busy || batchCancelling || mode === 'archive') return;
+  const photos = (shareBatch?.photos || []).filter(p => uploadStates.get(p.id)?.[mailOnly ? 'canCancelMail' : 'canCancel']);
+  if (!photos.length) return;
+  if (!mailOnly && !confirm('이번 사진 ' + photos.length + '장의 보관과 모니터 표출을 취소할까요? Drive에 보관한 사진은 휴지통으로 이동하며 대기 이메일도 취소합니다.')) return;
+  batchCancelling = true; renderShare(); let cancelled = 0, lastError = '';
+  try {
+    for (const photo of photos) {
+      try { await api('uploads/' + photo.id + (mailOnly ? '/mail' : ''), { method: 'DELETE' }); cancelled++; }
+      catch (error) { lastError = error.message; }
+    }
+    if (cancelled) clearEmail();
+    notice((mailOnly ? '이메일 ' : '사진 ') + cancelled + '장 취소' + (mailOnly ? ' · 사진 보관과 모니터 표출은 유지합니다.' : '했습니다.') + (lastError ? ' ' + lastError : ''), !!lastError);
+  } finally { batchCancelling = false; await loadHistory(); renderShare(); }
+}
+el('cancelBatchMail').onclick = () => cancelBatch(true); el('cancelBatch').onclick = () => cancelBatch(false);
+el('sharePhotos').onclick = async () => {
+  if (busy || sharing || mode === 'archive' || !shareBatch?.photos.length) return;
+  sharing = true; el('sharePhotos').disabled = true;
+  try { await navigator.share({ files: shareBatch.photos.map(p => p.file) }); }
+  catch (error) { if (error?.name !== 'AbortError') notice('공유창을 열지 못했습니다. 사진을 내려받아 첨부하거나 이메일 발송을 이용해 주세요.', true); }
+  finally { sharing = false; renderShare(); }
+};
 function canEdit() {
   if (busy) return false;
   if (hasFrozen()) { notice('응답을 확인하지 못한 사진이 있습니다. 같은 설정으로 재시도하거나 대기 목록에서 제외한 뒤 설정을 변경해 주세요.', true); return false; }
@@ -285,7 +397,7 @@ function showWork(push = true) {
   if (mode !== 'archive') values.push(['표출 모니터', settings.siteName]);
   el('workSummary').replaceChildren(...values.flatMap(([key, value]) => [node('dt', key), node('dd', value)]));
   if (mode !== 'archive') { el('workSummary').lastElementChild.dataset.monitor = ''; renderSites(); }
-  updateWorkWarning(); renderReview(); loadHistory();
+  expireEmail(); updateWorkWarning(); renderReview(); renderShare(); loadHistory();
 }
 function updateWorkWarning() {
   if (!settings) return;
@@ -302,6 +414,7 @@ async function addFiles(files, captured = false) {
   const slots = 30 - selected.length;
   if (files.length > slots) notice('한 번에 30장까지 가능합니다. 초과 사진은 추가하지 않았습니다.', true);
   for (const file of [...files].slice(0, slots)) {
+    if (!file.size) { notice(file.name + ': 사진 파일이 비어 있습니다. 저장을 마친 뒤 다시 선택해 주세요.', true); continue; }
     if (file.size > config.maxBytes) { notice(file.name + ': 한 장당 50MB까지 가능합니다.', true); continue; }
     if (selected.some(r => r.file.name === file.name && r.file.size === file.size && r.file.lastModified === file.lastModified)) continue;
     let date = '', dateSource = 'unknown';
@@ -321,7 +434,8 @@ function renderReview() {
   el('reviewTitle').textContent = '사진 ' + selected.length + '장';
   el('reviewDestination').textContent = settings ? destination(settings).replace(/\n/g, ' · ') : '';
   el('messageLabel').hidden = mode === 'archive'; el('keepMessageLabel').hidden = mode === 'archive';
-  el('emailLabel').hidden = !config?.mail;
+  el('messageCount').textContent = el('message').value.length;
+  renderEmail();
   el('selectedPhotos').replaceChildren(...selected.map(r => {
     const card = node('div', undefined, 'photoCard'); const img = node('img'); img.src = r.url; img.alt = r.file.name;
     const caption = node('p', r.file.name); const state = node('p', r.error || '원본 ' + (r.file.size / 1024 / 1024).toFixed(1) + 'MB');
@@ -339,15 +453,18 @@ function setBusy(value) {
   busy = value;
   for (const id of ['home', 'shoot', 'choose', 'changePurpose', 'changeSettings', 'send', 'discard', 'message', 'keepMessage', 'email']) el(id).disabled = value;
   if (hasFrozen()) for (const id of ['message', 'keepMessage', 'email']) el(id).disabled = true;
-  renderReview();
+  renderReview(); renderShare();
 }
 async function sendPhotos() {
   if (busy || !selected.length) return;
-  if (el('email').value && !el('email').reportValidity()) return;
+  expireEmail();
+  if (mode !== 'archive' && config.mail && el('email').value && !el('email').reportValidity()) return;
   setBusy(true); let accepted = 0; const originalCount = selected.length;
+  const batchKey = selected.find(r => r.submission)?.submission.batchKey || uuid();
   try {
     for (const r of [...selected]) {
-      if (!r.submission) r.submission = { ...structuredClone(settings), message: mode === 'archive' ? '' : el('message').value.trim(), email: el('email').value.trim(), batchTotal: originalCount, date: r.date, dateSource: r.dateSource };
+      if (!r.submission) r.submission = { ...structuredClone(settings), message: mode === 'archive' ? '' : el('message').value.trim(), email: mode !== 'archive' && config.mail ? el('email').value.trim() : '', batchKey, batchTotal: originalCount, date: r.date, dateSource: r.dateSource };
+      r.submission.batchKey ||= batchKey;
       await persistDraft();
       el('progress').textContent = (accepted + 1) + ' / ' + originalCount + ' · ' + r.file.name + ' 접수하는 중…';
       const s = r.submission, form = new FormData();
@@ -358,6 +475,13 @@ async function sendPhotos() {
       try {
         const result = await api('photo', { method: 'POST', body: form });
         accepted++; URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r);
+        if (s.mode !== 'archive') {
+          if (shareBatch?.key !== s.batchKey) shareBatch = { key: s.batchKey, ts: Date.now(), siteName: s.siteName, photos: [] };
+          if (!result.upload?.cancelled && !shareBatch.photos.some(p => p.id === result.upload.id)) {
+            let file; try { file = await sharingFile(r.file, result.upload.id); } catch { file = r.file; }
+            shareBatch.photos.push({ id: result.upload.id, file });
+          }
+        }
         if (result.upload?.target?.eventId && settings.target && s.target?.year === settings.target.year && (s.target.eventId === settings.target.eventId || (!settings.target.eventId && s.target.folderName === settings.target.folderName))) {
           settings.target = result.upload.target; rememberTarget(settings.target); storage.set('settings', settings);
         }
@@ -367,7 +491,8 @@ async function sendPhotos() {
     el('progress').textContent = accepted + '장 서버 접수 완료' + (selected.length ? ' · ' + selected.length + '장 응답 확인 필요. 같은 설정으로 재시도해 주세요.' : ' · 같은 작업으로 계속 촬영하거나 사진을 선택하세요.');
     if (selected.length) notice('전송하지 못했거나 응답을 확인하지 못한 사진을 대기 목록에 남겼습니다. 재시도해도 중복 접수하지 않습니다.', true);
     else notice(accepted + '장 접수했습니다. 내 업로드에서 Drive 보관과 모니터 표시 결과를 확인하세요.');
-    el('email').value = ''; if (!el('keepMessage').checked) el('message').value = '';
+    if (accepted && mode !== 'archive' && el('email').value) rememberEmail(true);
+    if (!el('keepMessage').checked) el('message').value = '';
   } finally {
     if (!selected.length) { el('shootInput').value = ''; el('galleryInput').value = ''; }
     setBusy(false); await persistDraft(); await loadHistory();
@@ -376,7 +501,13 @@ async function sendPhotos() {
 async function loadHistory() {
   try {
     const data = await api('uploads');
+    uploadStates = new Map(data.uploads.map(r => [r.id, r]));
     if (data.state) { Object.assign(config, data.state); updateWorkWarning(); }
+    if (shareBatch) {
+      const cancelled = new Set(data.uploads.filter(r => r.cancelled).map(r => r.id));
+      if (shareBatch.photos.some(p => cancelled.has(p.id))) { shareBatch.photos = shareBatch.photos.filter(p => !cancelled.has(p.id)); persistDraft(); renderShare(); }
+    }
+    renderShare();
     el('history').replaceChildren(...data.uploads.map(r => {
       const wrap = node('div', undefined, 'historyRow'); wrap.append(node('strong', r.name), node('p', kst.format(new Date(r.ts)) + (r.target ? ' · ' + r.target.year + ' / ' + (r.target.folderName || r.target.eventName) : '')));
       const states = [];
@@ -389,9 +520,18 @@ async function loadHistory() {
         if (r.delivery.some(d => d.status === 'image_error' || d.status === 'stopped')) states.push('일부 모니터에서 표시 오류');
         if (r.liveError) states.push(r.liveError);
       }
-      if (r.mail) states.push('이메일: ' + ({ queued: '발송 대기', sent: '발송 완료', error: '발송 실패', sending: '발송 중', cancelled: '취소됨' })[r.mail]);
+      if (r.mail) states.push('이메일: ' + (mailLabels[r.mail] || '발송 결과 확인 필요') + (r.mail === 'queued' ? ' · 취소 가능 시간이 지난 뒤 발송' : ''));
       wrap.append(node('p', states.join(' · ')));
       const actions = node('div', undefined, 'actions');
+      if (r.canCancelMail && mode !== 'archive') {
+        const cancelMail = node('button', '메일만 보내지 않기'); cancelMail.dataset.mailCancel = r.id;
+        cancelMail.onclick = async () => {
+          cancelMail.disabled = true;
+          try { await api('uploads/' + r.id + '/mail', { method: 'DELETE' }); clearEmail(); notice('이메일 발송을 취소했습니다. 사진 보관과 모니터 표출은 유지합니다.'); }
+          catch (e) { notice(e.message, true); }
+          finally { await loadHistory(); }
+        }; actions.append(cancelMail);
+      }
       if (!r.cancelled && ['pending', 'error'].includes(r.archive)) {
         const retry = node('button', 'Drive 전송 재시도'); retry.onclick = async () => { retry.disabled = true; try { await api('uploads/' + r.id + '/retry', { method: 'POST' }); await loadHistory(); } catch (e) { notice(e.message, true); retry.disabled = false; } }; actions.append(retry);
       }
@@ -409,7 +549,8 @@ async function loadHistory() {
         }; actions.append(change);
       }
       if (r.canCancel) {
-        const cancel = node('button', '업로드 취소'); cancel.onclick = async () => {
+        const left = Math.max(0, Math.ceil((r.ts + config.cancelSec * 1000 - Date.now()) / 1000));
+        const cancel = node('button', '업로드 취소 (' + left + '초)'); cancel.onclick = async () => {
           if (!confirm('이 사진의 보관과 모니터 표출을 취소할까요? 저장된 Drive 사진은 휴지통으로 이동합니다.')) return;
           cancel.disabled = true; try { await api('uploads/' + r.id, { method: 'DELETE' }); await loadHistory(); } catch (e) { notice(e.message, true); cancel.disabled = false; }
         }; actions.append(cancel);
@@ -496,14 +637,22 @@ el('discard').onclick = () => {
   selected.forEach(r => URL.revokeObjectURL(r.url)); selected = []; persistDraft(); renderReview();
 };
 el('refreshHistory').onclick = loadHistory;
-el('message').oninput = () => persistDraft(); el('keepMessage').onchange = () => persistDraft();
+el('message').oninput = () => { el('messageCount').textContent = el('message').value.length; persistDraft(); }; el('keepMessage').onchange = () => persistDraft();
+el('email').oninput = () => rememberEmail(); el('clearEmail').onclick = clearEmail;
+setInterval(expireEmail, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) expireEmail(); });
 window.addEventListener('beforeunload', event => { if (busy) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('online', () => { notice('인터넷에 다시 연결되었습니다. 대기 사진을 확인하고 전송해 주세요.'); loadHistory(); });
 window.addEventListener('offline', () => notice('인터넷 연결이 끊겼습니다. 선택한 사진은 대기 목록에 유지합니다.', true));
 async function init() {
   try {
+    migrateLegacyState();
     config = await api('config');
     const draft = await readDraft();
+    shareBatch = draft?.shareBatch || null;
+    const savedEmail = storage.get('email');
+    if (savedEmail && Date.now() - savedEmail.at < MAIL_KEEP_MS) el('email').value = savedEmail.address;
+    else storage.set('email', null);
     settings = draft?.entries?.length ? draft.settings : storage.get('settings');
     if (settings && (!labels[settings.mode] || !settings.uploaderName || (settings.mode !== 'live' && !settings.target))) settings = null;
     if (draft?.entries?.length && settings) {
