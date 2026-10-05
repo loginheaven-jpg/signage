@@ -10,7 +10,7 @@
 <div id="notice" role="status" aria-live="polite" hidden></div>
 <section id="resume" class="panel" hidden><div class="eyebrow">지난 작업</div><h2>작업 이어가기</h2><p id="resumeSummary"></p><p id="draftCount" class="hint"></p><button id="continueResume" class="primary">작업 이어가기</button></section>
 <section id="purpose" hidden><div class="eyebrow">01 · 사용 목적</div><h2>사진을 어디에 사용할까요?</h2><div class="purposes">
-<button data-mode="both" class="recommended"><span class="symbol">▣ + ▤</span><strong>보관하고 표출 <span class="badge">기본</span></strong><small>교회폴더에 원본을 저장하고 모니터에도 표시합니다.</small></button>
+<button data-mode="both" class="recommended"><span class="symbol">▣ + ▤</span><strong>보관하고 표출 <span class="badge">기본</span></strong><small>모니터에 먼저 표시하고 원본은 교회폴더에 보관합니다. 저장 위치는 나중에 정해도 됩니다.</small></button>
 <button data-mode="live"><span class="symbol">▤</span><strong>보관없이 표출</strong><small>선택한 모니터에 표시합니다. 교회폴더에는 저장하지 않습니다.</small></button>
 <button data-mode="archive"><span class="symbol">▣</span><strong>교회폴더에 저장</strong><small>선택한 연도와 행사에 원본 사진을 저장합니다.</small></button>
 </div></section>
@@ -31,7 +31,9 @@
 <section id="review" class="panel" hidden><div class="eyebrow">전송 전 확인</div><h2 id="reviewTitle"></h2><p id="reviewDestination" class="hint"></p><div id="selectedPhotos" class="photoGrid"></div>
 <label id="messageLabel">표출 문구 (선택)<input id="message" maxlength="40" placeholder="사진과 함께 표시할 문구"><span class="hint"><span id="messageCount">0</span>/40 · 링크·주소는 넣을 수 없습니다.</span></label><label id="keepMessageLabel"><span class="check"><input id="keepMessage" type="checkbox">같은 문구 계속 사용</span></label>
 <div class="actions"><button id="send" class="primary">전송</button><button id="discard">선택한 사진 비우기</button></div><p id="progress" role="status" aria-live="polite"></p></section>
-<section id="shareResult" class="panel" hidden><h2>표출 사진 보내기</h2><p id="shareSummary" class="hint"></p><button id="sharePhotos" type="button" class="primary">카카오톡 등으로 보내기</button><p id="shareHint" class="hint"></p><div id="shareDownloads" class="actions"></div><div class="actions"><button id="cancelBatchMail" type="button" hidden>이번 이메일 모두 취소</button><button id="cancelBatch" type="button" hidden>이번 사진 모두 취소</button></div></section>
+<section id="shareResult" class="panel" hidden><h2>표출 사진 보내기</h2><p id="shareSummary" class="hint"></p><button id="sharePhotos" type="button" class="primary">카카오톡 등으로 보내기</button><p id="shareHint" class="hint"></p><div id="shareDownloads" class="actions"></div><div class="actions"><button id="withdrawBatch" type="button" hidden>이번 사진 게시만 취소</button><button id="cancelBatchMail" type="button" hidden>이번 이메일 모두 취소</button><button id="cancelBatch" type="button" hidden>이번 사진 모두 취소</button></div></section>
+<section id="originalTransfers" class="panel" hidden><h2>원본 전송</h2><p id="originalTransferState" role="status" aria-live="polite"></p><div id="originalTransferList"></div><button id="retryOriginals" type="button">원본 전송 다시 시도</button><p class="hint">원본 접수가 끝나기 전에는 앱을 닫지 마세요. 전송 중에도 다음 사진을 촬영하거나 모니터에 게시할 수 있습니다.</p></section>
+<section id="workArchive" class="panel" hidden><h2>교회폴더에 원본 보관</h2><p id="pendingLocation" class="hint" role="status"></p><div id="archiveLocationFields"></div><button id="saveLocation" class="primary" type="button">이 위치로 보관 · 다음 사진에도 사용</button><p class="hint">저장 위치를 정하는 동안에도 모니터 게시를 계속할 수 있습니다. 위치를 정하지 않은 사진은 원본 접수 후 서버에서 기다립니다.</p></section>
 <section class="panel"><div class="panelHeading"><h2>내 업로드</h2><button id="refreshHistory" class="link">새로고침</button></div><p class="hint">이 브라우저에서 접수한 최근 사진입니다. 접수와 Drive 보관, 모니터 표시 상태를 따로 확인하세요.</p><div id="history"></div></section></section>
 <footer><a href="/privacy" target="_blank" rel="noopener">개인정보 처리 안내</a> · <a href="/terms" target="_blank" rel="noopener">이용약관</a><br>사진은 한 장당 50MB, 한 번에 30장까지 선택할 수 있습니다.</footer>
 </main>

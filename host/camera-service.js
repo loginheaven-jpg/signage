@@ -33,6 +33,10 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
   const receipts = new Map(); const inflight = new Set();
   for (const filename of fs.readdirSync(receiptsDir).filter(n => /^[\w-]+\.json$/.test(n))) {
     const r = JSON.parse(fs.readFileSync(path.join(receiptsDir, filename), 'utf8')); receipts.set(r.id, r);
+    const record = archive.records.get(r.id);
+    if (r.pipeline && !r.cancelled && r.target && record?.status === 'awaiting_target') {
+      Object.assign(record, { target: targetInput(r.target), status: 'pending', nextAttempt: 0 }); archive.save(record);
+    }
   }
   const save = r => { atomicJSON(path.join(receiptsDir, r.id + '.json'), r); receipts.set(r.id, r); };
   const cleanup = setInterval(() => {
@@ -42,6 +46,9 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     }
     for (const r of receipts.values()) if (r.localName && (r.cancelled || Date.now() - r.ts > (getConfig().settings.photoTtlMin || 180) * 60000)) {
       try { fs.unlinkSync(path.join(liveOriginals, r.localName)); } catch {}
+    }
+    for (const r of receipts.values()) if (r.previewName && (r.cancelled || Date.now() - r.ts > (getConfig().settings.photoTtlMin || 180) * 60000)) {
+      try { fs.unlinkSync(path.join(liveOriginals, r.previewName)); } catch {}
     }
   }, 3600000); cleanup.unref();
   const upload = multer({ storage: multer.diskStorage({ destination: staging,
@@ -71,19 +78,40 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     const record = archive.records.get(r.id);
     const mailState = mail?.statusOf(r.id) || r.mail;
     return { id: r.id, name: record?.name || r.originalName, ts: r.ts, mode: r.mode, target: record?.target || r.target,
-      archive: r.mode === 'live' ? 'none' : record?.status || 'pending', archiveError: record?.error || '',
+      archive: r.mode === 'live' ? 'none' : record?.status || (r.cancelled ? 'deleted' : r.pipeline ? 'awaiting_original' : 'pending'), archiveError: record?.error || '',
+      original: r.mode === 'live' || (r.cancelled && !record) ? 'none' : record ? 'received' : 'pending', pipeline: !!r.pipeline,
       live: r.live, liveError: r.liveError || '', delivery: delivery(r.id), mail: mailState,
       canCancelMail: !r.cancelled && r.mode !== 'archive' && mailState === 'queued',
       canRetryDisplay: !r.cancelled && r.mode !== 'archive' && ['error', 'pending'].includes(r.live),
-      canChangeTarget: !r.cancelled && record?.status === 'error' && !record.driveId,
+      canWithdraw: !r.cancelled && r.mode !== 'archive' && r.live !== 'withdrawn',
+      canChangeTarget: !r.cancelled && ((r.pipeline && r.mode === 'both' && (!record || record.status === 'awaiting_target')) || (record?.status === 'error' && !record.driveId)),
       cancelled: !!r.cancelled, canCancel: !r.cancelled && Date.now() - r.ts < getConfig().settings.cancelSec * 1000 };
   }
-  app.get('/live/api/camera/uploads', (req, res) => res.json({ uploads: [...receipts.values()].filter(r => r.owner === req.cameraOwner).sort((a, b) => b.ts - a.ts).slice(0, 60).map(row),
+  const wakeArchive = id => archive.cycle().then(() => {
+    if (archive.ready && archive.records.get(id)?.status === 'pending') return archive.cycle();
+  }).catch(() => {});
+  app.get('/live/api/camera/uploads', (req, res) => res.json({ uploads: [...receipts.values()].filter(r => r.owner === req.cameraOwner).sort((a, b) => b.ts - a.ts).filter((r, index) => index < 60 || (r.pipeline && r.mode === 'both' && !r.cancelled && (!archive.records.has(r.id) || archive.records.get(r.id).status === 'awaiting_target'))).map(row),
     state: { liveEnabled: getConfig().enabled, archiveEnabled: getConfig().archiveEnabled !== false, ready: archive.ready, archiveError: archive.error } }));
   app.post('/live/api/camera/uploads/:id/target', safe(async (req, res) => {
     const r = receipts.get(req.params.id);
     if (!r || r.owner !== req.cameraOwner) throw fail('본인이 올린 사진만 변경할 수 있습니다.', 404);
+    if (r.mode === 'live') throw fail('보관없이 표출한 사진에는 저장 위치를 지정할 수 없습니다.', 409);
+    if (['deleted', 'deleting', 'missing'].includes(archive.records.get(r.id)?.status)) throw fail('삭제한 사진입니다.', 410);
     const input = targetInput(req.body || {});
+    if (r.pipeline && !r.cancelled && r.target && archive.records.get(r.id)?.status !== 'error' && JSON.stringify(targetInput(r.target)) === JSON.stringify(input)) return res.status(202).json({ success: true, upload: row(r) });
+    if (r.pipeline && (!archive.records.has(r.id) || archive.records.get(r.id).status === 'awaiting_target')) {
+      if (r.cancelled) throw fail('취소한 사진입니다.', 410);
+      // Waiting-for-location records are excluded from the Drive worker, so the
+      // initial assignment never waits behind Google. Original upload reads this
+      // durable receipt if the location is assigned before it arrives.
+      r.target = input; save(r);
+      const record = archive.records.get(r.id);
+      if (record && record.status === 'awaiting_target') {
+        Object.assign(record, { target: input, status: 'pending', error: '', nextAttempt: 0 }); archive.save(record);
+        wakeArchive(r.id);
+      }
+      return res.status(202).json({ success: true, upload: row(r) });
+    }
     await archive.serialize(async () => {
       if (!row(r).canChangeTarget) throw fail('Drive 전송 전 저장 위치 오류가 난 사진만 변경할 수 있습니다.', 409);
       await archive.initialize(); if (!archive.ready) throw fail(archive.error || 'Google 연결을 확인해 주세요.', 503);
@@ -94,6 +122,10 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     archive.cycle().catch(() => {}); res.status(202).json({ success: true });
   }));
   async function original(r) {
+    if (r.previewName && !r.cancelled) {
+      const preview = path.join(liveOriginals, r.previewName);
+      if (fs.existsSync(preview)) return fs.readFileSync(preview);
+    }
     const record = archive.get(r.id);
     if (record) {
       const local = archive.localPath(record); if (local) return fs.readFileSync(local);
@@ -119,6 +151,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     try {
       const bytes = await original(r);
       const image = await sharp(bytes, { limitInputPixels: 80000000 }).rotate().resize({ width: 3840, height: 3840, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
+      if (r.live === 'withdrawn' || r.cancelled) throw fail('게시를 취소한 사진입니다.', 410);
       if (!getConfig().enabled) throw fail('모니터 표출 접수가 닫혀 있습니다.', 403);
       r.live = 'pending'; save(r);
       r.screens = publish({ ...r, ts: Date.now() }, image, site); r.live = 'sent'; r.liveError = ''; save(r);
@@ -147,9 +180,13 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     if (Date.now() - r.ts >= getConfig().settings.cancelSec * 1000) throw fail('취소 가능 시간이 지났습니다. 관리자에게 요청해 주세요.', 410);
     archive.markDelete(r.id); cancel(r.id); mail?.remove(r.id); r.cancelled = true; save(r);
     if (r.localName) try { fs.unlinkSync(path.join(liveOriginals, r.localName)); } catch {}
+    if (r.previewName) try { fs.unlinkSync(path.join(liveOriginals, r.previewName)); } catch {}
     archive.cycle().catch(() => {});
     res.json({ success: true });
   }));
+
+  require('./camera-fast-upload').mountFastUpload(app, { archive, getConfig, getSites, publish, cancel, mail,
+    upload, receipts, inflight, save, row, safe, liveOriginals, parsePhotoDate, wakeArchive });
 
   app.post('/live/api/camera/photo', (req, res) => {
     upload.single('photo')(req, res, error => {
@@ -213,9 +250,10 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
           else {
             try {
               display = await sharp(source, { limitInputPixels: 80000000 }).rotate().resize({ width: 3840, height: 3840, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
+              if (receipt.live === 'withdrawn') throw fail('게시를 취소한 사진입니다.', 410);
               if (!getConfig().enabled) throw fail('모니터 표출 접수가 닫혀 있습니다.');
               receipt.live = 'sent'; receipt.screens = publish(photo, display, site);
-            } catch (e) { receipt.live = 'error'; receipt.liveError = e.publicMessage || '이 사진을 모니터용 이미지로 변환하지 못했습니다. Drive 보관 상태를 확인해 주세요.'; }
+            } catch (e) { if (receipt.live !== 'withdrawn') { receipt.live = 'error'; receipt.liveError = e.publicMessage || '이 사진을 모니터용 이미지로 변환하지 못했습니다. Drive 보관 상태를 확인해 주세요.'; } }
           }
         }
         if (email) {

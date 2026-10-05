@@ -10,8 +10,8 @@ const { PhotoArchive } = require('../host/photo-archive');
 const { fixture } = require('./helpers/camera-fixture');
 const { PhotoMail } = require('../host/photo-mail');
 
-async function service(t, { email = false } = {}) {
-  const f = fixture(t);
+async function service(t, { email = false, existingRoot } = {}) {
+  const f = fixture(t, existingRoot);
   const config = { enabled: false, archiveEnabled: true, settings: { cancelSec: 60 } };
   const published = [], cancelled = [];
   const sent = [], clock = { now: Date.now() };
@@ -37,8 +37,116 @@ async function service(t, { email = false } = {}) {
     body.append('photo', new Blob([bytes], { type: 'image/png' }), name);
     return get('photo', { method: 'POST', body });
   };
-  return { ...f, config, published, cancelled, base, headers, get, upload, png, mail, sent, clock };
+  const preview = async ({ requestId = crypto.randomUUID(), mode = 'both', target = null, bytes = png, ...extra } = {}) => {
+    const body = new FormData();
+    for (const [key, value] of Object.entries({ requestId, mode, target: JSON.stringify(target), uploaderName: '김예봄', siteId: 'screen', originalName: 'original.png', capturedAt: '2027-01-03T11:00:00', ...extra })) body.append(key, value);
+    body.append('photo', new Blob([bytes], { type: 'image/png' }), 'preview.png');
+    return get('preview', { method: 'POST', body });
+  };
+  const original = (id, bytes = png) => { const body = new FormData(); body.append('photo', new Blob([bytes], { type: 'image/png' }), 'original.png'); return get('uploads/' + id + '/original', { method: 'POST', body }); };
+  return { ...f, config, published, cancelled, base, headers, get, upload, preview, original, png, mail, sent, clock, server };
 }
+
+test('split receipts and private originals survive server restart, including interrupted location assignment', async t => {
+  const f = await service(t); f.config.enabled = true;
+  const requestId = crypto.randomUUID();
+  const posted = (await f.preview({ requestId }).then(r => r.json())).upload;
+  await f.original(posted.id);
+  const receiptFile = path.join(f.archive.root, 'camera-receipts', posted.id + '.json');
+  const receipt = JSON.parse(fs.readFileSync(receiptFile, 'utf8'));
+  receipt.target = { year: '2027', eventName: '재시작 예배' };
+  fs.writeFileSync(receiptFile, JSON.stringify(receipt)); // Crash between receipt and archive-record assignment.
+  await new Promise(resolve => f.server.close(resolve));
+  const restarted = await service(t, { existingRoot: f.root }); restarted.config.enabled = true;
+  restarted.headers.cookie = f.headers.cookie;
+  const replay = await restarted.preview({ requestId }).then(r => r.json());
+  assert.equal(replay.replay, true); assert.equal(restarted.published.length, 0);
+  assert.equal(restarted.archive.get(posted.id).status, 'pending');
+  assert.equal(restarted.archive.get(posted.id).target.eventName, '재시작 예배');
+  assert.equal((await restarted.original(posted.id).then(r => r.json())).replay, true);
+  await restarted.archive.cycle(true);
+  const record = restarted.archive.get(posted.id);
+  assert.equal(record.status, 'saved'); assert.deepEqual(restarted.remote.get(record.driveId).bytes, f.png);
+});
+
+test('preview publishes without Google or an original; folder-free original stays private and target assignment is durable before Drive', async t => {
+  const f = await service(t, { email: true }); f.config.enabled = true;
+  const requestId = crypto.randomUUID();
+  const getFile = f.drive.files.get; let googleCalls = 0;
+  f.drive.files.get = async () => { googleCalls++; throw Object.assign(new Error('Google offline'), { code: 403 }); };
+  const response = await f.preview({ requestId, email: 'guest@example.com' }); assert.equal(response.status, 200);
+  const posted = (await response.json()).upload;
+  assert.equal(posted.archive, 'awaiting_original'); assert.equal(posted.original, 'pending');
+  assert.equal(f.published.length, 1); assert.equal(googleCalls, 0); assert.equal(f.archive.records.size, 0);
+  assert.equal((await f.preview({ requestId, email: 'guest@example.com' }).then(r => r.json())).replay, true);
+  assert.equal(f.published.length, 1); assert.equal(f.mail.jobOf(posted.id).photos.length, 1);
+  const received = await f.original(posted.id).then(r => r.json());
+  assert.equal(received.upload.original, 'received'); assert.equal(received.upload.archive, 'awaiting_target');
+  assert.equal(googleCalls, 0); assert.equal(f.calls.creates.length, 0);
+  assert.deepEqual(fs.readFileSync(f.archive.localPath(f.archive.get(posted.id))), f.png);
+  assert.equal((await f.original(posted.id).then(r => r.json())).replay, true);
+  const rebuilt = new PhotoArchive({ dataDir: f.root, folderId: 'root', drive: f.drive, authMode: 'oauth' });
+  assert.equal(rebuilt.get(posted.id).status, 'awaiting_target');
+  const target = { year: '2027', eventName: '신년예배' };
+  assert.equal((await f.get('uploads/' + posted.id + '/target', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(target) })).status, 202);
+  assert.equal(f.archive.get(posted.id).status, 'pending');
+  await f.archive.cycle(); f.drive.files.get = getFile; await f.archive.cycle(true);
+  const saved = f.archive.get(posted.id); assert.equal(saved.status, 'saved');
+  assert.deepEqual(f.remote.get(saved.driveId).bytes, f.png); assert.equal(f.published.length, 1);
+  assert.equal((await f.original(posted.id, Buffer.from('different bytes'))).status, 400);
+});
+
+test('publication-only withdrawal survives the full-cancel deadline, preserves originals and mail, and cannot be replayed', async t => {
+  const f = await service(t, { email: true }); f.config.enabled = true;
+  const requestId = crypto.randomUUID(), input = { requestId, target: { year: '2027', eventName: '신년예배' }, email: 'guest@example.com' };
+  const posted = (await f.preview(input).then(r => r.json())).upload;
+  const cookie = f.headers.cookie; f.headers.cookie = '';
+  assert.equal((await f.get('uploads/' + posted.id + '/withdraw', { method: 'DELETE' })).status, 404);
+  assert.equal((await f.original(posted.id)).status, 404);
+  f.headers.cookie = cookie;
+  await f.original(posted.id); await f.archive.cycle(true);
+  f.config.settings.cancelSec = 0;
+  assert.equal((await f.get('uploads/' + posted.id, { method: 'DELETE' })).status, 410);
+  assert.equal((await f.get('uploads/' + posted.id + '/withdraw', { method: 'DELETE', headers: { 'sec-fetch-site': 'cross-site' } })).status, 403);
+  const removed = (await f.get('uploads/' + posted.id + '/withdraw', { method: 'DELETE' }).then(r => r.json())).upload;
+  assert.equal(removed.live, 'withdrawn'); assert.equal(removed.archive, 'saved'); assert.equal(removed.mail, 'queued');
+  assert.equal(removed.canRetryDisplay, false); assert.equal(removed.canWithdraw, false);
+  assert.ok(f.cancelled.includes(posted.id)); assert.equal(f.mail.jobs.size, 1);
+  assert.deepEqual(f.remote.get(f.archive.get(posted.id).driveId).bytes, f.png);
+  assert.equal((await f.preview(input).then(r => r.json())).upload.live, 'withdrawn'); assert.equal(f.published.length, 1);
+  assert.equal((await f.get('uploads/' + posted.id + '/display', { method: 'POST' })).status, 409);
+  assert.equal((await f.get('uploads/' + posted.id + '/withdraw', { method: 'DELETE' })).status, 200);
+});
+
+test('preview decoding failure preserves the separate original archive workflow', async t => {
+  const f = await service(t); f.config.enabled = true;
+  const bytes = (await sharp(f.png).jpeg().toBuffer()).subarray(0, 100);
+  const response = await f.preview({ bytes }); assert.equal(response.status, 200);
+  const posted = (await response.json()).upload;
+  assert.equal(posted.live, 'error'); assert.equal(posted.archive, 'awaiting_original'); assert.equal(f.published.length, 0);
+  assert.equal((await f.original(posted.id, bytes)).status, 200);
+  assert.equal(f.archive.get(posted.id).status, 'awaiting_target');
+  assert.deepEqual(fs.readFileSync(f.archive.localPath(f.archive.get(posted.id))), bytes);
+});
+
+test('target may arrive before original; full cancellation blocks a late original and upload conflicts preserve the first bytes', async t => {
+  const f = await service(t); f.config.enabled = true;
+  const posted = (await f.preview().then(r => r.json())).upload;
+  const target = { year: '2027', eventName: '신년예배' };
+  await f.get('uploads/' + posted.id + '/target', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(target) });
+  assert.equal(f.archive.records.size, 0);
+  await f.original(posted.id); await f.archive.cycle(true);
+  assert.equal(f.archive.get(posted.id).target.eventName, '신년예배');
+  const otherImage = await sharp(f.png).negate().png().toBuffer();
+  assert.equal((await f.original(posted.id, otherImage)).status, 409);
+  const late = (await f.preview().then(r => r.json())).upload;
+  assert.equal((await f.get('uploads/' + late.id, { method: 'DELETE' })).status, 200);
+  assert.equal((await f.original(late.id)).status, 410); assert.equal(f.archive.records.has(late.id), false);
+  const live = (await f.preview({ mode: 'live' }).then(r => r.json())).upload;
+  assert.equal(live.original, 'none'); assert.equal((await f.original(live.id)).status, 410);
+  assert.equal(live.canChangeTarget, false);
+  assert.equal((await f.get('uploads/' + live.id + '/target', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(target) })).status, 409);
+});
 
 test('camera email is limited to display modes; owner-only mail cancellation preserves display/archive and retries do not enqueue twice', async t => {
   const f = await service(t, { email: true }); f.config.enabled = true;

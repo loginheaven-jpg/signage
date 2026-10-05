@@ -17,7 +17,7 @@ const failures = {
   google_rejected: 'Google이 연결을 거절했습니다. 서버의 Google OAuth 설정을 확인해 주세요.',
   network: '서버가 Google에 접속하지 못했습니다. 잠시 후 다시 연결해 주세요.'
 };
-const labels = { saved: '드라이브 보관 완료', pending: '서버 보관 · 드라이브 전송 대기', error: '서버 보관 · 전송 재시도 중', deleting: '삭제 처리 중' };
+const labels = { saved: '드라이브 보관 완료', pending: '서버 보관 · 드라이브 전송 대기', awaiting_target: '원본 접수 완료 · 저장 위치 지정 필요', error: '서버 보관 · 전송 재시도 중', deleting: '삭제 처리 중' };
 const dates = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 function toast(message) {
   $('toast').textContent = message; $('toast').hidden = false;
@@ -37,7 +37,7 @@ function renderStatus(status) {
   $('connection').classList.toggle('warn', !status.ready || status.counts.error > 0);
   $('connectionTitle').textContent = status.ready ? 'Google 드라이브 자동 보관' : 'Google 드라이브 연결이 필요합니다';
   const waiting = status.counts.pending + status.counts.error;
-  $('connectionText').textContent = status.error || `${status.folderName || '지정 폴더'} · 보관 완료 ${status.counts.saved}장${waiting ? ' · 전송 대기 ' + waiting + '장' : ''}`;
+  $('connectionText').textContent = (status.error || `${status.folderName || '지정 폴더'} · 보관 완료 ${status.counts.saved}장${waiting ? ' · 전송 대기 ' + waiting + '장' : ''}`) + (status.counts.awaiting_target ? ' · 저장 위치 지정 필요 ' + status.counts.awaiting_target + '장' : '');
   if (connectionFailure && !status.ready) $('connectionText').textContent = '계정 연결 실패 — ' + connectionFailure;
   if (!status.ready && !status.oauthConfigured) $('connectionText').textContent += ' 개인 드라이브를 사용하려면 서버 관리자가 Google 계정 연결 설정을 먼저 완료해야 합니다.';
   if (status.oauthConfigured && status.pickerConfigured === false) $('connectionText').textContent += ' Google 폴더 선택 기능 설정이 필요합니다.';

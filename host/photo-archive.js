@@ -105,7 +105,7 @@ class PhotoArchive {
     return record;
   }
 
-  enqueueCamera(photo, source, target) {
+  enqueueCamera(photo, source, target, extra = {}) {
     const stamp = ts => new Date(ts + 9 * 3600000).toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
     const captured = photo.capturedAt ? stamp(photo.capturedAt) : '날짜미상';
     const extension = path.extname(source).toLowerCase();
@@ -114,7 +114,7 @@ class PhotoArchive {
     while ([...this.records.values()].some(r => r.id !== photo.id && r.name === name)) name = base + '_' + String(suffix++).padStart(2, '0') + extension;
     return this.enqueue(photo, source, { id: photo.siteId || '', name: photo.siteName || '' }, { name, rootId: this.folderId, target, owner: photo.owner, uploaderName: photo.uploaderName,
       capturedAt: photo.capturedAt || null, dateSource: photo.dateSource, originalName: photo.originalName,
-      requestId: photo.requestId, fingerprint: photo.fingerprint });
+      requestId: photo.requestId, fingerprint: photo.fingerprint, ...extra });
   }
 
   oauthClient() {
@@ -196,7 +196,7 @@ class PhotoArchive {
   }
 
   status() {
-    const counts = { pending: 0, saved: 0, error: 0, deleting: 0 };
+    const counts = { pending: 0, saved: 0, error: 0, deleting: 0, awaiting_target: 0 };
     for (const r of this.records.values()) if (r.status in counts) counts[r.status]++;
     return { folderId: this.folderId, folderName: this.folder?.name || '', ready: this.ready,
       authMode: this.authMode, oauthConfigured: !!(this.clientId && this.clientSecret),
@@ -221,6 +221,7 @@ class PhotoArchive {
   }
 
   async upload(r) {
+    if (r.splitUpload && !r.target) throw new Error('Archive target required');
     const file = this.localPath(r);
     if (!file) throw new Error('Missing local photo');
     if (r.target && !r.targetResolved) {

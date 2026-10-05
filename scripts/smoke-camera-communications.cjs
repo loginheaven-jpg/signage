@@ -27,7 +27,7 @@ const { startPreview } = require('./camera-preview.cjs');
       await page.locator('#home').click(); await page.locator('#purpose').waitFor();
       await page.locator('[data-mode=' + mode + ']').click();
       await page.locator('#uploader').fill('김예봄');
-      if (mode !== 'live') {
+      if (mode === 'archive') {
         await page.locator('#chooseFolder').click(); await page.locator('[data-folder-id=event-2026]').click();
         await page.locator('#folderDialog').waitFor({ state: 'hidden' });
       }
@@ -36,11 +36,16 @@ const { startPreview } = require('./camera-preview.cjs');
         await page.locator('[data-site-id=screen]').click(); await page.locator('#siteDialog').waitFor({ state: 'hidden' });
       }
       await page.locator('#useSettings').click(); await page.locator('#work').waitFor();
+      if (mode === 'both') {
+        await page.locator('#chooseFolder').click(); await page.locator('[data-folder-id=event-2026]').click();
+        await page.locator('#folderDialog').waitFor({ state: 'hidden' }); await page.locator('#saveLocation').click();
+      }
     };
     const send = async (files = preview.photo) => {
       await page.locator('#galleryInput').setInputFiles(files);
       await page.locator('#send').click();
       await page.waitForFunction(() => !document.querySelector('#home').disabled && document.querySelector('#progress').textContent.includes('서버 접수 완료'));
+      await page.waitForFunction(() => originals.length === 0);
       await page.locator('#refreshHistory').click();
     };
 
