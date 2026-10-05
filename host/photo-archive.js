@@ -122,7 +122,7 @@ class PhotoArchive {
     return new google.auth.OAuth2(this.clientId, this.clientSecret, this.redirectUri);
   }
 
-  async initialize() {
+  async initialize(options = {}) {
     if (!this.drive) {
       if (fs.existsSync(this.oauthFile) && this.clientId && this.clientSecret) {
         const saved = JSON.parse(fs.readFileSync(this.oauthFile, 'utf8'));
@@ -144,12 +144,12 @@ class PhotoArchive {
         this.authMode = 'service-account-readonly';
       }
     }
-    await this.checkFolder();
+    await this.checkFolder(this.drive, this.authMode, options);
   }
 
-  async checkFolder(drive = this.drive, mode = this.authMode) {
+  async checkFolder(drive = this.drive, mode = this.authMode, options = {}) {
     const { data } = await drive.files.get({ fileId: this.folderId, supportsAllDrives: true,
-      fields: 'id,name,mimeType,driveId,trashed,capabilities(canAddChildren)' }, REQUEST);
+      fields: 'id,name,mimeType,driveId,trashed,capabilities(canAddChildren)' }, { ...REQUEST, ...options });
     if (data.trashed || data.mimeType !== 'application/vnd.google-apps.folder') throw new Error('Invalid photo folder');
     if (drive !== this.drive) return data;
     this.folder = data;

@@ -9,6 +9,7 @@ let draftDb;
 let cameraStream;
 let shareBatch = null, shareUrls = [], sharing = false;
 let uploadStates = new Map(), batchCancelling = false;
+const folderRequests = new Map();
 const MAIL_KEEP_MS = 10 * 60 * 1000;
 const mailLabels = { queued: '발송 대기', sent: '발송 완료', failed: '발송 실패', error: '발송 예약 실패', sending: '발송 중', cancelled: '취소됨', limit: '오늘의 발송 한도 초과', off: '메일 발송 설정 필요' };
 const MAIL_TYPOS = { 'gmial.com': 'gmail.com', 'gmai.com': 'gmail.com', 'gamil.com': 'gmail.com', 'gmail.co': 'gmail.com', 'gmail.con': 'gmail.com', 'gmail.cm': 'gmail.com', 'gmaill.com': 'gmail.com', 'naver.co': 'naver.com', 'naver.con': 'naver.com', 'naver.cm': 'naver.com', 'nave.com': 'naver.com', 'naver.coom': 'naver.com', 'hanmail.ne': 'hanmail.net', 'hanmail.con': 'hanmail.net', 'daum.ne': 'daum.net', 'daum.nte': 'daum.net', 'nate.con': 'nate.com', 'kakao.con': 'kakao.com' };
@@ -87,7 +88,7 @@ async function api(route, options = {}) {
     const res = await fetch('/live/api/camera/' + route, { cache: 'no-store', ...fetchOptions, signal: controller.signal, headers: { ...(legacyToken ? { 'x-live-token': legacyToken } : {}), ...options.headers } });
     const data = await res.json().catch(error => { if (controller.signal.aborted) throw error; return {}; });
     if (res.status === 401) { location.replace('/login?role=camera'); throw new Error('다시 로그인해 주세요.'); }
-    if (!res.ok) throw new Error(data.error || '연결을 확인하고 다시 시도해 주세요.');
+    if (!res.ok) throw Object.assign(new Error(data.error || '연결을 확인하고 다시 시도해 주세요.'), { status: res.status });
     return data;
   } catch (error) {
     if (controller.signal.aborted) throw new Error('응답 시간이 초과되었습니다. 같은 요청으로 다시 시도해 주세요.');
@@ -187,17 +188,19 @@ function renderShare() {
     const url = URL.createObjectURL(photo.file); shareUrls.push(url);
     const link = node('a', '사진 ' + (index + 1) + ' 내려받기'); link.href = url; link.download = photo.file.name; return link;
   }));
-  for (const [id, flag, title] of [['cancelBatch', 'canCancel', '사진'], ['cancelBatchMail', 'canCancelMail', '이메일']]) {
+  for (const [id, flag] of [['cancelBatch', 'canCancel'], ['cancelBatchMail', 'canCancelMail']]) {
     const count = photos.filter(p => uploadStates.get(p.id)?.[flag]).length;
     el(id).hidden = !count; el(id).disabled = busy || batchCancelling;
-    el(id).textContent = '이번 ' + title + ' ' + count + '장 모두 취소';
+    const archives = shareBatch?.mode === 'both' || photos.some(p => uploadStates.get(p.id)?.mode === 'both');
+    el(id).textContent = flag === 'canCancelMail' ? '이번 이메일 ' + count + '장 모두 취소' : '이번 사진 ' + count + '장 ' + (archives ? '게시·보관 취소' : '게시 취소');
   }
 }
 async function cancelBatch(mailOnly) {
   if (busy || batchCancelling || mode === 'archive') return;
   const photos = (shareBatch?.photos || []).filter(p => uploadStates.get(p.id)?.[mailOnly ? 'canCancelMail' : 'canCancel']);
   if (!photos.length) return;
-  if (!mailOnly && !confirm('이번 사진 ' + photos.length + '장의 보관과 모니터 표출을 취소할까요? Drive에 보관한 사진은 휴지통으로 이동하며 대기 이메일도 취소합니다.')) return;
+  const archives = photos.some(p => uploadStates.get(p.id)?.mode === 'both');
+  if (!mailOnly && !confirm('이번 사진 ' + photos.length + '장의 ' + (archives ? '보관과 모니터 표출' : '모니터 표출') + '을 취소할까요? ' + (archives ? 'Drive에 보관한 사진은 휴지통으로 이동하며 ' : '') + '대기 이메일도 취소합니다.')) return;
   batchCancelling = true; renderShare(); let cancelled = 0, lastError = '';
   try {
     for (const photo of photos) {
@@ -240,11 +243,23 @@ function rememberNewTarget() {
   if (mode !== 'live' && foldersReady && el('event').value === '__new__' && target?.eventName && [...target.eventName].length <= 80 &&
       !/[\\/\x00-\x1f\x7f]/.test(target.eventName) && !['.', '..'].includes(target.eventName) && (!target.eventDate || target.eventDate.startsWith(target.year + '-'))) rememberTarget(target);
 }
-async function loadFolders(yearId = '', restoreEvent = '', recoverYear = true) {
+function requestFolders(year, yearId = '', force = false) {
+  const key = year + '/' + yearId, existing = folderRequests.get(key);
+  if (existing?.pending || (!force && existing && Date.now() - existing.at < 30000)) return existing.promise;
+  const entry = { at: Date.now(), pending: true };
+  entry.promise = api('folders?' + new URLSearchParams({ year, ...(yearId ? { yearId } : {}), ...(force ? { refresh: '1' } : {}) }), { timeoutMs: 25000 })
+    .then(data => { entry.pending = false; entry.at = Date.now(); return data; }, error => { folderRequests.delete(key); throw error; });
+  folderRequests.set(key, entry); return entry.promise;
+}
+async function loadFolders(yearId = '', restoreEvent = '', recoverYear = true, force = false) {
   const seq = ++folderSequence; foldersReady = false; el('useSettings').disabled = true;
   el('folderState').textContent = '폴더 목록을 확인하고 있습니다…'; el('chooseFolder').disabled = true;
+  el('reloadFolders').disabled = true;
+  const started = Date.now(), progress = setInterval(() => {
+    if (seq === folderSequence) el('folderState').textContent = '폴더 목록 확인 중 · ' + Math.floor((Date.now() - started) / 1000) + '초 (최대 25초)';
+  }, 1000);
   try {
-    const data = await api('folders?' + new URLSearchParams({ year: el('year').value, ...(yearId ? { yearId } : {}) }));
+    const data = await requestFolders(el('year').value, yearId, force);
     if (seq !== folderSequence) return;
     el('yearOptions').replaceChildren(...[...new Set(data.years.map(y => y.name))].map(y => option(y, y)));
     const matches = data.years.filter(y => y.name === el('year').value);
@@ -257,19 +272,21 @@ async function loadFolders(yearId = '', restoreEvent = '', recoverYear = true) {
     renderEvents(missing ? '' : restoreEvent);
     el('folderState').textContent = data.ambiguous ? '같은 연도 폴더가 여러 개입니다. 위에서 사용할 폴더를 선택해 주세요.' : data.exists ? '기존 연도 폴더의 행사 목록입니다.' : el('year').value + ' 연도 폴더는 첫 사진을 저장할 때 생성합니다.';
     if (missing) el('folderState').textContent = '최근 선택 폴더가 삭제되었거나 접근할 수 없습니다. 저장 폴더를 다시 선택해 주세요.';
+    if (data.warning) el('folderState').textContent += ' ' + data.warning;
+    if (data.checkedAt) el('folderState').textContent += ' · 확인: ' + kst.format(new Date(data.checkedAt));
     foldersReady = !data.ambiguous; el('chooseFolder').disabled = data.ambiguous; el('useSettings').disabled = data.ambiguous;
   } catch (e) {
     if (seq !== folderSequence) return;
     // An old year ID may have been deleted or moved. Reload the list without
     // selecting a replacement folder or interpreting a failed query as absence.
-    if (yearId && recoverYear) {
-      await loadFolders('', '', false);
+    if (yearId && recoverYear && e.status === 409) {
+      await loadFolders('', '', false, true);
       if (foldersReady) el('folderState').textContent = '최근 연도 폴더를 확인하지 못했습니다. 저장 폴더를 다시 선택해 주세요.';
       return;
     }
     events = []; el('event').value = ''; renderEvents(''); el('chooseFolder').disabled = true;
     el('folderState').textContent = e.message + ' 목록을 확인하기 전에는 새 폴더를 만들지 않습니다.';
-  }
+  } finally { clearInterval(progress); if (seq === folderSequence) el('reloadFolders').disabled = false; }
 }
 function renderEvents(restore = el('event').value) {
   const search = el('eventSearch').value.trim().normalize('NFC').toLocaleLowerCase('ko');
@@ -476,7 +493,7 @@ async function sendPhotos() {
         const result = await api('photo', { method: 'POST', body: form });
         accepted++; URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r);
         if (s.mode !== 'archive') {
-          if (shareBatch?.key !== s.batchKey) shareBatch = { key: s.batchKey, ts: Date.now(), siteName: s.siteName, photos: [] };
+          if (shareBatch?.key !== s.batchKey) shareBatch = { key: s.batchKey, mode: s.mode, ts: Date.now(), siteName: s.siteName, photos: [] };
           if (!result.upload?.cancelled && !shareBatch.photos.some(p => p.id === result.upload.id)) {
             let file; try { file = await sharingFile(r.file, result.upload.id); } catch { file = r.file; }
             shareBatch.photos.push({ id: result.upload.id, file });
@@ -550,8 +567,8 @@ async function loadHistory() {
       }
       if (r.canCancel) {
         const left = Math.max(0, Math.ceil((r.ts + config.cancelSec * 1000 - Date.now()) / 1000));
-        const cancel = node('button', '업로드 취소 (' + left + '초)'); cancel.onclick = async () => {
-          if (!confirm('이 사진의 보관과 모니터 표출을 취소할까요? 저장된 Drive 사진은 휴지통으로 이동합니다.')) return;
+        const cancel = node('button', (r.mode === 'archive' ? '보관 취소' : r.mode === 'both' ? '게시·보관 취소' : '게시 취소') + ' (' + left + '초)'); cancel.onclick = async () => {
+          if (!confirm(r.mode === 'live' ? '이 사진의 모니터 게시와 대기 이메일을 취소할까요?' : '이 사진의 보관' + (r.mode === 'both' ? '과 모니터 표출' : '') + '을 취소할까요? 저장된 Drive 사진은 휴지통으로 이동합니다.')) return;
           cancel.disabled = true; try { await api('uploads/' + r.id, { method: 'DELETE' }); await loadHistory(); } catch (e) { notice(e.message, true); cancel.disabled = false; }
         }; actions.append(cancel);
       }
@@ -580,7 +597,7 @@ el('year').onchange = () => {
   loadFolders(target?.yearId || '', target?.eventId || (target?.eventName ? '__new__' : ''));
 };
 el('yearFolder').onchange = () => loadFolders(el('yearFolder').value);
-el('reloadFolders').onclick = () => loadFolders(el('yearFolder').dataset.selected || '', el('event').value);
+el('reloadFolders').onclick = () => loadFolders(el('yearFolder').dataset.selected || '', el('event').value, true, true);
 el('eventSearch').oninput = () => renderEvents();
 el('chooseFolder').onclick = () => {
   if (!foldersReady) return notice('폴더 목록을 먼저 확인해 주세요.', true);
@@ -648,6 +665,8 @@ async function init() {
   try {
     migrateLegacyState();
     config = await api('config');
+    const recentFolder = storage.get('lastTarget');
+    requestFolders(String(recentFolder?.year || config.year), recentFolder?.yearId || '').catch(() => {});
     const draft = await readDraft();
     shareBatch = draft?.shareBatch || null;
     const savedEmail = storage.get('email');

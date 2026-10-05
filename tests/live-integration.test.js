@@ -140,6 +140,30 @@ test('real HTTP/WebSocket: upload, delayed readiness, reconnect, acknowledgement
   assert.equal(reconnected.messages.some(m => m.photo?.id === offline.photo.id), false);
   const denied = await fetch(base + `/live/api/delivery?t=invalid&ids=${photo.id}`);
   assert.equal(denied.status, 401);
+
+  // The replacement camera API must reach the same production WS cancellation
+  // path, not just a mocked cancel callback in the camera unit tests.
+  const cameraHeaders = { 'x-live-token': token };
+  const cameraConfig = await fetch(base + '/live/api/camera/config', { headers: cameraHeaders });
+  cameraHeaders.cookie = cameraConfig.headers.get('set-cookie').split(';')[0];
+  const original = await require('../host/node_modules/sharp')({ create: { width: 2, height: 2, channels: 3, background: '#27834c' } }).png().toBuffer();
+  const form = new FormData();
+  for (const [key, value] of Object.entries({ mode: 'live', requestId: 'new-camera-cancel', uploaderName: '취소 검증', siteId: site.id })) form.set(key, value);
+  form.set('photo', new Blob([original], { type: 'image/png' }), 'camera.png');
+  const posted = await fetch(base + '/live/api/camera/photo', { method: 'POST', headers: cameraHeaders, body: form });
+  assert.equal(posted.status, 200);
+  const cameraPhoto = (await posted.json()).upload;
+  await waitFor(() => reconnected.messages.some(m => m.photo?.id === cameraPhoto.id));
+  const cameraUrl = reconnected.messages.find(m => m.photo?.id === cameraPhoto.id).photo.url;
+  const cancelled = await fetch(base + '/live/api/camera/uploads/' + cameraPhoto.id, { method: 'DELETE', headers: cameraHeaders });
+  assert.equal(cancelled.status, 200);
+  await waitFor(() => reconnected.messages.some(m => m.type === 'live_update' && m.removedId === cameraPhoto.id));
+  const update = reconnected.messages.find(m => m.removedId === cameraPhoto.id);
+  assert.equal(update.session.photos.some(p => p.id === cameraPhoto.id), false);
+  assert.equal((await fetch(base + cameraUrl)).status, 404);
+  reconnected.messages.length = 0;
+  reconnected.socket.send(JSON.stringify({ type: 'live_ready', seen: [] })); await sleep(100);
+  assert.equal(reconnected.messages.some(m => m.photo?.id === cameraPhoto.id), false, 'cancelled camera photo is not replayed');
   await api('/api/live/clear', 'POST', {});
   assert.equal((await fetch(base + photo.url)).status, 404);
   assert.equal((await fetch(base + `/api/photos/${photo.id}/image`)).status, 200, 'live clear preserves the independent archive copy');

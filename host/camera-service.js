@@ -6,7 +6,8 @@ const multer = require('multer');
 const sharp = require('sharp');
 const exifr = require('exifr');
 const { atomicJSON, errorText } = require('./photo-archive');
-const { targetInput, fail, FOLDER } = require('./drive-folders');
+const { targetInput, fail } = require('./drive-folders');
+const { CameraFolderCatalog } = require('./camera-folder-catalog');
 const MAX_BYTES = 50 * 1024 * 1024;
 const ALLOWED = new Set(['jpg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'tif']);
 
@@ -19,6 +20,7 @@ function parsePhotoDate(value) {
 }
 
 function mountCameraService(app, { archive, auth, getConfig, getSites, publish, delivery, cancel, mail }) {
+  const folderCatalog = new CameraFolderCatalog(archive);
   const staging = path.join(archive.root, 'camera-staging');
   const receiptsDir = path.join(archive.root, 'camera-receipts');
   const liveOriginals = path.join(archive.root, 'camera-live-originals');
@@ -62,15 +64,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     archiveError: archive.error, sites: getSites(), maxBytes: MAX_BYTES, maxBatch: 30, cancelSec: getConfig().settings.cancelSec, mail: !!mail?.configured }));
 
   app.get('/live/api/camera/folders', safe(async (req, res) => {
-    await archive.initialize();
-    if (!archive.ready) throw fail(archive.error || '관리자에게 Google 드라이브 연결을 요청해 주세요.', 503);
-    const years = (await archive.folders.children(archive.folderId)).filter(f => /^(19|20|21)\d{2}$/.test(f.name)).map(f => ({ id: f.id, name: f.name })).sort((a, b) => b.name.localeCompare(a.name));
-    const year = String(req.query.year || '');
-    if (!/^(19|20|21)\d{2}$/.test(year)) throw fail('연도를 확인해 주세요.');
-    const ambiguous = !req.query.yearId && years.filter(y => y.name === year).length > 1;
-    const selected = ambiguous ? null : await archive.folders.year(year, req.query.yearId);
-    const events = selected ? (await archive.folders.children(selected.id)).map(f => ({ id: f.id, name: f.name, writable: f.capabilities?.canAddChildren !== false })).sort((a, b) => a.name.localeCompare(b.name, 'ko')) : [];
-    res.json({ years, yearId: selected?.id || '', events, exists: !!selected, ambiguous });
+    res.json(await folderCatalog.get(String(req.query.year || ''), String(req.query.yearId || ''), req.query.refresh === '1'));
   }));
 
   function row(r) {

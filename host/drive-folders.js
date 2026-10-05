@@ -33,14 +33,14 @@ class DriveFolders {
     fs.writeFileSync(this.file + '.tmp', JSON.stringify(this.journal), { mode: 0o600 });
     fs.renameSync(this.file + '.tmp', this.file);
   }
-  async children(parent, images = false) {
+  async children(parent, images = false, options = {}) {
     const files = []; let pageToken;
     do {
       const { data } = await this.archive.drive.files.list({
         q: `'${parent}' in parents and trashed = false and ${images ? "mimeType contains 'image/'" : "mimeType = '" + FOLDER + "'"}`,
         pageSize: 1000, pageToken, fields: `nextPageToken,files(${images ? 'id,name,mimeType,description,createdTime,parents,trashed,size,appProperties' : FIELDS})`,
         supportsAllDrives: true, includeItemsFromAllDrives: true
-      }, REQUEST);
+      }, { ...REQUEST, ...options });
       files.push(...(data.files || [])); pageToken = data.nextPageToken;
     } while (pageToken);
     return files;
