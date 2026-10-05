@@ -5,22 +5,23 @@
 <link rel="manifest" href="/camera.webmanifest"><link rel="apple-touch-icon" href="/camera-icon-192.png"><link rel="stylesheet" href="/camera.css">
 <script src="/camera-exif.js" defer></script><script src="/camera.js" defer></script><script src="/camera-install.js" defer></script>
 </head><body><main>
-<header><div class="brand">YEBOM <span>CAMERA</span></div><h1>함께한 순간을 모으세요</h1><p>교회사진 보관과 실시간 모니터 표출</p></header>
+<nav class="topNav" aria-label="카메라 탐색"><div class="brand">YEBOM <span>CAMERA</span></div><button id="home" type="button">⌂ 홈</button></nav>
+<header><h1>함께한 순간을 모으세요</h1><p>교회사진 보관과 실시간 모니터 표출</p></header>
 <div id="notice" role="status" aria-live="polite" hidden></div>
-<section id="resume" class="panel" hidden><div class="eyebrow">지난 작업</div><h2>이 작업으로 계속할까요?</h2><p id="resumeSummary"></p><button id="continueResume" class="primary">이 작업으로 계속</button><button id="startNew">새 작업 선택</button></section>
+<section id="resume" class="panel" hidden><div class="eyebrow">지난 작업</div><h2>작업 이어가기</h2><p id="resumeSummary"></p><p id="draftCount" class="hint"></p><button id="continueResume" class="primary">작업 이어가기</button></section>
 <section id="purpose" hidden><div class="eyebrow">01 · 사용 목적</div><h2>사진을 어디에 사용할까요?</h2><div class="purposes">
-<button data-mode="archive"><span class="symbol">▣</span><strong>구글드라이브에 보관</strong><small>선택한 연도와 행사에 원본 사진을 저장합니다.</small></button>
-<button data-mode="live"><span class="symbol">▤</span><strong>실시간 모니터에 표출</strong><small>선택한 모니터에 표시하고 임시 보관합니다.</small></button>
-<button data-mode="both"><span class="symbol">▣ + ▤</span><strong>보관하고 모니터에 표출</strong><small>원본을 보관하고 모니터에도 전달합니다.</small></button>
+<button data-mode="both" class="recommended"><span class="symbol">▣ + ▤</span><strong>보관하고 표출 <span class="badge">기본</span></strong><small>교회폴더에 원본을 저장하고 모니터에도 표시합니다.</small></button>
+<button data-mode="live"><span class="symbol">▤</span><strong>보관없이 표출</strong><small>선택한 모니터에 표시합니다. 교회폴더에는 저장하지 않습니다.</small></button>
+<button data-mode="archive"><span class="symbol">▣</span><strong>교회폴더에 저장</strong><small>선택한 연도와 행사에 원본 사진을 저장합니다.</small></button>
 </div></section>
 <section id="setup" class="panel" hidden><div class="eyebrow">02 · 작업 설정</div><h2 id="setupTitle"></h2><form id="setupForm">
 <label>업로더 이름<input id="uploader" maxlength="20" required autocomplete="name" placeholder="예: 김예봄"></label>
 <fieldset id="archiveSetup"><legend>교회사진 저장 위치</legend><label>연도<input id="year" type="number" min="1900" max="2199" step="1" required list="yearOptions"></label><datalist id="yearOptions"></datalist>
 <label id="yearFolderLabel" hidden>같은 연도 폴더 중 선택<select id="yearFolder"></select></label>
 <p id="folderState" class="hint" aria-live="polite"></p><button id="reloadFolders" type="button" class="link">폴더 목록 다시 확인</button>
-<label>행사 찾기<input id="eventSearch" type="search" placeholder="행사명으로 검색"></label><label>행사<select id="event"><option value="">행사를 선택해 주세요</option></select></label>
+<label id="folderButtonLabel">저장 폴더</label><button id="chooseFolder" class="selectionButton" type="button" aria-labelledby="folderButtonLabel folderButtonText" aria-haspopup="dialog"><span id="folderButtonText">저장 폴더 선택</span><span aria-hidden="true">⌄</span></button><input id="event" type="hidden">
 <div id="newEvent" hidden><label>새 행사명<input id="eventName" maxlength="80" placeholder="예: 가을수련회"></label><label>행사 시작일 (선택)<input id="eventDate" type="date"></label><p id="newPath" class="hint"></p></div></fieldset>
-<fieldset id="liveSetup"><legend>모니터 표출</legend><label>표출할 모니터<select id="site"></select></label><p class="hint">모니터 접수와 연결 상태는 전송 결과에서 다시 확인합니다.</p></fieldset>
+<fieldset id="liveSetup"><legend>모니터 표출</legend><label id="siteButtonLabel">표출할 모니터</label><button id="chooseSite" class="selectionButton" type="button" aria-labelledby="siteButtonLabel siteButtonText" aria-haspopup="dialog"><span id="siteButtonText">모니터 선택</span><span aria-hidden="true">⌄</span></button><input id="site" type="hidden"><p id="siteState" class="hint" role="status"></p><p class="hint">초록색: 연결됨 · 회색: 연결 끊김. 서비스 연결 상태이며 실제 전원 상태는 아닙니다.</p></fieldset>
 <div class="actions"><button id="useSettings" class="primary" type="submit">이 설정으로 작업 시작</button><button id="backPurpose" type="button">목적 변경</button></div></form></section>
 <section id="work" hidden><div class="panel"><div class="panelHeading"><div><div class="eyebrow">현재 작업</div><h2 id="workTitle"></h2></div><button id="changePurpose" class="link">목적 변경</button></div>
 <dl id="workSummary"></dl><button id="changeSettings" class="link">행사 · 모니터 · 이름 변경</button><p id="workWarning" class="hint"></p></div>
@@ -32,4 +33,7 @@
 <div class="actions"><button id="send" class="primary">전송</button><button id="discard">선택한 사진 비우기</button></div><p id="progress" role="status" aria-live="polite"></p></section>
 <section class="panel"><div class="panelHeading"><h2>내 업로드</h2><button id="refreshHistory" class="link">새로고침</button></div><p class="hint">이 브라우저에서 접수한 최근 사진입니다. 접수와 Drive 보관, 모니터 표시 상태를 따로 확인하세요.</p><div id="history"></div></section></section>
 <footer><a href="/privacy" target="_blank" rel="noopener">개인정보 처리 안내</a> · <a href="/terms" target="_blank" rel="noopener">이용약관</a><br>사진은 한 장당 50MB, 한 번에 30장까지 선택할 수 있습니다.</footer>
-</main><dialog id="cameraDialog"><h2>사진 촬영</h2><video id="cameraVideo" autoplay muted playsinline></video><p class="hint">촬영한 사진은 확인 후 전송합니다.</p><div class="actions"><button id="snap" class="primary">촬영</button><button id="closeCamera">닫기</button></div></dialog></body></html>
+</main>
+<dialog id="folderDialog" class="selectionDialog" aria-labelledby="folderDialogTitle"><div class="panelHeading"><h2 id="folderDialogTitle">저장 폴더 선택</h2><button id="closeFolders" type="button">닫기</button></div><button id="createFolder" class="newFolder" type="button">＋ 새 폴더</button><label>행사 찾기<input id="eventSearch" type="search" placeholder="행사명으로 검색"></label><p class="hint">최근 선택 폴더 → 행사 날짜 최신순 → 이름순</p><div id="folderList" class="selectionList"></div></dialog>
+<dialog id="siteDialog" class="selectionDialog" aria-labelledby="siteDialogTitle"><div class="panelHeading"><h2 id="siteDialogTitle">모니터 선택</h2><button id="closeSites" type="button">닫기</button></div><p class="hint">연결된 모니터를 먼저 표시합니다.</p><p id="siteDialogState" role="status" class="hint"></p><div id="siteList" class="selectionList"></div></dialog>
+<dialog id="cameraDialog"><h2>사진 촬영</h2><video id="cameraVideo" autoplay muted playsinline></video><p class="hint">촬영한 사진은 확인 후 전송합니다.</p><div class="actions"><button id="snap" class="primary">촬영</button><button id="closeCamera">닫기</button></div></dialog></body></html>

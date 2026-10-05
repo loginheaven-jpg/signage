@@ -10,6 +10,9 @@ async function startPreview() {
   const cleanup = [];
   const f = fixture({ after: fn => cleanup.push(fn) });
   f.folder('year-2026', '2026', 'root'); f.folder('event-2026', '20260820목자컨퍼런스', 'year-2026');
+  f.folder('event-newest', '20261001 가을예배', 'year-2026');
+  f.folder('event-old', '20260101 신년예배', 'year-2026');
+  f.folder('event-name-b', '찬양예배', 'year-2026'); f.folder('event-name-a', '가족예배', 'year-2026');
   const config = { enabled: true, archiveEnabled: true, settings: { cancelSec: 60, photoTtlMin: 180 } };
   const published = [];
   const app = express(); app.use(express.json());
@@ -17,7 +20,7 @@ async function startPreview() {
   app.get('/photos', (req, res) => res.sendFile(path.resolve(__dirname, '../host/public/photos.html')));
   app.get('/camera-exif.js', (req, res) => res.sendFile(path.resolve(__dirname, '../host/node_modules/exifr/dist/full.umd.js')));
   mountCameraService(app, { archive: f.archive, auth: { check: () => true, sameOrigin: req => !req.get('origin') || new URL(req.get('origin')).host === req.get('host') },
-    getConfig: () => config, getSites: () => [{ id: 'screen', name: '본당 로비', online: true }],
+    getConfig: () => config, getSites: () => [{ id: 'offline', name: '1F 로비', online: false }, { id: 'screen', name: '본당 로비', online: true }],
     publish: (photo, bytes) => { published.push({ photo, bytes }); return 1; },
     delivery: id => published.some(p => p.photo.id === id) ? [{ name: '본당 로비', online: true, status: 'displayed' }] : [],
     cancel: id => { const i = published.findIndex(p => p.photo.id === id); if (i >= 0) published.splice(i, 1); } });
