@@ -23,7 +23,7 @@ test('folder browsing coalesces, reuses successful snapshots, and force refresh 
   assert.equal(f.calls.creates.length, 0, 'browsing never creates folders');
 });
 
-test('aggregate deadline ends the wait, aborts Drive and coalesces late calls without caching an incomplete listing', async t => {
+test('aggregate deadline ends the wait, releases failed requests and rejects late incomplete listings', async t => {
   const f = fixture(t); let release, signal;
   const gate = new Promise(resolve => { release = resolve; });
   const list = f.drive.files.list;
@@ -31,11 +31,34 @@ test('aggregate deadline ends the wait, aborts Drive and coalesces late calls wi
   const logs = [], catalog = new CameraFolderCatalog(f.archive, { timeoutMs: 20, log: entry => logs.push(entry) });
   await assert.rejects(catalog.get('2026'), e => e.status === 504);
   assert.equal(signal.aborted, true); assert.equal(catalog.cache.size, 0);
+  assert.equal(catalog.pending.size, 0, 'a permanently hung transport cannot pin future retries');
   await assert.rejects(catalog.get('2026'), e => e.status === 504);
-  assert.equal(logs.length, 1); assert.equal(logs[0].phase, 'years'); assert.equal(logs[0].status, 504);
+  assert.equal(logs.length, 2); assert.equal(logs[0].phase, 'years'); assert.equal(logs[0].status, 504);
   release(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(catalog.cache.size, 0, 'late response does not become a successful empty list');
   assert.equal((await catalog.get('2026')).exists, false);
+});
+
+test('a late abandoned request cannot remove or replace a newer retry for the same year', async t => {
+  const f = fixture(t); f.folder('year', '2026', 'root'); f.folder('event', '예배', 'year');
+  let releaseOld, releaseNew, reads = 0;
+  const oldGate = new Promise(resolve => { releaseOld = resolve; });
+  const newGate = new Promise(resolve => { releaseNew = resolve; });
+  const list = f.drive.files.list;
+  f.drive.files.list = async (...args) => {
+    if (++reads === 1) await oldGate;
+    else if (reads === 2) await newGate;
+    return list(...args);
+  };
+  const catalog = new CameraFolderCatalog(f.archive, { timeoutMs: 100, log: () => {} });
+  await assert.rejects(catalog.get('2026'), e => e.status === 504 && e.publicMessage.includes('FOLDERS_YEARS_504'));
+  const retry = catalog.get('2026');
+  releaseOld(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(catalog.pending.size, 1); assert.equal(catalog.cache.size, 0);
+  releaseNew();
+  assert.equal((await retry).events[0].id, 'event');
+  assert.equal(reads, 3, 'late first read never starts another event request');
+  assert.equal(catalog.pending.size, 0);
 });
 
 test('listing failure is never a missing year; moved remembered IDs and Google authorization failures stay explicit', async t => {

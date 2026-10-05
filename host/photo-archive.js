@@ -119,7 +119,10 @@ class PhotoArchive {
 
   oauthClient() {
     if (!this.clientId || !this.clientSecret) throw new Error('Google OAuth 설정이 필요합니다.');
-    return new google.auth.OAuth2(this.clientId, this.clientSecret, this.redirectUri);
+    // Drive request timeouts do not cover the separate OAuth token refresh.
+    // Bound that transport too, including Google's built-in auth retries.
+    return new google.auth.OAuth2({ clientId: this.clientId, clientSecret: this.clientSecret, redirectUri: this.redirectUri,
+      transporterOptions: { timeout: 10000, retryConfig: { retry: 0 } } });
   }
 
   async initialize(options = {}) {

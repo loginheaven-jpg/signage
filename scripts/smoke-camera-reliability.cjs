@@ -39,6 +39,58 @@ const { startPreview } = require('./camera-preview.cjs');
     await page.locator('#reloadFolders').click();
     await page.waitForFunction(() => !document.querySelector('#chooseFolder').disabled);
 
+    // A transport/body reader that ignores AbortSignal used to leave the UI
+    // checking forever. Accelerate only the folder deadline, not app logic.
+    const stalled = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    stalled.on('pageerror', error => errors.push(error.message));
+    await stalled.addInitScript(() => {
+      const nativeFetch = window.fetch.bind(window), nativeTimeout = window.setTimeout.bind(window);
+      window.setTimeout = (fn, ms, ...args) => nativeTimeout(fn, ms === 25000 ? 250 : ms, ...args);
+      window.fetch = (url, options) => {
+        if (String(url).includes('/camera/folders?') && !window.folderRecovered) {
+          window.stalledFolderCalls = (window.stalledFolderCalls || 0) + 1;
+          return Promise.resolve({ ok: true, status: 200, json: () => new Promise(resolve => { window.releaseStalledFolder = resolve; }) });
+        }
+        return nativeFetch(url, options);
+      };
+    });
+    await stalled.goto(preview.url + '/camera');
+    await stalled.locator('[data-mode=both]').click();
+    await stalled.locator('#uploader').fill('폴더점검');
+    await stalled.locator('#chooseSite').click();
+    await stalled.locator('[data-site-id=screen]').click();
+    await stalled.locator('#useSettings').click();
+    await stalled.waitForFunction(() => document.querySelector('#folderState').textContent.includes('시간이 초과')).catch(async error => {
+      console.error(errors, await stalled.evaluate(() => ({ page: currentPage, folderState: el('folderState').textContent, notice: el('notice').textContent, folderSequence, foldersReady, settings, formValid: el('setupForm').checkValidity(), sitesReady, calls: window.stalledFolderCalls, requests: [...folderRequests].map(([key, value]) => ({ key, pending: value.pending })) })));
+      throw error;
+    });
+    assert.equal(await stalled.locator('#reloadFolders').isDisabled(), false);
+    assert.equal(await stalled.locator('#shoot').isEnabled(), true, 'folder failure cannot block camera work');
+    assert.equal(await stalled.evaluate(() => folderRequests.size), 0, 'stalled prefetch cannot pin future requests');
+    await stalled.evaluate(() => { window.folderRecovered = true; });
+    await stalled.locator('#reloadFolders').click();
+    await stalled.waitForFunction(() => !document.querySelector('#chooseFolder').disabled);
+    await stalled.evaluate(() => window.releaseStalledFolder({ years: [], events: [], yearId: '', exists: false, ambiguous: false }));
+    await stalled.waitForTimeout(50);
+    assert.equal(await stalled.evaluate(() => events.length), 5, 'late timed-out body cannot replace recovered list');
+    assert.equal(await stalled.locator('#reloadFolders').isDisabled(), false);
+    await stalled.close();
+
+    const denied = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    denied.on('pageerror', error => errors.push(error.message));
+    await denied.route('**/live/api/camera/folders?**', route => route.fulfill({ status: 403, json: { error: 'Google 계정 연결과 폴더의 편집 권한을 확인해 주세요. [FOLDERS_ROOT_403]' } }));
+    await denied.goto(preview.url + '/camera');
+    await denied.locator('[data-mode=archive]').click();
+    await denied.waitForFunction(() => document.querySelector('#folderState').textContent.includes('FOLDERS_ROOT_403'));
+    assert.equal(await denied.locator('#chooseFolder').isDisabled(), true);
+    assert.equal(await denied.locator('#reloadFolders').isDisabled(), false);
+    assert.equal(await denied.locator('#useSettings').isDisabled(), true);
+    await denied.unroute('**/live/api/camera/folders?**');
+    await denied.locator('#reloadFolders').click();
+    await denied.waitForFunction(() => !document.querySelector('#chooseFolder').disabled);
+    assert.equal(await denied.evaluate(() => events.length), 5);
+    await denied.close();
+
     // Exercise real hero/grid removal and cancellation while image decoding is pending.
     await page.goto(preview.url + '/player.html');
     const image = fs.readFileSync(preview.photo);
@@ -65,6 +117,6 @@ const { startPreview } = require('./camera-preview.cjs');
     assert.equal(await page.evaluate(() => liveSlots.length), 0);
     assert.equal(await page.evaluate(() => liveState), 'off');
     assert.deepEqual(errors, []);
-    console.log('Chromium reliability passed: startup prefetch, coalesced 16-second Drive read, bounded-error/retry UI, real web-player hero/grid cancellation and cancelled pending image never displayed.');
+    console.log('Chromium reliability passed: startup prefetch, coalesced 16-second Drive read, first folder failure with no recent selection leaves checking and retries successfully, abort-ignoring stalled body bounded, late result discarded, real web-player hero/grid cancellation and cancelled pending image never displayed.');
   } finally { if (browser) await browser.close(); await preview.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -33,6 +33,7 @@ class CameraFolderCatalog {
     const operation = (async () => {
       if (!this.archive.ready || this.checkedAt === null || this.now() - this.checkedAt >= this.freshMs) {
         await this.archive.initialize({ signal: controller.signal, timeout: this.timeoutMs });
+        if (controller.signal.aborted) throw fail('폴더 조회 시간이 초과되었습니다. 목록 다시 확인을 눌러 주세요.', 504);
         if (!this.archive.ready) throw fail(this.archive.error || '관리자에게 Google 드라이브 연결을 요청해 주세요.', 503);
         this.checkedAt = this.now(); this.drive = this.archive.drive;
       }
@@ -40,6 +41,7 @@ class CameraFolderCatalog {
       const options = { signal: controller.signal, timeout: this.timeoutMs };
       const years = (await this.archive.folders.children(this.archive.folderId, false, options))
         .filter(f => /^(19|20|21)\d{2}$/.test(f.name)).map(f => ({ id: f.id, name: f.name })).sort((a, b) => b.name.localeCompare(a.name));
+      if (controller.signal.aborted) throw fail('폴더 조회 시간이 초과되었습니다. 목록 다시 확인을 눌러 주세요.', 504);
       const matches = years.filter(y => y.name === year);
       const ambiguous = !yearId && matches.length > 1;
       const selected = yearId ? matches.find(y => y.id === yearId) : ambiguous ? null : matches[0];
@@ -61,12 +63,16 @@ class CameraFolderCatalog {
       if ([401, 403, 404, 409].includes(status) || reason === 'invalid_grant') this.cache.delete(key);
       else if (this.cache.has(key)) this.cache.get(key).error = errorText(error);
       this.log({ phase, status, reason, elapsedMs: this.now() - started });
+      error.status = error.status || ([400, 401, 403, 404, 409, 504].includes(status) ? status : 503);
+      error.publicMessage = errorText(error).replace('잠시 후 자동으로 다시 시도합니다.', '목록 다시 확인을 눌러 주세요.') + ' [FOLDERS_' + phase.toUpperCase() + '_' + error.status + ']';
       throw error;
-    }).finally(() => clearTimeout(timer));
+    }).finally(() => {
+      clearTimeout(timer);
+      if (this.pending.get(key) === bounded) this.pending.delete(key);
+    });
     this.pending.set(key, bounded);
-    // A timed-out OAuth refresh may settle later. Keep coalescing until it does,
-    // and never allow its late result to overwrite the successful cache.
-    operation.then(() => this.pending.delete(key), () => this.pending.delete(key));
+    // A timed-out auth/Drive call may never settle. Release the failed request
+    // at the deadline so a retry can start; abort guards discard late results.
     return bounded;
   }
 }

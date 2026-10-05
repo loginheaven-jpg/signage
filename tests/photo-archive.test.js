@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { Readable } = require('node:stream');
+const http = require('node:http');
 const { PhotoArchive, META_PREFIX, PHOTO_SCOPE, connectReason, nameLabel } = require('../host/photo-archive');
 
 function fixture(t, { shared = true } = {}) {
@@ -47,6 +48,30 @@ function fixture(t, { shared = true } = {}) {
   }
   return { root, archive, drive, remote, calls, add };
 }
+
+test('hung OAuth token refresh times out and a subsequent refresh can succeed', async t => {
+  const { archive } = fixture(t);
+  archive.clientId = 'test-client'; archive.clientSecret = 'test-secret';
+  const auth = archive.oauthClient();
+  assert.equal(auth.transporter.defaults.timeout, 10000);
+  assert.equal(auth.transporter.defaults.retryConfig.retry, 0);
+  let calls = 0;
+  const server = http.createServer((req, res) => {
+    req.resume();
+    if (++calls === 1) return; // Neither headers nor body ever arrive.
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ access_token: 'local-token', expires_in: 3600 }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  auth.endpoints.oauth2TokenUrl = new URL('http://127.0.0.1:' + server.address().port + '/token');
+  auth.transporter.defaults.timeout = 100;
+  auth.setCredentials({ refresh_token: 'local-refresh' });
+  await assert.rejects(auth.getAccessToken());
+  assert.equal(auth.refreshTokenPromises.size, 0, 'the failed token promise is released');
+  assert.equal((await auth.getAccessToken()).token, 'local-token');
+  assert.equal(calls, 2, 'no automatic retries prolong a failed token request');
+});
 
 test('archive survives live file deletion/restart, uses Korean date, uploads metadata to the selected folder', async t => {
   const { root, archive, drive, remote, add } = fixture(t);

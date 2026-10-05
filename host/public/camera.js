@@ -84,19 +84,30 @@ async function api(route, options = {}) {
   const legacyToken = params.get('t') || storage.get('token');
   if (params.get('t')) storage.set('token', params.get('t'));
   const { timeoutMs = route === 'photo' || route.endsWith('/original') ? 90000 : 15000, signal: externalSignal, ...fetchOptions } = options;
-  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);
-  const abortExternal = () => controller.abort();
+  const controller = new AbortController();
+  let timer, rejectDeadline;
+  const deadline = new Promise((resolve, reject) => { rejectDeadline = reject; });
+  // Aborting fetch alone is insufficient if a browser or response-body reader
+  // never settles. The UI must finish even when that transport ignores abort.
+  timer = setTimeout(() => {
+    rejectDeadline(Object.assign(new Error('응답 시간이 초과되었습니다. 같은 요청으로 다시 시도해 주세요.'), { status: 504 }));
+    controller.abort();
+  }, timeoutMs);
+  const abortExternal = () => { rejectDeadline(Object.assign(new Error('원본 전송을 잠시 멈췄습니다.'), { paused: true })); controller.abort(); };
   externalSignal?.addEventListener('abort', abortExternal, { once: true });
-  if (externalSignal?.aborted) controller.abort();
+  if (externalSignal?.aborted) abortExternal();
   try {
-    const res = await fetch('/live/api/camera/' + route, { cache: 'no-store', ...fetchOptions, signal: controller.signal, headers: { ...(legacyToken ? { 'x-live-token': legacyToken } : {}), ...options.headers } });
-    const data = await res.json().catch(error => { if (controller.signal.aborted) throw error; return {}; });
-    if (res.status === 401) { location.replace('/login?role=camera'); throw new Error('다시 로그인해 주세요.'); }
-    if (!res.ok) throw Object.assign(new Error(data.error || '연결을 확인하고 다시 시도해 주세요.'), { status: res.status });
-    return data;
+    return await Promise.race([(async () => {
+      const res = await fetch('/live/api/camera/' + route, { cache: 'no-store', ...fetchOptions, signal: controller.signal, headers: { ...(legacyToken ? { 'x-live-token': legacyToken } : {}), ...options.headers } });
+      const data = await res.json().catch(error => { if (controller.signal.aborted) throw error; return {}; });
+      if (controller.signal.aborted) throw Object.assign(new Error('응답 시간이 초과되었습니다. 같은 요청으로 다시 시도해 주세요.'), { status: 504 });
+      if (res.status === 401) { location.replace('/login?role=camera'); throw new Error('다시 로그인해 주세요.'); }
+      if (!res.ok) throw Object.assign(new Error(data.error || '연결을 확인하고 다시 시도해 주세요.'), { status: res.status });
+      return data;
+    })(), deadline]);
   } catch (error) {
     if (externalSignal?.aborted) throw Object.assign(new Error('원본 전송을 잠시 멈췄습니다.'), { paused: true });
-    if (controller.signal.aborted) throw new Error('응답 시간이 초과되었습니다. 같은 요청으로 다시 시도해 주세요.');
+    if (controller.signal.aborted) throw Object.assign(new Error('응답 시간이 초과되었습니다. 같은 요청으로 다시 시도해 주세요.'), { status: 504 });
     throw error;
   } finally { clearTimeout(timer); externalSignal?.removeEventListener('abort', abortExternal); }
 }
@@ -268,7 +279,7 @@ function requestFolders(year, yearId = '', force = false) {
   if (existing?.pending || (!force && existing && Date.now() - existing.at < 30000)) return existing.promise;
   const entry = { at: Date.now(), pending: true };
   entry.promise = api('folders?' + new URLSearchParams({ year, ...(yearId ? { yearId } : {}), ...(force ? { refresh: '1' } : {}) }), { timeoutMs: 25000 })
-    .then(data => { entry.pending = false; entry.at = Date.now(); return data; }, error => { folderRequests.delete(key); throw error; });
+    .then(data => { entry.pending = false; entry.at = Date.now(); return data; }, error => { if (folderRequests.get(key) === entry) folderRequests.delete(key); throw error; });
   folderRequests.set(key, entry); return entry.promise;
 }
 async function loadFolders(yearId = '', restoreEvent = '', recoverYear = true, force = false) {
@@ -305,14 +316,14 @@ async function loadFolders(yearId = '', restoreEvent = '', recoverYear = true, f
       if (foldersReady) el('folderState').textContent = '최근 연도 폴더를 확인하지 못했습니다. 저장 폴더를 다시 선택해 주세요.';
       return;
     }
-    events = []; el('event').value = ''; renderEvents(''); el('chooseFolder').disabled = true;
     el('folderState').textContent = e.message + ' 목록을 확인하기 전에는 새 폴더를 만들지 않습니다.';
+    events = []; el('event').value = ''; renderEvents(''); el('chooseFolder').disabled = true;
   } finally { clearInterval(progress); if (seq === folderSequence) { el('reloadFolders').disabled = false; el('saveLocation').disabled = !foldersReady || assigningLocation; } }
 }
 function renderEvents(restore = el('event').value) {
   const search = el('eventSearch').value.trim().normalize('NFC').toLocaleLowerCase('ko');
   const recent = rememberedTarget();
-  const recentId = recent?.yearId === el('yearFolder').dataset.selected ? recent.eventId || events.find(e => e.name === recent.folderName)?.id : '';
+  const recentId = recent?.yearId && recent.yearId === el('yearFolder').dataset.selected ? recent.eventId || events.find(e => e.name === recent.folderName)?.id : '';
   const date = name => {
     const match = name.match(/^(\d{4})[-.]?(\d{2})[-.]?(\d{2})/);
     if (!match) return '';
