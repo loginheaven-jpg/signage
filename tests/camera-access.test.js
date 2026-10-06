@@ -23,7 +23,7 @@ test('production camera login protects legacy URLs, accepts uploads, and closing
   for(let i=0;i<100;i++) { try { await fetch(base+'/privacy'); break; } catch { await new Promise(resolve=>setTimeout(resolve,100)); } }
   const request = (route, cookie, body, method) => fetch(base+route,{method:method||(body?'POST':'GET'),redirect:'manual',headers:{'Content-Type':'application/json',...(cookie?{cookie}:{})},body:body?JSON.stringify(body):undefined});
   for(const route of ['/','/index.html','/photos','/photos.html','/m','/m.html','/camera']) assert.equal((await request(route)).status,302,route);
-  for(const route of ['/privacy','/terms','/camera.webmanifest','/camera-sw.js','/camera-icon-192.png','/camera-icon-512.png','/player']) assert.equal((await request(route)).status,200,route);
+  for(const route of ['/privacy','/terms','/camera.webmanifest','/camera-sw.js','/camera-icon-192.png','/camera-icon-512.png','/camera-icon-maskable-512.png','/player']) assert.equal((await request(route)).status,200,route);
   assert.equal((await request('/api/sites')).status,401);
   const login = async(role,password) => (await request('/auth/login',null,{role,password})).headers.get('set-cookie').split(';')[0];
   const admin = await login('admin','test-admin'), camera = await login('camera','test-camera');
