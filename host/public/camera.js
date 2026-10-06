@@ -477,7 +477,7 @@ function updateWorkWarning() {
   if (!settings) return;
   const warnings = [];
   if (mode !== 'live' && !config.archiveEnabled) warnings.push('사진 보관 접수가 닫혀 있습니다.');
-  if (mode !== 'live' && !config.ready) warnings.push('Drive 연결 확인이 필요합니다. 접수한 원본은 서버에서 보관하며 연결 후 전송합니다.');
+  if (mode !== 'live' && !config.ready) warnings.push('교회 보관함 연결에 관리자 확인이 필요합니다. 접수한 원본은 서버에서 보관 대기하며, 촬영·모니터 표출은 계속할 수 있습니다.');
   if (mode !== 'archive' && !config.liveEnabled) warnings.push('모니터 표출 접수가 닫혀 있습니다.');
   if (mode === 'live') warnings.push('모니터 전용 사진은 장기 보관하지 않습니다.');
   el('workWarning').textContent = warnings.join(' ');

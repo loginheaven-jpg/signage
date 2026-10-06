@@ -40,10 +40,10 @@ function renderStatus(status) {
   $('connectionText').textContent = (status.error || `${status.folderName || '지정 폴더'} · 보관 완료 ${status.counts.saved}장${waiting ? ' · 전송 대기 ' + waiting + '장' : ''}`) + (status.counts.awaiting_target ? ' · 저장 위치 지정 필요 ' + status.counts.awaiting_target + '장' : '');
   if (connectionFailure && !status.ready) $('connectionText').textContent = '계정 연결 실패 — ' + connectionFailure;
   if (!status.ready && !status.oauthConfigured) $('connectionText').textContent += ' 개인 드라이브를 사용하려면 서버 관리자가 Google 계정 연결 설정을 먼저 완료해야 합니다.';
-  if (status.oauthConfigured && status.pickerConfigured === false) $('connectionText').textContent += ' Google 폴더 선택 기능 설정이 필요합니다.';
+  $('connectionText').textContent += ' 이 연결은 교회 공용 서버 연결입니다. 관리자가 한 번 연결하면 촬영자는 Google 로그인 없이 이용합니다.';
   $('driveLink').href = 'https://drive.google.com/drive/folders/' + encodeURIComponent(status.folderId);
-  $('connect').hidden = !status.oauthConfigured || status.pickerConfigured === false || (status.ready && status.authMode === 'service-account');
-  $('connect').textContent = status.authMode === 'oauth' ? 'Google 계정 다시 연결' : 'Google 계정 연결';
+  $('connect').hidden = !status.oauthConfigured || (status.ready && status.authMode === 'service-account');
+  $('connect').textContent = status.ready && status.authMode === 'oauth' ? '교회 보관 계정 변경' : '교회 보관 계정 연결 · 관리자 전용';
 }
 async function pngForClipboard(url) {
   const response = await fetch(url, { cache: 'no-store' });

@@ -1,6 +1,6 @@
 'use strict';
 const { fail } = require('./drive-folders');
-const { errorText, connectReason } = require('./photo-archive');
+const { cameraErrorText: errorText, connectReason } = require('./photo-archive');
 
 // Read-only browsing cache. Uploads and folder creation still validate the live
 // hierarchy through DriveFolders.resolve; an unsuccessful read is never absence.
@@ -63,8 +63,10 @@ class CameraFolderCatalog {
       if ([401, 403, 404, 409].includes(status) || reason === 'invalid_grant') this.cache.delete(key);
       else if (this.cache.has(key)) this.cache.get(key).error = errorText(error);
       this.log({ phase, status, reason, elapsedMs: this.now() - started });
-      error.status = error.status || ([400, 401, 403, 404, 409, 504].includes(status) ? status : 503);
-      error.publicMessage = errorText(error).replace('잠시 후 자동으로 다시 시도합니다.', '목록 다시 확인을 눌러 주세요.') + ' [FOLDERS_' + phase.toUpperCase() + '_' + error.status + ']';
+      // A Google 401 concerns the shared server account, not the photographer's
+      // camera session. Do not trigger a camera login redirect for it.
+      error.status = status === 401 ? 503 : error.status || ([400, 403, 404, 409, 504].includes(status) ? status : 503);
+      error.publicMessage = errorText(error).replace('잠시 후 자동으로 다시 시도합니다.', '목록 다시 확인을 눌러 주세요.') + ' [FOLDERS_' + phase.toUpperCase() + '_' + status + ']';
       throw error;
     }).finally(() => {
       clearTimeout(timer);

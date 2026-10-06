@@ -47,6 +47,26 @@ async function service(t, { email = false, existingRoot } = {}) {
   return { ...f, config, published, cancelled, base, headers, get, upload, preview, original, png, mail, sent, clock, server };
 }
 
+test('camera users share the church folder catalog and never receive administrator Google consent instructions', async t => {
+  const f = await service(t); f.folder('year', '2026', 'root'); f.folder('event', '예배', 'year');
+  assert.equal((await f.get('folders?year=2026').then(r => r.json())).events[0].id, 'event');
+  assert.equal((await f.get('folders?year=2026', { headers: { cookie: '' } }).then(r => r.json())).events[0].id, 'event');
+  assert.equal(f.calls.lists.length, 2, 'different camera owners use the same server connection and catalog');
+  f.archive.initialize = async () => { f.archive.ready = false; f.archive.error = '연도·행사 폴더를 사용할 수 있도록 Google 계정을 다시 연결하고 교회사진 루트를 선택해 주세요.'; };
+  await f.archive.initialize();
+  const config = await f.get('config').then(r => r.json());
+  assert.match(config.archiveError, /관리자 확인/); assert.doesNotMatch(config.archiveError, /다시 연결|루트를 선택/);
+  const failed = await f.get('folders?year=2026&refresh=1'); assert.equal(failed.status, 503);
+  const error = (await failed.json()).error;
+  assert.match(error, /촬영자는 Google 계정을 연결할 필요가 없습니다/);
+  assert.doesNotMatch(error, /다시 연결|루트를 선택/);
+  assert.match(error, /FOLDERS_ROOT_503/);
+  f.archive.initialize = async () => { throw Object.assign(new Error('server Google account rejected'), { code: 401 }); };
+  const upstreamAuth = await f.get('folders?year=2026&refresh=1');
+  assert.equal(upstreamAuth.status, 503, 'Google 401 must not log out or redirect the photographer');
+  assert.match((await upstreamAuth.json()).error, /FOLDERS_ROOT_401/);
+});
+
 test('split receipts and private originals survive server restart, including interrupted location assignment', async t => {
   const f = await service(t); f.config.enabled = true;
   const requestId = crypto.randomUUID();

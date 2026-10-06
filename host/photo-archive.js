@@ -12,6 +12,15 @@ const REQUEST = { timeout: 60000, retry: false };
 // Existing year/event folders must be visible and writable after administrator consent.
 // All application operations remain confined to the configured archive hierarchy.
 const PHOTO_SCOPE = 'https://www.googleapis.com/auth/drive';
+const PHOTO_SCOPES = new Set([PHOTO_SCOPE, PHOTO_SCOPE + '.file', PHOTO_SCOPE + '.readonly']);
+const hasPhotoGrant = scopes => Array.isArray(scopes) && scopes.includes(PHOTO_SCOPE) && scopes.every(s => PHOTO_SCOPES.has(s));
+function cameraErrorText(error) {
+  const text = errorText(error);
+  if (text.startsWith('교회 보관함 연결에 문제가 있습니다.')) return text;
+  // Account consent belongs to the church administrator, never to a camera user.
+  return /Google|OAuth|드라이브/.test(text)
+    ? '교회 보관함 연결에 문제가 있습니다. 관리자 확인이 필요합니다. 촬영자는 Google 계정을 연결할 필요가 없습니다.' : text;
+}
 
 function atomicJSON(file, value) {
   const temp = file + '.tmp';
@@ -127,14 +136,31 @@ class PhotoArchive {
 
   async initialize(options = {}) {
     if (!this.drive) {
+      this.ready = false;
       if (fs.existsSync(this.oauthFile) && this.clientId && this.clientSecret) {
         const saved = JSON.parse(fs.readFileSync(this.oauthFile, 'utf8'));
-        if (saved.scope !== PHOTO_SCOPE || saved.folderId !== this.folderId) {
-          this.error = '연도·행사 폴더를 사용할 수 있도록 Google 계정을 다시 연결하고 교회사진 루트를 선택해 주세요.';
-          return;
-        }
         const auth = this.oauthClient();
         auth.setCredentials({ refresh_token: saved.refresh_token });
+        if (saved.scope !== PHOTO_SCOPE || saved.folderId !== this.folderId) {
+          // Stored metadata may refer to the old root/scope. Check the actual
+          // grant before asking the administrator for another consent.
+          const token = await auth.getAccessToken();
+          const info = await auth.getTokenInfo(token.token);
+          if (options.signal?.aborted) throw Object.assign(new Error('Connection check aborted'), { code: 'ETIMEDOUT' });
+          if (this.drive) return this.checkFolder(this.drive, this.authMode, options);
+          if (!hasPhotoGrant(info.scopes)) {
+            this.error = '관리자가 교회 보관 계정을 한 번 다시 연결해 연도·행사 폴더 권한을 승인해야 합니다. 촬영자는 Google 로그인을 하지 않습니다.';
+            return;
+          }
+          const drive = google.drive({ version: 'v3', auth });
+          const folder = await this.checkFolder(drive, 'oauth', options);
+          if (!folder.capabilities?.canAddChildren) throw Object.assign(new Error('Root is not writable'), { code: 403 });
+          if (options.signal?.aborted) throw Object.assign(new Error('Connection check aborted'), { code: 'ETIMEDOUT' });
+          if (this.drive) return this.checkFolder(this.drive, this.authMode, options);
+          atomicJSON(this.oauthFile, { refresh_token: saved.refresh_token, scope: PHOTO_SCOPE, folderId: this.folderId });
+          this.drive = drive; this.authMode = 'oauth'; this.folder = folder; this.ready = true; this.error = '';
+          return;
+        }
         this.drive = google.drive({ version: 'v3', auth });
         this.authMode = 'oauth';
       } else {
@@ -147,7 +173,9 @@ class PhotoArchive {
         this.authMode = 'service-account-readonly';
       }
     }
-    await this.checkFolder(this.drive, this.authMode, options);
+    const drive = this.drive;
+    try { await this.checkFolder(drive, this.authMode, options); }
+    catch (error) { if (this.drive === drive) this.ready = false; throw error; }
   }
 
   async checkFolder(drive = this.drive, mode = this.authMode, options = {}) {
@@ -169,7 +197,7 @@ class PhotoArchive {
     if (!tokens.refresh_token) throw Object.assign(new Error('자동 보관 권한이 없습니다. Google 계정을 다시 연결해 주세요.'), { code: 'NO_REFRESH_TOKEN' });
     auth.setCredentials(tokens);
     const info = await auth.getTokenInfo(tokens.access_token);
-    if (!info.scopes.includes(PHOTO_SCOPE) || info.scopes.some(s => s !== PHOTO_SCOPE)) {
+    if (!hasPhotoGrant(info.scopes)) {
       throw Object.assign(new Error('연도·행사 폴더 보관 권한으로 Google 계정을 다시 연결해 주세요.'), { code: 'PHOTO_SCOPE_MISMATCH' });
     }
     // Folder access does not exist until the user selects it in Google Picker.
@@ -403,4 +431,4 @@ class PhotoArchive {
   }
 }
 
-module.exports = { PhotoArchive, DEFAULT_FOLDER, META_PREFIX, PHOTO_SCOPE, atomicJSON, errorText, connectReason, nameLabel };
+module.exports = { PhotoArchive, DEFAULT_FOLDER, META_PREFIX, PHOTO_SCOPE, atomicJSON, errorText, cameraErrorText, connectReason, nameLabel };

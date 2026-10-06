@@ -115,8 +115,12 @@ Node.js 22 이상, `pnpm install --frozen-lockfile`, 영구 볼륨 DATA_DIR/UPLO
 이 권한은 Google 계정의 전체 Drive 조회·관리 권한이며, 루트 제한은 앱의 서버 검증으로 적용된다.
 Google Cloud 동의 설정/앱 검증 요구를 확인하고 개인정보 안내에도 넓은 권한을 명시한다.
 키/갱신토큰은 서버 비밀 변수·비공개 볼륨에만 둔다. 코드 push가 실제 Google 동의나 운영 재연결을 수행하지 않는다.
-기존 토큰의 scope/루트가 다르면 자동으로 권한을 넓히지 않고 재연결을 안내한다.
-OAuth callback은 기존 signage.yebom.org에서 수행하고 Picker에서는 지정 루트만 허용한다.
+기존 저장 scope/루트가 다르면 실제 승인 권한과 지정 루트 편집 권한을 확인해 충분한 권한의
+기존 서버 연결을 재사용한다. 추가 권한이 필요한 경우 관리자에게 한 번 재동의를 요청한다.
+촬영자에게 Google 연결을 요구하지 않으며, Google의 실제 권한을 코드를 바꿔 넓히지 않는다.
+OAuth callback은 기존 signage.yebom.org에서 수행하고 기본 관리자 동의는 지정 루트를
+자동 검증·저장한다. 기존 Picker 흐름도 관리자 `oauth/start?picker=1`에서 지정 루트만 허용한다.
+상세 전환 및 사용자/관리자 안내 구분은 [camera-shared-drive-connection.md](camera-shared-drive-connection.md)를 참고한다.
 
 ## 검증
 

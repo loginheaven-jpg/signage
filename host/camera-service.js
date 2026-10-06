@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const multer = require('multer');
 const sharp = require('sharp');
 const exifr = require('exifr');
-const { atomicJSON, errorText } = require('./photo-archive');
+const { atomicJSON, cameraErrorText: errorText } = require('./photo-archive');
 const { targetInput, fail } = require('./drive-folders');
 const { CameraFolderCatalog } = require('./camera-folder-catalog');
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -68,7 +68,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
   const safe = fn => (req, res) => Promise.resolve().then(() => fn(req, res)).catch(error => res.status(error.status || 503).json({ error: errorText(error) }));
   app.get('/live/api/camera/config', (req, res) => res.json({ rootId: archive.folderId, year: new Date(Date.now() + 9 * 3600000).getUTCFullYear(),
     archiveEnabled: getConfig().archiveEnabled !== false, liveEnabled: getConfig().enabled, ready: archive.ready,
-    archiveError: archive.error, sites: getSites(), maxBytes: MAX_BYTES, maxBatch: 30, cancelSec: getConfig().settings.cancelSec, mail: !!mail?.configured }));
+    archiveError: archive.error ? errorText({ publicMessage: archive.error }) : '', sites: getSites(), maxBytes: MAX_BYTES, maxBatch: 30, cancelSec: getConfig().settings.cancelSec, mail: !!mail?.configured }));
 
   app.get('/live/api/camera/folders', safe(async (req, res) => {
     res.json(await folderCatalog.get(String(req.query.year || ''), String(req.query.yearId || ''), req.query.refresh === '1'));
@@ -78,7 +78,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     const record = archive.records.get(r.id);
     const mailState = mail?.statusOf(r.id) || r.mail;
     return { id: r.id, name: record?.name || r.originalName, ts: r.ts, mode: r.mode, target: record?.target || r.target,
-      archive: r.mode === 'live' ? 'none' : record?.status || (r.cancelled ? 'deleted' : r.pipeline ? 'awaiting_original' : 'pending'), archiveError: record?.error || '',
+      archive: r.mode === 'live' ? 'none' : record?.status || (r.cancelled ? 'deleted' : r.pipeline ? 'awaiting_original' : 'pending'), archiveError: record?.error ? errorText({ publicMessage: record.error }) : '',
       original: r.mode === 'live' || (r.cancelled && !record) ? 'none' : record ? 'received' : 'pending', pipeline: !!r.pipeline,
       live: r.live, liveError: r.liveError || '', delivery: delivery(r.id), mail: mailState,
       canCancelMail: !r.cancelled && r.mode !== 'archive' && mailState === 'queued',
@@ -91,7 +91,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     if (archive.ready && archive.records.get(id)?.status === 'pending') return archive.cycle();
   }).catch(() => {});
   app.get('/live/api/camera/uploads', (req, res) => res.json({ uploads: [...receipts.values()].filter(r => r.owner === req.cameraOwner).sort((a, b) => b.ts - a.ts).filter((r, index) => index < 60 || (r.pipeline && r.mode === 'both' && !r.cancelled && (!archive.records.has(r.id) || archive.records.get(r.id).status === 'awaiting_target'))).map(row),
-    state: { liveEnabled: getConfig().enabled, archiveEnabled: getConfig().archiveEnabled !== false, ready: archive.ready, archiveError: archive.error } }));
+    state: { liveEnabled: getConfig().enabled, archiveEnabled: getConfig().archiveEnabled !== false, ready: archive.ready, archiveError: archive.error ? errorText({ publicMessage: archive.error }) : '' } }));
   app.post('/live/api/camera/uploads/:id/target', safe(async (req, res) => {
     const r = receipts.get(req.params.id);
     if (!r || r.owner !== req.cameraOwner) throw fail('본인이 올린 사진만 변경할 수 있습니다.', 404);

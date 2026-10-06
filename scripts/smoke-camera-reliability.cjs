@@ -78,7 +78,7 @@ const { startPreview } = require('./camera-preview.cjs');
 
     const denied = await browser.newPage({ viewport: { width: 390, height: 844 } });
     denied.on('pageerror', error => errors.push(error.message));
-    await denied.route('**/live/api/camera/folders?**', route => route.fulfill({ status: 403, json: { error: 'Google 계정 연결과 폴더의 편집 권한을 확인해 주세요. [FOLDERS_ROOT_403]' } }));
+    await denied.route('**/live/api/camera/folders?**', route => route.fulfill({ status: 403, json: { error: '교회 보관함 연결에 문제가 있습니다. 관리자 확인이 필요합니다. 촬영자는 Google 계정을 연결할 필요가 없습니다. [FOLDERS_ROOT_403]' } }));
     await denied.goto(preview.url + '/camera');
     await denied.locator('[data-mode=archive]').click();
     await denied.waitForFunction(() => document.querySelector('#folderState').textContent.includes('FOLDERS_ROOT_403'));

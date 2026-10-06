@@ -28,14 +28,15 @@ function mountPhotoRoutes(app, archive, removeFromScreen) {
   });
   app.get('/api/photos/oauth/start', (req, res) => {
     try {
-      if (!archive.status().pickerConfigured) return res.status(503).send('Google 폴더 선택 기능 설정이 필요합니다. 사진 보관함 안내를 확인해 주세요.');
+      const usePicker = req.query.picker === '1';
+      if (usePicker && !archive.status().pickerConfigured) return res.status(503).send('Google 폴더 선택 기능 설정이 필요합니다. 사진 보관함 안내를 확인해 주세요.');
       const auth = archive.oauthClient();
       const now = Date.now();
       for (const [key, entry] of oauthStates) if (entry.expires < now) oauthStates.delete(key);
       if (oauthStates.size >= 100) return res.status(429).send('잠시 후 다시 연결해 주세요.');
       const state = crypto.randomBytes(32).toString('hex');
       const binding = crypto.randomBytes(32).toString('hex');
-      oauthStates.set(state, { binding, expires: now + 600000 });
+      oauthStates.set(state, { binding, usePicker, expires: now + 600000 });
       res.cookie('photo_oauth', binding, { httpOnly: true, secure: archive.redirectUri.startsWith('https:'), sameSite: 'lax', maxAge: 600000, path: '/api/photos/oauth' });
       res.redirect(auth.generateAuthUrl({ access_type: 'offline', prompt: 'consent', include_granted_scopes: false, scope: [PHOTO_SCOPE], state }));
     } catch { res.status(503).send('Google 계정 연결 준비가 필요합니다. 서버의 Google OAuth 설정을 확인해 주세요.'); }
@@ -51,8 +52,15 @@ function mountPhotoRoutes(app, archive, removeFromScreen) {
     if (req.query.error || !req.query.code) return res.redirect('/photos?connection=cancelled');
     try {
       prune();
-      if (pickerSessions.size >= 100) return res.status(429).send('잠시 후 다시 연결해 주세요.');
+      if (entry.usePicker && pickerSessions.size >= 100) return res.status(429).send('잠시 후 다시 연결해 주세요.');
       const auth = await archive.connect(String(req.query.code));
+      if (!entry.usePicker) {
+        // The administrator has already designated the church root. Consent
+        // completes the shared server connection without an extra Picker step.
+        await archive.serialize(() => archive.completeConnection(auth, archive.folderId));
+        archive.cycle(true).catch(() => {});
+        return res.redirect('/photos?connection=success');
+      }
       const id = crypto.randomBytes(32).toString('hex');
       pickerSessions.set(id, { auth, expires: Date.now() + 600000 });
       res.cookie('photo_picker', id, { httpOnly: true, secure: archive.redirectUri.startsWith('https:'), sameSite: 'strict', maxAge: 600000, path: '/api/photos/picker' });

@@ -192,20 +192,69 @@ test('OAuth only stages narrow credentials; folder selection is required before 
   assert.equal(JSON.stringify(archive.status()).includes('refresh-secret'), false);
 });
 
-test('unexpected or missing OAuth scope is rejected, and old credentials require explicit reconnection', async t => {
+test('nested Drive grants are accepted, unrelated or missing scopes require administrator consent', async t => {
   const { archive, root } = fixture(t);
   const auth = { getToken: async () => ({ tokens: { access_token: 'a', refresh_token: 'r' } }), setCredentials() {},
     getTokenInfo: async () => ({ scopes: [PHOTO_SCOPE, 'https://www.googleapis.com/auth/drive.file'] }) };
   archive.oauthClient = () => auth;
+  assert.equal(await archive.connect('code'), auth);
+  auth.getTokenInfo = async () => ({ scopes: [PHOTO_SCOPE, 'https://www.googleapis.com/auth/gmail.send'] });
   await assert.rejects(archive.connect('code'), /보관 권한/);
   auth.getTokenInfo = async () => ({ scopes: [] });
   await assert.rejects(archive.connect('code'), /보관 권한/);
   fs.writeFileSync(archive.oauthFile, JSON.stringify({ refresh_token: 'old-broad-token' }));
   const restored = new PhotoArchive({ dataDir: root, folderId: 'folder' });
   restored.clientId = '123-client'; restored.clientSecret = 'secret';
+  restored.oauthClient = () => ({ setCredentials() {}, getAccessToken: async () => ({ token: 'local-token' }), getTokenInfo: async () => ({ scopes: [PHOTO_SCOPE + '.file'] }) });
   await restored.initialize();
   assert.equal(restored.drive, null); assert.equal(restored.ready, false);
-  assert.match(restored.error, /다시 연결/);
+  assert.match(restored.error, /관리자가.*다시 연결/);
+  assert.match(restored.error, /촬영자는 Google 로그인을 하지 않습니다/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(restored.oauthFile)), { refresh_token: 'old-broad-token' }, 'no scope is fabricated for the old refresh token');
+});
+
+test('actual full grant restores an old root binding only after checking the designated writable church root', async t => {
+  const { archive, root } = fixture(t);
+  const saved = { refresh_token: 'existing-token', scope: PHOTO_SCOPE + '.file', folderId: 'old-root' };
+  fs.writeFileSync(archive.oauthFile, JSON.stringify(saved));
+  const restored = new PhotoArchive({ dataDir: root, folderId: 'folder' });
+  restored.clientId = 'client'; restored.clientSecret = 'secret';
+  restored.oauthClient = () => ({ setCredentials() {}, getAccessToken: async () => ({ token: 'local-token' }), getTokenInfo: async () => ({ scopes: [PHOTO_SCOPE, PHOTO_SCOPE + '.file'] }) });
+  let checks = 0;
+  restored.checkFolder = async () => { checks++; assert.equal(restored.folderId, 'folder'); return { id: 'folder', capabilities: { canAddChildren: true } }; };
+  await restored.initialize();
+  assert.equal(checks, 1); assert.equal(restored.ready, true); assert.equal(restored.authMode, 'oauth');
+  assert.deepEqual(JSON.parse(fs.readFileSync(restored.oauthFile)), { ...saved, scope: PHOTO_SCOPE, folderId: 'folder' });
+  assert.equal(JSON.stringify(restored.status()).includes('existing-token'), false);
+});
+
+test('a denied church root cannot replace the existing server account binding', async t => {
+  const { archive, root } = fixture(t);
+  const saved = { refresh_token: 'existing-token', scope: PHOTO_SCOPE, folderId: 'old-root' };
+  fs.writeFileSync(archive.oauthFile, JSON.stringify(saved));
+  const restored = new PhotoArchive({ dataDir: root, folderId: 'folder' });
+  restored.clientId = 'client'; restored.clientSecret = 'secret';
+  restored.oauthClient = () => ({ setCredentials() {}, getAccessToken: async () => ({ token: 'local-token' }), getTokenInfo: async () => ({ scopes: [PHOTO_SCOPE] }) });
+  restored.checkFolder = async () => ({ capabilities: { canAddChildren: false } });
+  await assert.rejects(restored.initialize(), e => e.code === 403);
+  assert.deepEqual(JSON.parse(fs.readFileSync(restored.oauthFile)), saved);
+  assert.equal(restored.drive, null); assert.equal(restored.ready, false);
+});
+
+test('late legacy grant inspection cannot overwrite a newly completed administrator connection', async t => {
+  const { archive, root, drive } = fixture(t);
+  fs.writeFileSync(archive.oauthFile, JSON.stringify({ refresh_token: 'old-token', scope: PHOTO_SCOPE + '.file', folderId: 'old-root' }));
+  const restored = new PhotoArchive({ dataDir: root, folderId: 'folder' });
+  restored.clientId = 'client'; restored.clientSecret = 'secret';
+  const newBinding = { refresh_token: 'new-admin-token', scope: PHOTO_SCOPE, folderId: 'folder' };
+  restored.oauthClient = () => ({ setCredentials() {}, getAccessToken: async () => ({ token: 'local-token' }), getTokenInfo: async () => {
+    restored.drive = drive; restored.authMode = 'oauth';
+    fs.writeFileSync(restored.oauthFile, JSON.stringify(newBinding));
+    return { scopes: [PHOTO_SCOPE + '.file'] };
+  } });
+  await restored.initialize();
+  assert.equal(restored.drive, drive); assert.equal(restored.ready, true); assert.equal(restored.error, '');
+  assert.deepEqual(JSON.parse(fs.readFileSync(restored.oauthFile)), newBinding);
 });
 
 test('connection failures are reduced to fixed reason codes', async t => {

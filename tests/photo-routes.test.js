@@ -23,7 +23,7 @@ test('photo APIs inherit administrator authentication; OAuth binds state to brow
   const base = 'http://127.0.0.1:' + server.address().port;
   assert.equal((await fetch(base + '/api/photos/status')).status, 401);
   const headers = { authorization: 'Basic test' };
-  const start = await fetch(base + '/api/photos/oauth/start', { headers, redirect: 'manual' });
+  const start = await fetch(base + '/api/photos/oauth/start?picker=1', { headers, redirect: 'manual' });
   assert.equal(start.status, 302);
   const auth = new URL(start.headers.get('location'));
   assert.equal(auth.searchParams.get('access_type'), 'offline');
@@ -36,11 +36,11 @@ test('photo APIs inherit administrator authentication; OAuth binds state to brow
   // Missing cookie cannot connect another person's account via a forged callback.
   const rejected = await fetch(base + '/api/photos/oauth/callback?state=' + state + '&code=stolen', { headers });
   assert.equal(rejected.status, 400); assert.equal(calls.length, 0);
-  const second = await fetch(base + '/api/photos/oauth/start', { headers, redirect: 'manual' });
+  const second = await fetch(base + '/api/photos/oauth/start?picker=1', { headers, redirect: 'manual' });
   const state2 = new URL(second.headers.get('location')).searchParams.get('state');
   const callback = base + '/api/photos/oauth/callback?state=' + state2 + '&code=valid';
   assert.equal((await fetch(callback, { headers: { ...headers, cookie }, redirect: 'manual' })).status, 400);
-  const third = await fetch(base + '/api/photos/oauth/start', { headers, redirect: 'manual' });
+  const third = await fetch(base + '/api/photos/oauth/start?picker=1', { headers, redirect: 'manual' });
   const state3 = new URL(third.headers.get('location')).searchParams.get('state');
   const headers3 = { ...headers, cookie: third.headers.get('set-cookie').split(';')[0] };
   const valid = base + '/api/photos/oauth/callback?state=' + state3 + '&code=valid';
@@ -65,9 +65,39 @@ test('photo APIs inherit administrator authentication; OAuth binds state to brow
   assert.equal((await select('configured-folder')).status, 401, 'successful session cannot be replayed');
   // A failed token exchange reports why as a fixed code, never Google's response text.
   archive.connect = async () => { throw Object.assign(new Error('secret detail'), { response: { data: { error: 'invalid_client', error_description: 'secret detail' } } }); };
-  const fourth = await fetch(base + '/api/photos/oauth/start', { headers, redirect: 'manual' });
+  const fourth = await fetch(base + '/api/photos/oauth/start?picker=1', { headers, redirect: 'manual' });
   const state4 = new URL(fourth.headers.get('location')).searchParams.get('state');
   const failed = await fetch(base + '/api/photos/oauth/callback?state=' + state4 + '&code=valid',
     { headers: { ...headers, cookie: fourth.headers.get('set-cookie').split(';')[0] }, redirect: 'manual' });
   assert.equal(failed.headers.get('location'), '/photos?connection=failed&reason=invalid_client');
+});
+
+test('administrator consent completes the shared fixed-root connection without Picker and remains admin-only', async t => {
+  const app = express(); const calls = [];
+  app.use('/api', (req, res, next) => req.headers.authorization === 'Basic admin' ? next() : res.sendStatus(401));
+  const archive = {
+    folderId: 'church-root', redirectUri: 'https://signage.yebom.org/api/photos/oauth/callback',
+    status: () => ({ oauthConfigured: true, pickerConfigured: false }),
+    oauthClient: () => ({ generateAuthUrl: options => 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams(options) }),
+    connect: async code => { calls.push(code); return { credentials: { refresh_token: 'server-only' } }; },
+    serialize: fn => fn(), completeConnection: async (auth, root) => { assert.equal(auth.credentials.refresh_token, 'server-only'); calls.push(root); },
+    cycle: async () => { calls.push('wake'); }
+  };
+  mountPhotoRoutes(app, archive, () => {});
+  const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = 'http://127.0.0.1:' + server.address().port;
+  assert.equal((await fetch(base + '/api/photos/oauth/start', { redirect: 'manual' })).status, 401);
+  const headers = { authorization: 'Basic admin' };
+  const start = await fetch(base + '/api/photos/oauth/start', { headers, redirect: 'manual' });
+  assert.equal(start.status, 302);
+  const state = new URL(start.headers.get('location')).searchParams.get('state');
+  const cookie = start.headers.get('set-cookie').split(';')[0];
+  const callback = base + '/api/photos/oauth/callback?state=' + state + '&code=admin-consent';
+  const completed = await fetch(callback, { headers: { ...headers, cookie }, redirect: 'manual' });
+  assert.equal(completed.headers.get('location'), '/photos?connection=success');
+  assert.equal(completed.headers.getSetCookie().some(s => s.startsWith('photo_picker=')), false);
+  assert.deepEqual(calls, ['admin-consent', 'church-root', 'wake']);
+  assert.equal((await fetch(callback, { headers: { ...headers, cookie }, redirect: 'manual' })).status, 400);
+  assert.equal((await fetch(base + '/api/photos/oauth/start?picker=1', { headers, redirect: 'manual' })).status, 503);
 });
