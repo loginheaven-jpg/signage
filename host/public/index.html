@@ -439,7 +439,7 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
                 <th>좌측 파일</th>
                 <th>우측 파일</th>
                 <th>편성</th>
-                <th style="width:55px">시간(초)</th>
+                <th style="width:55px" title="영상은 0을 넣으면 영상 길이만큼 재생합니다">시간(초)</th>
                 <th>영상 재생</th>
                 <th>소리</th>
                 <th>전환</th>
@@ -451,6 +451,9 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
             </thead>
             <tbody id="scheduleBody"></tbody>
           </table>
+        </div>
+        <div style="margin-top:10px; font-size:12px; color:#666; line-height:1.7;">
+          🎬 <b>영상의 시간(초)</b> — <b>0</b>을 넣으면 영상 길이만큼 한 번 재생합니다. 영상보다 긴 시간을 넣으면 그 시간까지 반복 재생하고, 짧은 시간을 넣으면 그 시간에 다음 항목으로 넘어갑니다.
         </div>
         <div style="margin-top:12px; padding:10px; background:#f8f9fa; border-radius:6px; font-size:12px; color:#666;" id="scheduleStatus">
           편성표를 작성하고 "저장 및 적용"을 누르면 해당 사이트의 클라이언트에 즉시 반영됩니다.
