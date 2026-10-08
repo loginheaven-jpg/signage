@@ -440,7 +440,7 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
                 <th>우측 파일</th>
                 <th>편성</th>
                 <th style="width:55px">시간(초)</th>
-                <th>영상기준</th>
+                <th>영상 재생</th>
                 <th>소리</th>
                 <th>전환</th>
                 <th style="width:90px">시작일</th>
@@ -1172,13 +1172,8 @@ function renderSchedule() {
             <option value="split" ${entry.layoutType === 'split' ? 'selected' : ''}>분할</option>
           </select>
         </td>
-        <td><input type="number" min="3" max="600" value="${entry.duration || 10}" onchange="updateEntry(${realIdx}, 'duration', parseInt(this.value))" ${(isVideo1 && entry.videoDuration === 'original') ? 'disabled title="원본 재생: 영상 끝까지 재생하므로 시간 설정은 무시됩니다"' : ''}></td>
-        <td>
-          <select onchange="updateEntry(${realIdx}, 'videoDuration', this.value); renderSchedule();" style="width:65px" ${isVideo1 ? '' : 'disabled title="영상 항목에만 적용"'}>
-            <option value="original" ${entry.videoDuration === 'original' ? 'selected' : ''}>원본</option>
-            <option value="custom" ${entry.videoDuration === 'custom' ? 'selected' : ''}>지정</option>
-          </select>
-        </td>
+        <td><input type="number" min="${isVideo1 ? 0 : 1}" max="86400" value="${entrySeconds(entry, isVideo1)}" onchange="setDuration(${realIdx}, this.value, ${isVideo1})" ${isVideo1 ? 'title="0 = 영상 길이만큼 한 번 재생. 영상보다 길게 넣으면 그 시간까지 반복 재생합니다."' : ''}></td>
+        <td style="font-size:11px;color:#888;white-space:nowrap">${isVideo1 ? (entrySeconds(entry, true) ? '지정 시간 · 반복' : '영상 길이') : '—'}</td>
         <td>
           <select onchange="updateEntry(${realIdx}, 'audio', this.value)" style="width:55px">
             <option value="none" ${entry.audio === 'none' ? 'selected' : ''}>없음</option>
@@ -1238,6 +1233,22 @@ function addScheduleEntry() {
 
 function removeEntry(index) {
   scheduleEntries.splice(index, 1);
+  renderSchedule();
+}
+
+// 영상: 0 = 영상 길이만큼, 그 외 = 지정한 시간(짧은 영상은 반복). 사진: 0이면 10초.
+function entrySeconds(entry, isVideo) {
+  const seconds = Math.max(0, parseInt(entry.duration) || 0);
+  if (isVideo) return entry.videoDuration === 'custom' ? seconds : 0;
+  return seconds || 10;
+}
+function setDuration(index, value, isVideo) {
+  const entry = scheduleEntries[index];
+  if (!entry) return;
+  let seconds = Math.min(86400, Math.max(0, parseInt(value) || 0));
+  if (!isVideo && !seconds) seconds = 10;
+  entry.duration = seconds;
+  entry.videoDuration = seconds ? 'custom' : 'original';
   renderSchedule();
 }
 
@@ -1361,7 +1372,12 @@ async function uploadFiles(files) {
   showToast('업로드 중...');
   const res = await fetch('/api/upload', { method: 'POST', body: formData });
   const data = await res.json();
-  if (data.success) { showToast(`${data.files.length}개 파일 업로드 완료`); refreshContent(); }
+  if (data.success) {
+    // 플레이어(Chromium)가 재생하지 못하는 영상 형식 — 편성해도 건너뛰므로 올릴 때 알려 준다.
+    const unplayable = data.files.filter(f => /[.](avi|wmv|mpg|mpeg|flv|ts|3gp|ogv)$/i.test(f.originalName)).map(f => f.originalName);
+    showToast(unplayable.length ? `재생할 수 없는 영상 형식입니다. MP4로 바꿔 올려 주세요: ${unplayable.join(', ')}` : `${data.files.length}개 파일 업로드 완료`);
+    refreshContent();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════

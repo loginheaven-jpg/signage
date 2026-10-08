@@ -226,6 +226,18 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } });
 
+// 브라우저·드라이브가 종류를 알려 주지 않은 파일(mkv, mov 등)은 확장자로 영상·사진을 가린다.
+const MEDIA_TYPES = {
+  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska',
+  ogv: 'video/ogg', avi: 'video/x-msvideo', wmv: 'video/x-ms-wmv', mpg: 'video/mpeg', mpeg: 'video/mpeg',
+  '3gp': 'video/3gpp', ts: 'video/mp2t', flv: 'video/x-flv',
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp'
+};
+function mediaMime(filename, mimeType) {
+  if (/^(image|video)[/]/.test(mimeType || '')) return mimeType;
+  return MEDIA_TYPES[path.extname(String(filename || '')).slice(1).toLowerCase()] || 'image/jpeg';
+}
+
 // ═══════════════════════════════════════════════════════════
 // REST API
 // ═══════════════════════════════════════════════════════════
@@ -537,7 +549,7 @@ app.post('/api/upload', upload.array('files', 20), (req, res) => {
   const uploaded = req.files.map(f => {
     const entry = {
       id: uuidv4(), originalName: f.originalname, filename: f.filename,
-      size: f.size, mimeType: f.mimetype, source: 'local',
+      size: f.size, mimeType: mediaMime(f.originalname, f.mimetype), source: 'local',
       uploadedAt: new Date().toISOString()
     };
     contentFiles.push(entry);
@@ -1351,17 +1363,24 @@ function getSiteSchedule(siteId) {
   for (const e of rawEntries) {
     if (!e.file1 && !e.file2) continue;
     const primary = e.file1 || e.file2;
-    const primaryMime = (e.file1 ? e.file1Mime : e.file2Mime) || 'image/jpeg';
+    const primaryMime = mediaMime(primary, e.file1 ? e.file1Mime : e.file2Mime);
     const secondary = (e.file1 && e.file2) ? e.file2 : '';
+    // 영상 시간 0 = 영상 자체 길이만큼 한 번. 0보다 크면 그 시간만큼(짧은 영상은 반복, 긴 영상은 자름).
+    // 예전 편성표의 '원본'(videoDuration 없음 포함)은 0으로 읽는다. 사진은 0이면 10초.
+    let seconds = Number(e.duration);
+    if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
+    if (primaryMime.startsWith('video/')) { if (e.videoDuration !== 'custom') seconds = 0; }
+    else if (!seconds) seconds = 10;
     entries.push({
       filename: primary,
       url: `/uploads/${primary}`,
       mimeType: primaryMime,
       filename2: secondary || '',
       url2: secondary ? `/uploads/${secondary}` : '',
-      mimeType2: e.file2Mime || 'image/jpeg',
-      duration: e.duration || 10,
-      videoDuration: e.videoDuration || 'original',
+      mimeType2: mediaMime(secondary, e.file2Mime),
+      duration: seconds,
+      // 2.1 이하 설치형은 이 값으로 '끝까지 재생'과 '시간 지정'을 구분한다.
+      videoDuration: seconds ? 'custom' : 'original',
       sound: e.audio || 'none',
       transition: e.transition || 'fade',
       layoutType: e.layoutType || 'independent',

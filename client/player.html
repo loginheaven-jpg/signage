@@ -328,6 +328,7 @@ let schedule = null;
 let activeEntries = [];
 let currentIndex = -1;
 let playTimer = null;
+let showGeneration = 0;
 
 // 멈춤 상태 (호스트/클라이언트 어느 쪽에서 멈춰도 동기화)
 let stopped = false;
@@ -431,7 +432,7 @@ function renderEntry(entry) {
   if (!url1) return playNext();
   const url2 = resolveUrl(entry.url2 || '');
 
-  const duration = (entry.duration || 10) * 1000;
+  const duration = Math.max(0, Number(entry.duration) || 0) * 1000;
   const fitMode = entry.fitMode || 'contain';
   const hasSecond = !!url2;
   const wantBoth = monitors >= 2 || entry.layoutType === 'split';
@@ -471,9 +472,12 @@ function showMedia(panes, split, entry, duration, onDone) {
   container.className = 'media-element t-' + trans + (split ? ' split' : '');
   if (trans === 'zoom') container.style.setProperty('--kb', Math.max(6, duration / 1000) + 's');
 
-  let videoForEnd = null;
-  panes.forEach(p => {
-    const el = createMediaEl(p);
+  // 시간 0인 영상은 영상 자체 길이만큼 한 번. 시간을 지정하면 그 시간까지 반복(짧을 때)하거나 자른다(길 때).
+  const primaryIsVideo = !!panes[0].mimeType && panes[0].mimeType.startsWith('video');
+  const natural = primaryIsVideo && (!(duration > 0) || entry.videoDuration === 'original');
+  let primaryVideo = null;
+  panes.forEach((p, i) => {
+    const el = createMediaEl({ ...p, loop: !(natural && i === 0) });
     if (split) {
       const pane = document.createElement('div');
       pane.className = 'pane';
@@ -482,7 +486,7 @@ function showMedia(panes, split, entry, duration, onDone) {
     } else {
       container.appendChild(el);
     }
-    if (el.tagName === 'VIDEO' && !videoForEnd) videoForEnd = el;
+    if (i === 0 && el.tagName === 'VIDEO') primaryVideo = el;
   });
 
   player.appendChild(container);
@@ -503,14 +507,20 @@ function showMedia(panes, split, entry, duration, onDone) {
 
   if (playTimer) { clearTimeout(playTimer); playTimer = null; }
 
-  // 대표 미디어가 영상이고 '원본 길이'면 끝날 때 다음, 아니면 duration 타이머
-  const primaryIsVideo = panes[0].mimeType && panes[0].mimeType.startsWith('video');
-  const videoOriginal = !split && primaryIsVideo && entry.videoDuration !== 'custom' && videoForEnd;
-
-  if (videoOriginal) {
-    videoForEnd.onended = () => onDone();
+  const generation = ++showGeneration;
+  let finished = false;
+  const done = () => {
+    if (finished || generation !== showGeneration) return;
+    finished = true;
+    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+    onDone();
+  };
+  // 재생할 수 없는 형식·깨진 파일은 검은 화면으로 멈추지 않고 다음 항목으로 넘어간다.
+  if (primaryVideo) primaryVideo.onerror = () => { clearTimeout(playTimer); playTimer = setTimeout(done, 2000); };
+  if (natural && primaryVideo) {
+    primaryVideo.onended = done;
   } else {
-    playTimer = setTimeout(() => onDone(), duration);
+    playTimer = setTimeout(done, duration > 0 ? duration : 10000);
   }
 }
 
@@ -520,7 +530,7 @@ function createMediaEl(p) {
     video.src = p.url;
     video.autoplay = true;
     video.muted = !p.audible;
-    video.loop = false;
+    video.loop = p.loop !== false;
     video.playsInline = true;
     video.className = p.fitMode === 'cover' ? 'cover' : '';
     return video;

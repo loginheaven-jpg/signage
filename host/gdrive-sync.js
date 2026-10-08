@@ -113,7 +113,8 @@ class GDriveSync {
   async listFiles() {
     const supportedMimes = [
       'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-      'video/mp4', 'video/webm', 'video/avi', 'video/quicktime'
+      'video/mp4', 'video/webm', 'video/avi', 'video/quicktime',
+      'video/x-m4v', 'video/x-matroska', 'video/ogg'
     ];
 
     const query = `'${this.folderId}' in parents and trashed = false and (${

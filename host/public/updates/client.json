@@ -2,10 +2,10 @@
     "schema":  1,
     "minUpdaterSchema":  1,
     "minNodeMajor":  22,
-    "version":  "2.1.0",
-    "serverVersion":  "1.1.0",
-    "url":  "/downloads/releases/signage-client-2.1.0-58b496274e90894b.zip",
-    "sha256":  "58b496274e90894b129f656cae081821ccfdba5af745de7728a04e7d1e588aa6",
-    "size":  47417,
-    "publishedAt":  "2026-09-25T01:37:14.8569436Z"
+    "version":  "2.2.0",
+    "serverVersion":  "1.6.0",
+    "url":  "/downloads/releases/signage-client-2.2.0-8322c70250bbb2fe.zip",
+    "sha256":  "8322c70250bbb2fe1fd7d0ef3e97e59d1e563217bc2dc04c4d8cf73b8c2b69fe",
+    "size":  47397,
+    "publishedAt":  "2026-10-08T23:16:29.7755418Z"
 }
