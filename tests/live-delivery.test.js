@@ -102,29 +102,66 @@ test('Electron reapproval preserves an existing player and only loads a waiting 
   assert.equal(context.liveReadyWindows.has(1), false);
 });
 
-test('Electron routes to the secondary display only after its renderer is ready', () => {
+test('Electron routes live to both displays, each only after its renderer is ready', () => {
   const main = fs.readFileSync(path.join(__dirname, '../client/main.js'), 'utf8');
-  const code = main.slice(main.indexOf('function routeLive('), main.indexOf('// 보조 창의 라이브 레이어'));
-  let loading = true, sent = 0;
+  const code = main.slice(main.indexOf('function liveTarget('), main.indexOf('// ─── 재생 제어'));
+  let loading = true;
+  const sent = { 1: 0, 2: 0 };
   const results = [];
-  const target = { webContents: { id: 2, isLoading: () => loading, send() { sent++; } } };
-  const context = { playerStopped: false, liveTarget: () => [target], dualMonitor: true,
-    secondWindow: target, setLiveOccupy() {}, liveReadyWindows: new Set(), sendLiveMessage: m => results.push(m) };
+  const win = id => ({ isDestroyed: () => false, webContents: { id, isLoading: () => loading, send() { sent[id]++; } } });
+  const context = { playerStopped: false, dualMonitor: true, mainWindow: win(1), secondWindow: win(2),
+    liveReadyWindows: new Set(), sendLiveMessage: m => results.push(m) };
   vm.createContext(context);
   vm.runInContext(code, context);
   const payload = { photo: { id: 'p' } };
   context.routeLive('live-photo', payload);
-  assert.equal(sent, 0);
+  assert.deepEqual(sent, { 1: 0, 2: 0 });
   context.liveReadyWindows.add(2);
   context.routeLive('live-photo', payload);
-  assert.equal(sent, 0);
+  assert.deepEqual(sent, { 1: 0, 2: 0 });
   loading = false;
   context.routeLive('live-photo', payload);
-  assert.equal(sent, 1);
+  assert.deepEqual(sent, { 1: 0, 2: 1 }, 'a window that has not reported ready is skipped');
+  context.liveReadyWindows.add(1);
+  context.routeLive('live-photo', payload);
+  assert.deepEqual(sent, { 1: 1, 2: 2 });
+  context.dualMonitor = false;
+  context.routeLive('live-photo', payload);
+  assert.deepEqual(sent, { 1: 2, 2: 2 }, 'one physical monitor uses the main window only');
   context.playerStopped = true;
   context.routeLive('live-photo', payload);
-  assert.equal(sent, 1);
+  assert.deepEqual(sent, { 1: 2, 2: 2 });
   assert.equal(results[0].status, 'stopped');
+});
+
+test('Electron reports one readiness and one receipt per PC for two displays', async () => {
+  const main = fs.readFileSync(path.join(__dirname, '../client/main.js'), 'utf8');
+  const code = main.slice(main.indexOf('const liveReadyWindows'), main.indexOf("ipcMain.on('player-stopped'"));
+  const handlers = {};
+  const results = [];
+  const win = id => ({ isDestroyed: () => false, webContents: { id } });
+  const context = { playerStopped: false, dualMonitor: true, mainWindow: win(1), secondWindow: win(2),
+    setTimeout, clearTimeout, ipcMain: { on: (name, fn) => { handlers[name] = fn; } },
+    ws: { readyState: 1, send: m => results.push(JSON.parse(m)) }, WebSocket: { OPEN: 1 } };
+  vm.createContext(context);
+  vm.runInContext(code + '\nthis.liveTarget = () => [mainWindow, secondWindow].filter(Boolean);', context);
+  const from = (id, message) => handlers['live-delivery']({ sender: (id === 1 ? context.mainWindow : context.secondWindow).webContents }, message);
+
+  from(1, { type: 'live_ready', seen: ['a', 'b'] });
+  await new Promise(r => setTimeout(r, 350));
+  assert.equal(results.length, 0, 'waits until every display is ready');
+  from(2, { type: 'live_ready', seen: ['b', 'c'] });
+  await new Promise(r => setTimeout(r, 350));
+  assert.deepEqual(results, [{ type: 'live_ready', seen: ['b'] }], 'only photos shown on both displays count as seen');
+
+  results.length = 0;
+  from(1, { type: 'live_result', photoId: 'p', status: 'image_error' });
+  assert.equal(results.length, 0, 'one failing display is not a failure while the other may still show it');
+  from(2, { type: 'live_result', photoId: 'p', status: 'displayed' });
+  assert.deepEqual(results.map(m => m.status), ['displayed']);
+  from(1, { type: 'live_result', photoId: 'q', status: 'image_error' });
+  from(2, { type: 'live_result', photoId: 'q', status: 'image_error' });
+  assert.deepEqual(results.map(m => m.status), ['displayed', 'image_error'], 'reported as failed only when every display failed');
 });
 
 test('Electron readiness requests work with only one physical monitor', () => {

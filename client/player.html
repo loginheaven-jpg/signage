@@ -322,6 +322,8 @@ function resolveUrl(u) {
 if (isSecondary) {
   idleScreen.querySelector('.text').textContent = '우측 화면 대기 중...';
   window.signage.onScreen2Media((media) => {
+    // 같은 줄에 우측 파일이 없으면 2번 화면은 비워 둔다(검은 화면, 대기 문구 없음).
+    if (media && media.blank) { idleScreen.style.display = 'none'; clearMedia(); return; }
     if (!media || !media.url) { showIdle(); return; }
     idleScreen.style.display = 'none';
     renderSingle(resolveUrl(media.url), media.mimeType, media.fitMode, media.sound === 'right', media.transition, media.duration);
@@ -336,12 +338,10 @@ let activeEntries = [];
 let currentIndex = -1;
 let playTimer = null;
 let showGeneration = 0;
+let playingSchedule = false;   // 편성표 재생 중인지 (수동 재생 명령과 구분)
 
 // 멈춤 상태 (호스트/클라이언트 어느 쪽에서 멈춰도 동기화)
 let stopped = false;
-
-// 라이브 사진이 2번 화면을 점유 중인지 (듀얼 모니터에서만 true가 된다)
-let liveOccupiesScreen2 = false;
 
 // 멈춤 상태를 메인 프로세스에 알린다 — 멈춘 화면에는 라이브 사진도 띄우지 않는다
 function setStopped(v) {
@@ -350,20 +350,31 @@ function setStopped(v) {
 }
 
 if (!isSecondary) {
-  window.signage.onScheduleUpdate((data) => {
-    console.log('[Player] 편성표 수신:', data && data.entries ? data.entries.length + '개' : data);
-    schedule = data;
-    setStopped(false);              // 새 편성표 수신 시 재생 재개
-    updateStopUI();
-    startPlayback();
-  });
-  window.signage.onPlayCommand((files) => playFiles(files));
+  // 모니터 수·듀얼 여부를 읽기 전에 첫 항목을 그리면 1대 기준으로 재생되므로 설정을 먼저 기다린다.
+  window.signage.onScheduleUpdate((data) => configReady.then(() => applySchedule(data)));
+  window.signage.onPlayCommand((files) => configReady.then(() => playFiles(files)));
   window.signage.onStopCommand(() => { setStopped(true); stopPlayback(true); updateStopUI(); });
   window.signage.onTogglePause(() => toggleStop());  // Ctrl+Shift+P → 멈추기/재생하기
   setupControlBar();
 } else {
   // 보조 창: 주 창이 멈추면 미디어를 비우는 신호(screen2-media null)를 받으므로 별도 처리 불필요
   window.signage.onTogglePause(() => {});
+}
+
+function applySchedule(data) {
+  console.log('[Player] 편성표 수신:', data && data.entries ? data.entries.length + '개' : data);
+  // 같은 편성표의 재전송(미디어 캐시 완료로 로컬 경로 전환, 재접속)은 처음부터 다시 틀지 않는다.
+  // 다음 항목부터 새 경로를 쓴다. 멈춘 상태면 관리자 '재생 재개'이므로 아래에서 다시 시작한다.
+  const sameSchedule = playingSchedule && !stopped && schedule && data && schedule.version === data.version &&
+    (schedule.entries || []).length === (data.entries || []).length;
+  schedule = data;
+  if (sameSchedule) {
+    activeEntries = schedule.entries.filter(e => e.active !== false);
+    return;
+  }
+  setStopped(false);              // 새 편성표 수신 시 재생 재개
+  updateStopUI();
+  startPlayback();
 }
 
 // ─── 멈추기 / 재생하기 (클라이언트 로컬 토글) ─────────────
@@ -411,6 +422,7 @@ function startPlayback() {
   activeEntries = schedule.entries.filter(e => e.active !== false);
   if (activeEntries.length === 0) { report(null); showIdle(); return; }
   idleScreen.style.display = 'none';
+  playingSchedule = true;
   currentIndex = -1;
   playNext();
 }
@@ -419,14 +431,6 @@ function playNext() {
   if (!activeEntries || activeEntries.length === 0) { report(null); showIdle(); return; }
   currentIndex = (currentIndex + 1) % activeEntries.length;
   renderEntry(activeEntries[currentIndex]);
-}
-
-// 인덱스를 옮기지 않고 현재 항목만 다시 렌더링.
-// 라이브가 2번 화면을 점유/해제할 때 분할 항목의 배치를 바꾸기 위해 쓴다.
-function rerenderCurrent() {
-  if (!activeEntries || !activeEntries.length) return;
-  const entry = activeEntries[currentIndex];
-  if (entry) renderEntry(entry);
 }
 
 function renderEntry(entry) {
@@ -447,11 +451,12 @@ function renderEntry(entry) {
   const m1 = { url: url1, mimeType: entry.mimeType, fitMode, audible: entry.sound === 'left' || (entry.sound && entry.sound !== 'none' && !hasSecond) };
   const m2 = hasSecond ? { url: url2, mimeType: entry.mimeType2, fitMode, audible: entry.sound === 'right' } : null;
 
-  // 라이브가 2번 화면을 점유 중이면 보조 창으로 보내지 않고, 창 안에서 좌/우 나란히 표출
-  if (hasSecond && wantBoth && dualMonitor && !liveOccupiesScreen2) {
-    // 듀얼 모니터: 좌=주 창, 우=보조 창 동시 표출 (전환효과도 함께 전달)
-    window.signage.setScreen2Media({ url: entry.url2, mimeType: entry.mimeType2, fitMode, sound: entry.sound, transition: entry.transition, duration });
-    report(entry, 'both');
+  if (dualMonitor) {
+    // 듀얼 모니터: 좌=주 창, 같은 줄의 우측=보조 창 동시 표출. 우측이 없는 줄이면 2번 화면은 비운다.
+    window.signage.setScreen2Media(hasSecond
+      ? { url: entry.url2, mimeType: entry.mimeType2, fitMode, sound: entry.sound, transition: entry.transition, duration }
+      : { blank: true, transition: entry.transition });
+    report(entry, hasSecond ? 'both' : 'left');
     showMedia([m1], false, entry, duration, playNext);
   } else if (hasSecond && wantBoth) {
     // 단일 창에 좌/우 나란히
@@ -473,8 +478,6 @@ function renderEntry(entry) {
 // panes: [{url, mimeType, fitMode, audible}], split: 좌우 배치 여부, onDone: 완료 콜백
 function showMedia(panes, split, entry, duration, onDone) {
   const trans = entry.transition || 'fade';
-  const existing = player.querySelector('.media-element');
-
   const container = document.createElement('div');
   container.className = 'media-element t-' + trans + (split ? ' split' : '');
   if (trans === 'zoom') container.style.setProperty('--kb', Math.max(6, duration / 1000) + 's');
@@ -496,21 +499,7 @@ function showMedia(panes, split, entry, duration, onDone) {
     if (i === 0 && el.tagName === 'VIDEO') primaryVideo = el;
   });
 
-  player.appendChild(container);
-
-  // 전환 효과 적용
-  if (trans === 'cut') {
-    container.classList.add('active');
-    if (existing) existing.remove();
-  } else {
-    // 다음 프레임에 active로 바꿔 트랜지션 발동 (fade/slide)
-    requestAnimationFrame(() => requestAnimationFrame(() => container.classList.add('active')));
-    if (existing) {
-      existing.classList.remove('active');
-      existing.classList.add('leaving');
-      setTimeout(() => existing.remove(), 800);
-    }
-  }
+  swapIn(container, trans);
 
   if (playTimer) { clearTimeout(playTimer); playTimer = null; }
 
@@ -526,6 +515,13 @@ function showMedia(panes, split, entry, duration, onDone) {
   if (primaryVideo) primaryVideo.onerror = () => { clearTimeout(playTimer); playTimer = setTimeout(done, 2000); };
   if (natural && primaryVideo) {
     primaryVideo.onended = done;
+    // 재생이 도중에 멈춰 'ended'가 오지 않아도 한 화면에 머물지 않도록 영상 길이 + 5초를 상한으로 둔다.
+    playTimer = setTimeout(done, 30000);
+    primaryVideo.onloadedmetadata = () => {
+      if (finished || !Number.isFinite(primaryVideo.duration)) return;
+      clearTimeout(playTimer);
+      playTimer = setTimeout(done, primaryVideo.duration * 1000 + 5000);
+    };
   } else {
     playTimer = setTimeout(done, duration > 0 ? duration : 10000);
   }
@@ -551,24 +547,38 @@ function createMediaEl(p) {
 // 보조 화면(screen=2): 단일 미디어 표출 (주 화면과 동일한 전환효과 적용)
 function renderSingle(url, mimeType, fitMode, audible, trans, durationMs) {
   trans = trans || 'fade';
-  const existing = player.querySelector('.media-element');
   const container = document.createElement('div');
   container.className = 'media-element t-' + trans;
   if (trans === 'zoom') container.style.setProperty('--kb', Math.max(6, (durationMs || 12000) / 1000) + 's');
   container.appendChild(createMediaEl({ url, mimeType, fitMode, audible }));
-  player.appendChild(container);
+  swapIn(container, trans);
+}
 
+// 새 미디어를 올리고 이전 미디어를 모두 내린다.
+// 연달아 바뀌어도(전환 중 재렌더링) 이전 화면이 아래에 겹쳐 남지 않도록 '떠나는 중'이 아닌 것은 전부 정리한다.
+function swapIn(container, trans) {
+  const previous = player.querySelectorAll('.media-element:not(.leaving)');
+  player.appendChild(container);
   if (trans === 'cut') {
     container.classList.add('active');
-    if (existing) existing.remove();
-  } else {
-    requestAnimationFrame(() => requestAnimationFrame(() => container.classList.add('active')));
-    if (existing) {
-      existing.classList.remove('active');
-      existing.classList.add('leaving');
-      setTimeout(() => existing.remove(), 800);
-    }
+    previous.forEach(el => el.remove());
+    return;
   }
+  // 다음 프레임에 active로 바꿔 트랜지션 발동 (fade/slide)
+  requestAnimationFrame(() => requestAnimationFrame(() => container.classList.add('active')));
+  previous.forEach(leave);
+}
+
+function leave(el) {
+  el.classList.remove('active');
+  el.classList.add('leaving');
+  el.querySelectorAll('video').forEach(v => { v.muted = true; });
+  setTimeout(() => el.remove(), 800);
+}
+
+// 보조 화면을 비운다(같은 줄에 우측 파일이 없을 때). 이전 미디어는 전환 효과로 사라진다.
+function clearMedia() {
+  player.querySelectorAll('.media-element:not(.leaving)').forEach(leave);
 }
 
 // 현재 재생 콘텐츠를 호스트에 보고 (which: 'left' | 'right' | 'both')
@@ -588,6 +598,7 @@ function report(entry, which) {
 function playFiles(files) {
   if (!files || !files.length) return;
   idleScreen.style.display = 'none';
+  playingSchedule = false;
   activeEntries = files.map(f => ({
     url: f.url, mimeType: f.mimeType, filename: f.originalName, duration: 10, active: true, layoutType: 'independent'
   }));
@@ -681,21 +692,6 @@ window.signage.onLiveUpdate((data) => {
 
 window.signage.onLiveClear(() => endLive());
 
-// 듀얼 모니터: 2번 화면이 라이브에 점유/해제되면 분할 항목 배치를 다시 잡는다
-if (!isSecondary) {
-  window.signage.onLiveOccupy((data) => {
-    const on = !!(data && data.occupied);
-    if (liveOccupiesScreen2 === on) return;
-    liveOccupiesScreen2 = on;
-    const entry = activeEntries[currentIndex];
-    // 분할 항목만 배치가 달라지므로 그때만 다시 렌더링한다 (영상 재시작 최소화)
-    if (entry && entry.url2) {
-      if (on) window.signage.setScreen2Media(null);
-      rerenderCurrent();
-    }
-  });
-}
-
 function applyLiveSettings(s) {
   if (s) liveSettings = { ...LIVE_DEFAULTS, ...s };
 }
@@ -756,7 +752,8 @@ function photoEl(photo, extraClass, playVideo) {
     const video = document.createElement('video');
     video.src = resolveUrl(photo.video);
     video.playsInline = true;
-    video.muted = photo.muted !== false;
+    // 듀얼 모니터는 두 화면에 같은 영상이 나오므로 소리는 1번 화면에서만 낸다(겹치면 메아리처럼 들린다).
+    video.muted = photo.muted !== false || isSecondary;
     box.appendChild(video);
     box.liveVideo = video;
   } else if (photo.video) {
@@ -902,7 +899,6 @@ function endLive() {
   clearTimeout(liveCornerTimer);
   liveHeroTimer = liveReturnTimer = liveCornerTimer = null;
 
-  const wasOn = liveState !== 'off';
   liveState = 'off';
   liveQueue = [];
   liveSlots = [];
@@ -920,9 +916,6 @@ function endLive() {
     liveHero.classList.remove('in', 'out');
     liveHero.dataset.photoId = '';
   }, 750);
-
-  // 보조 창이 라이브를 맡고 있었다면 2번 화면 점유를 해제한다
-  if (wasOn) window.signage.liveEnded();
 }
 
 function showIdle(stopped) {

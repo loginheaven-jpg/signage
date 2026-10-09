@@ -213,6 +213,7 @@ loadScheduleCache();
 let mainWindow = null;
 let secondWindow = null;   // 듀얼 모니터: 보조(우측) 화면
 let dualMonitor = false;   // 보조 창 활성 여부 (렌더러에 전달)
+let lastScreen2Media = null;   // 주 창이 마지막으로 보조 창에 보낸 화면
 let ws = null;
 let reconnectTimer = null;
 let heartbeatTimer = null;
@@ -248,6 +249,10 @@ function ensureSecondWindow() {
   });
   const secondContents = secondWindow.webContents;
   secondContents.on('did-start-loading', () => liveReadyWindows.delete(secondContents.id));
+  // 주 창이 보조 창보다 먼저 첫 항목을 보내면 놓치므로, 보조 창이 준비되면 마지막 화면을 다시 보낸다.
+  secondContents.on('did-finish-load', () => {
+    if (lastScreen2Media && !secondContents.isDestroyed()) secondContents.send('screen2-media', lastScreen2Media);
+  });
   secondWindow.loadFile('player.html', { query: { screen: '2' } });
   secondWindow.on('closed', () => { secondWindow = null; dualMonitor = false; });
   dualMonitor = true;
@@ -260,11 +265,13 @@ function closeSecondWindow() {
 }
 
 // ─── 라이브 레이어 창 배정 ───────────────────────────────
-// 듀얼 모니터면 보조 창이 라이브를 맡고(주 화면은 편성표 유지),
-// 단일 화면이면 주 창이 편성표 위에 오버레이로 띄운다.
-let liveOccupying = false;
+// 라이브는 모든 화면에 동시에 띄운다(듀얼 모니터면 1·2번 모두, 편성표는 그 아래에서 계속).
+// 서버는 PC 한 대를 화면 하나로 보므로, 두 창의 준비·표시 보고를 여기서 하나로 합친다.
 let playerStopped = false;   // 주 창이 "멈추기" 상태면 라이브도 띄우지 않는다
 const liveReadyWindows = new Set();
+const liveSeenByWindow = new Map();   // webContents id → 마지막 live_ready 의 표시한 사진 ID
+const liveResults = new Map();        // 사진 ID → (webContents id → 표시 결과)
+let liveReadyTimer = null;
 
 function sendLiveMessage(message) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
@@ -276,39 +283,49 @@ function requestLiveReady() {
   });
 }
 
+// 모든 창이 준비되면 한 번만 보고한다. 표시한 사진은 모든 창이 표시한 것만 알린다(나머지는 서버가 복원).
+function flushLiveReady() {
+  liveReadyTimer = null;
+  const targets = liveTarget();
+  if (playerStopped || !targets.length || !targets.every(w => liveReadyWindows.has(w.webContents.id))) return;
+  const sets = targets.map(w => liveSeenByWindow.get(w.webContents.id) || new Set());
+  sendLiveMessage({ type: 'live_ready', seen: [...sets[0]].filter(id => sets.every(s => s.has(id))) });
+}
+
 ipcMain.on('live-delivery', (event, message) => {
   if (!message || !['live_ready', 'live_result'].includes(message.type)) return;
-  if (message.type === 'live_ready') liveReadyWindows.add(event.sender.id);
-  if (!liveTarget().some(w => w.webContents === event.sender)) return;
-  if (message.type === 'live_ready' && playerStopped) return;
-  sendLiveMessage(message);
+  const id = event.sender.id;
+  if (message.type === 'live_ready') {
+    liveReadyWindows.add(id);
+    liveSeenByWindow.set(id, new Set(Array.isArray(message.seen) ? message.seen : []));
+  }
+  const targets = liveTarget();
+  if (!targets.some(w => w.webContents === event.sender)) return;
+  if (message.type === 'live_ready') {
+    if (playerStopped) return;
+    clearTimeout(liveReadyTimer);
+    liveReadyTimer = setTimeout(flushLiveReady, 300);
+    return;
+  }
+  // 한 화면이라도 표시하면 표시 확인, 오류·멈춤은 모든 화면이 실패했을 때만 보고한다.
+  const byWindow = liveResults.get(message.photoId) || new Map();
+  byWindow.set(id, message.status);
+  liveResults.set(message.photoId, byWindow);
+  if (liveResults.size > 200) liveResults.delete(liveResults.keys().next().value);
+  const statuses = targets.map(w => byWindow.get(w.webContents.id));
+  if (message.status === 'displayed' || statuses.every(s => s && s !== 'displayed')) sendLiveMessage(message);
 });
 
 ipcMain.on('player-stopped', (event, v) => {
   const wasStopped = playerStopped;
   playerStopped = !!v;
-  if (playerStopped) {
-    liveTarget().forEach(w => w.webContents.send('live-clear'));
-    setLiveOccupy(false);
-  }
+  if (playerStopped) liveTarget().forEach(w => w.webContents.send('live-clear'));
   if (wasStopped && !playerStopped) requestLiveReady();
 });
 
 function liveTarget() {
-  const useSecond = dualMonitor && secondWindow && !secondWindow.isDestroyed() && secondWindow.webContents;
-  const w = useSecond ? secondWindow : mainWindow;
-  return (w && !w.isDestroyed() && w.webContents) ? [w] : [];
-}
-
-// 주 창에 "2번 화면이 라이브에 점유됨" 상태를 알린다.
-// 주 창은 이 동안 분할(split) 항목의 우측을 2번 화면으로 보내지 않고
-// 창 안에서 좌/우 나란히 렌더링한다(기존 단일 디스플레이 폴백 재사용).
-function setLiveOccupy(on) {
-  if (liveOccupying === on) return;
-  liveOccupying = on;
-  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
-    mainWindow.webContents.send('live-occupy', { occupied: on });
-  }
+  const windows = dualMonitor ? [mainWindow, secondWindow] : [mainWindow];
+  return windows.filter(w => w && !w.isDestroyed() && w.webContents);
 }
 
 function routeLive(channel, payload) {
@@ -316,19 +333,10 @@ function routeLive(channel, payload) {
     if (payload?.photo) sendLiveMessage({ type: 'live_result', photoId: payload.photo.id, status: 'stopped' });
     return;
   }
-  const targets = liveTarget();
-  if (!targets.length) return;
-  const onSecond = dualMonitor && targets[0] === secondWindow;
-  targets.forEach(w => {
-    if (liveReadyWindows.has(w.webContents.id) && !w.webContents.isLoading()) {
-      if (onSecond) setLiveOccupy(true);
-      w.webContents.send(channel, payload);
-    }
+  liveTarget().forEach(w => {
+    if (liveReadyWindows.has(w.webContents.id) && !w.webContents.isLoading()) w.webContents.send(channel, payload);
   });
 }
-
-// 보조 창의 라이브 레이어가 끝났다고 보고 → 2번 화면 점유 해제
-ipcMain.on('live-ended', () => setLiveOccupy(false));
 
 // ─── 재생 제어 (일시정지 / 종료 / 설정) ───────────────────
 function sendToBoth(channel, payload) {
@@ -447,6 +455,7 @@ ipcMain.handle('get-config', async () => {
 
 // 듀얼 모니터: 주 창 → 보조 창으로 우측 미디어 전달
 ipcMain.on('screen2-media', (event, media) => {
+  lastScreen2Media = media;
   if (secondWindow && !secondWindow.isDestroyed() && secondWindow.webContents) {
     secondWindow.webContents.send('screen2-media', media);
   }
@@ -600,9 +609,7 @@ function handleMessage(msg) {
       break;
 
     // ─── 라이브 사진 (폰 촬영 → 즉시 송출) ────────────────
-    // 편성표는 건드리지 않는다. 라이브 레이어를 띄울 창만 고른다:
-    //  - 듀얼 모니터면 보조(2번) 창이 라이브를 점유하고 주 창은 편성표 계속
-    //  - 단일 화면이면 주 창에서 편성표 위에 오버레이
+    // 편성표는 건드리지 않는다. 모든 화면(듀얼이면 1·2번)에서 편성표 위에 오버레이로 띄운다.
     case 'live_photo':
       routeLive('live-photo', { photo: msg.photo, session: msg.session, settings: msg.settings });
       break;
@@ -613,7 +620,6 @@ function handleMessage(msg) {
 
     case 'live_clear':
       liveTarget().forEach(w => w.webContents.send('live-clear'));
-      setLiveOccupy(false);
       break;
 
     case 'sync_now':
