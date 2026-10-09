@@ -147,7 +147,7 @@ test('all player and mobile inline scripts parse', () => {
 
 test('server does not replay expired sessions, acknowledged images or unapproved clients', () => {
   const server = fs.readFileSync(path.join(__dirname, '../host/server.js'), 'utf8');
-  const code = server.slice(server.indexOf('function syncLiveClient('), server.indexOf('setInterval(() => { clients.forEach(syncLiveClient)'));
+  const code = server.slice(server.indexOf('function livePublicPhoto('), server.indexOf('setInterval(() => { clients.forEach(syncLiveClient)'));
   let sent = 0;
   const photo = { id: 'p', url: '/p.jpg', ts: Date.now() };
   const session = { lastAt: Date.now(), photos: [photo] };

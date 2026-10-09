@@ -62,10 +62,11 @@ async function pngForClipboard(url) {
 }
 function card(photo) {
   const wrap = node('article', 'card');
-  const image = photo.status === 'deleting' ? node('div', 'preview') : node('img', 'preview');
+  const image = photo.status === 'deleting' ? node('div', 'preview') : node(photo.video ? 'video' : 'img', 'preview');
+  if (photo.video && photo.status !== 'deleting') { image.controls = true; image.preload = 'none'; image.playsInline = true; image.style.cursor = 'auto'; }
   if (photo.status !== 'deleting') image.src = photo.url;
   image.alt = photo.message || '보관 사진'; image.loading = 'lazy'; image.decoding = 'async';
-  image.addEventListener('click', () => { $('previewImage').src = photo.url; $('preview').showModal(); });
+  if (!photo.video) image.addEventListener('click', () => { $('previewImage').src = photo.url; $('preview').showModal(); });
   image.addEventListener('error', () => { image.alt = '사진을 불러오지 못했습니다. 연결 후 새로고침해 주세요.'; });
   const details = node('div', 'details');
   details.append(node('p', 'caption', photo.message || '문구 없음'), node('div', 'meta', dates.format(new Date(photo.ts))), node('div', 'meta', photo.siteName || '드라이브 사진'));
@@ -93,7 +94,8 @@ function card(photo) {
           .finally(() => { copy.disabled = false; });
       } catch { copy.disabled = false; toast('이 브라우저에서는 사진 복사를 지원하지 않습니다.'); }
     });
-    actions.append(download, copy);
+    actions.append(download);
+    if (!photo.video) actions.append(copy);
     if (photo.message) {
       const text = node('button', '', '문구 복사');
       text.addEventListener('click', () => {

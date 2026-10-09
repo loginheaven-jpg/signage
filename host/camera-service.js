@@ -8,6 +8,7 @@ const exifr = require('exifr');
 const { atomicJSON, cameraErrorText: errorText } = require('./photo-archive');
 const { targetInput, fail } = require('./drive-folders');
 const { CameraFolderCatalog } = require('./camera-folder-catalog');
+const { mountVideoUpload, MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS } = require('./camera-video');
 const MAX_BYTES = 50 * 1024 * 1024;
 const ALLOWED = new Set(['jpg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'tif']);
 
@@ -30,7 +31,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
   if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, crypto.randomBytes(32), { mode: 0o600, flag: 'wx' });
   const secret = fs.readFileSync(secretFile);
   const sign = value => crypto.createHmac('sha256', secret).update(value).digest('hex');
-  const receipts = new Map(); const inflight = new Set();
+  const receipts = new Map(); const inflight = new Set(); const videoJobs = new Set();
   for (const filename of fs.readdirSync(receiptsDir).filter(n => /^[\w-]+\.json$/.test(n))) {
     const r = JSON.parse(fs.readFileSync(path.join(receiptsDir, filename), 'utf8')); receipts.set(r.id, r);
     const record = archive.records.get(r.id);
@@ -68,7 +69,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
   const safe = fn => (req, res) => Promise.resolve().then(() => fn(req, res)).catch(error => res.status(error.status || 503).json({ error: errorText(error) }));
   app.get('/live/api/camera/config', (req, res) => res.json({ rootId: archive.folderId, year: new Date(Date.now() + 9 * 3600000).getUTCFullYear(),
     archiveEnabled: getConfig().archiveEnabled !== false, liveEnabled: getConfig().enabled, ready: archive.ready,
-    archiveError: archive.error ? errorText({ publicMessage: archive.error }) : '', sites: getSites(), maxBytes: MAX_BYTES, maxBatch: 30, cancelSec: getConfig().settings.cancelSec, mail: !!mail?.configured }));
+    archiveError: archive.error ? errorText({ publicMessage: archive.error }) : '', sites: getSites(), maxBytes: MAX_BYTES, maxVideoBytes: MAX_VIDEO_BYTES, maxVideoSeconds: MAX_VIDEO_SECONDS, maxBatch: 30, cancelSec: getConfig().settings.cancelSec, mail: !!mail?.configured }));
 
   app.get('/live/api/camera/folders', safe(async (req, res) => {
     res.json(await folderCatalog.get(String(req.query.year || ''), String(req.query.yearId || ''), req.query.refresh === '1'));
@@ -78,11 +79,12 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     const record = archive.records.get(r.id);
     const mailState = mail?.statusOf(r.id) || r.mail;
     return { id: r.id, name: record?.name || r.originalName, ts: r.ts, mode: r.mode, target: record?.target || r.target,
+      kind: r.kind || 'photo', converting: videoJobs.has(r.id),
       archive: r.mode === 'live' ? 'none' : record?.status || (r.cancelled ? 'deleted' : r.pipeline ? 'awaiting_original' : 'pending'), archiveError: record?.error ? errorText({ publicMessage: record.error }) : '',
       original: r.mode === 'live' || (r.cancelled && !record) ? 'none' : record ? 'received' : 'pending', pipeline: !!r.pipeline,
       live: r.live, liveError: r.liveError || '', delivery: delivery(r.id), mail: mailState,
       canCancelMail: !r.cancelled && r.mode !== 'archive' && mailState === 'queued',
-      canRetryDisplay: !r.cancelled && r.mode !== 'archive' && ['error', 'pending'].includes(r.live),
+      canRetryDisplay: !r.cancelled && r.mode !== 'archive' && ['error', 'pending'].includes(r.live) && !videoJobs.has(r.id),
       canWithdraw: !r.cancelled && r.mode !== 'archive' && r.live !== 'withdrawn',
       canChangeTarget: !r.cancelled && ((r.pipeline && r.mode === 'both' && (!record || record.status === 'awaiting_target')) || (record?.status === 'error' && !record.driveId)),
       cancelled: !!r.cancelled, canCancel: !r.cancelled && Date.now() - r.ts < getConfig().settings.cancelSec * 1000 };
@@ -147,6 +149,11 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     const site = getSites().find(s => s.id === r.siteId);
     if (!site) throw fail('기존 표출 모니터를 찾을 수 없습니다.', 409);
     if (inflight.has(r.id)) throw fail('사진을 처리하고 있습니다. 잠시 후 확인해 주세요.', 409);
+    if (r.kind === 'video') {
+      // Conversion runs in the background; the row reports the result.
+      r.live = 'pending'; r.liveError = ''; save(r); video.enqueueDisplay(r);
+      return res.status(202).json({ success: true, upload: row(r) });
+    }
     inflight.add(r.id);
     try {
       const bytes = await original(r);
@@ -184,6 +191,9 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     archive.cycle().catch(() => {});
     res.json({ success: true });
   }));
+
+  const video = mountVideoUpload(app, { archive, getConfig, getSites, publish, receipts, inflight, save, row,
+    liveOriginals, staging, parsePhotoDate, videoJobs });
 
   require('./camera-fast-upload').mountFastUpload(app, { archive, getConfig, getSites, publish, cancel, mail,
     upload, receipts, inflight, save, row, safe, liveOriginals, parsePhotoDate, wakeArchive });

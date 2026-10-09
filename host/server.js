@@ -743,11 +743,12 @@ function liveSession(siteId) {
 }
 
 // 화면에 보내는 사진 정보 — 업로더 이름은 내보내지 않는다(화면에는 메시지만 표시).
+function livePublicPhoto(p) {
+  return { id: p.id, url: p.url, message: p.message || '', ts: p.ts, batchTotal: p.batchTotal || 1,
+    ...(p.video ? { video: p.video, durationMs: p.durationMs, muted: p.muted !== false } : {}) };
+}
 function livePublicPhotos(session) {
-  return session.photos.map(p => ({
-    id: p.id, url: p.url, message: p.message || '', ts: p.ts,
-    batchTotal: p.batchTotal || 1
-  }));
+  return session.photos.map(livePublicPhoto);
 }
 
 function pushLive(siteId, msg) {
@@ -767,17 +768,16 @@ function pushLive(siteId, msg) {
 function syncLiveClient(info) {
   if (!info.approved || !info.liveReady || info.ws.readyState !== WebSocket.OPEN) return;
   const session = liveSessions.get(info.siteId);
-  if (!session || Date.now() - session.lastAt > liveConfig.settings.returnMs) return;
+  if (!session || Date.now() - session.lastAt > liveConfig.settings.returnMs + Math.max(0, ...session.photos.map(p => p.durationMs || 0))) return;
   for (const photo of session.photos) {
-    if (Date.now() - photo.ts > liveConfig.settings.returnMs) continue;
+    // 영상은 재생 시간만큼 더 오래 화면에 남으므로 그만큼 재전송 기한도 늘린다.
+    if (Date.now() - photo.ts > liveConfig.settings.returnMs + (photo.durationMs || 0)) continue;
     if (info.liveSeen.has(photo.id)) continue;
     const previous = info.liveAttempts.get(photo.id);
     if (previous && (previous.count >= 6 || Date.now() - previous.at < 5000)) continue;
     info.liveAttempts.set(photo.id, { at: Date.now(), count: (previous?.count || 0) + 1 });
     try {
-      info.ws.send(JSON.stringify({ type: 'live_photo',
-        photo: { id: photo.id, url: photo.url, message: photo.message, ts: photo.ts, batchTotal: photo.batchTotal },
-        settings: liveConfig.settings }));
+      info.ws.send(JSON.stringify({ type: 'live_photo', photo: livePublicPhoto(photo), settings: liveConfig.settings }));
     } catch (e) { console.warn('[Live] 복원 전송 실패:', e.message); }
   }
 }
@@ -817,8 +817,10 @@ function liveDeleteFile(photo) {
     info.liveAttempts?.delete(photo.id);
   });
   try {
-    const p = path.join(LIVE_DIR, photo.filename);
-    if (fs.existsSync(p)) fs.unlinkSync(p);
+    for (const name of [photo.filename, photo.videoFilename]) {
+      const p = name && path.join(LIVE_DIR, name);
+      if (p && fs.existsSync(p)) fs.unlinkSync(p);
+    }
   } catch (e) { console.warn('[Live] 파일 삭제 실패:', e.message); }
 }
 
@@ -864,9 +866,16 @@ require('./camera-service').mountCameraService(app, {
   getConfig: () => liveConfig,
   getSites: () => sites.map(s => ({ id: s.id, name: s.name, icon: s.icon || '📺',
     online: Array.from(clients.values()).some(c => c.approved && c.siteId === s.id && c.ws.readyState === WebSocket.OPEN) })),
-  publish: (photo, buffer, site) => {
+  publish: (photo, media, site) => {
     photo.filename = `live_${photo.id}.jpg`;
-    fs.writeFileSync(path.join(LIVE_DIR, photo.filename), buffer);
+    if (Buffer.isBuffer(media)) fs.writeFileSync(path.join(LIVE_DIR, photo.filename), media);
+    else {
+      // 영상: 화면용 MP4와 대표 장면. 사진 주소(url)에는 대표 장면을 넣어 2.2 이하 모니터도 사진으로 표시한다.
+      photo.videoFilename = `live_${photo.id}.mp4`;
+      fs.copyFileSync(media.poster, path.join(LIVE_DIR, photo.filename));
+      fs.copyFileSync(media.video, path.join(LIVE_DIR, photo.videoFilename));
+      Object.assign(photo, { video: `/uploads/live/${photo.videoFilename}`, durationMs: media.durationMs, muted: media.muted });
+    }
     photo.url = `/uploads/live/${photo.filename}`;
     const session = liveSession(site.id);
     session.photos.push(photo); session.lastAt = photo.ts;
@@ -875,7 +884,7 @@ require('./camera-service').mountCameraService(app, {
     liveUploadLog.unshift({ ts: photo.ts, siteId: site.id, siteName: site.name, message: photo.message,
       uploaderName: photo.uploaderName, uploaderId: photo.uploaderId, photoId: photo.id });
     if (liveUploadLog.length > 50) liveUploadLog.length = 50;
-    const sent = pushLive(site.id, { type: 'live_photo', photo: { id: photo.id, url: photo.url, message: photo.message, ts: photo.ts, batchTotal: photo.batchTotal },
+    const sent = pushLive(site.id, { type: 'live_photo', photo: livePublicPhoto(photo),
       session: { photos: livePublicPhotos(session) }, settings: liveConfig.settings });
     broadcastToAdmins({ type: 'live_update' }); return sent;
   },
@@ -1203,7 +1212,7 @@ setInterval(() => {
       console.log(`[Live] TTL 정리: ${siteId} — ${before - session.photos.length}장 삭제`);
       broadcastToAdmins({ type: 'live_update' });
     }
-    session.photos.forEach(p => keep.add(p.filename));
+    session.photos.forEach(p => { keep.add(p.filename); if (p.videoFilename) keep.add(p.videoFilename); });
   });
   // 세션에 없는 고아 파일 정리 (재시작 등으로 남은 것)
   try {

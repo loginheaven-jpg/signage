@@ -27,7 +27,7 @@ function fixture(t, existingRoot) {
       calls.lists.push(p.q);
       const parent = p.q.match(/^'([\w-]+)' in parents/)[1];
       const folders = p.q.includes("mimeType = '");
-      return { data: { files: [...remote.values()].filter(f => !f.trashed && f.parents?.includes(parent) && (folders ? f.mimeType === FOLDER : f.mimeType.startsWith('image/'))) } };
+      return { data: { files: [...remote.values()].filter(f => !f.trashed && f.parents?.includes(parent) && (folders ? f.mimeType === FOLDER : ['image/', 'video/'].some(kind => f.mimeType.startsWith(kind)))) } };
     },
     create: async p => {
       calls.creates.push(p.requestBody);

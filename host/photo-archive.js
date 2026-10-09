@@ -9,6 +9,9 @@ const DEFAULT_FOLDER = '1sOi_69AEMwqoMbIyQ-vvZ2dpW7SD-Yfd';
 const META_PREFIX = 'SIGNAGE_PHOTO_V1\n';
 const FIELDS = 'id,name,mimeType,description,createdTime,parents,trashed,size,appProperties';
 const REQUEST = { timeout: 60000, retry: false };
+const MEDIA_TYPES = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
+  '.heic': 'image/heic', '.heif': 'image/heif', '.avif': 'image/avif', '.tif': 'image/tiff',
+  '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.3gp': 'video/3gpp' };
 // Existing year/event folders must be visible and writable after administrator consent.
 // All application operations remain confined to the configured archive hierarchy.
 const PHOTO_SCOPE = 'https://www.googleapis.com/auth/drive';
@@ -98,11 +101,11 @@ class PhotoArchive {
 
   enqueue(photo, source, site, extra = {}) {
     const ext = path.extname(source).toLowerCase();
-    if (!/^\.(jpe?g|png|gif|webp|heic|heif|avif|tif)$/.test(ext)) throw new Error('Invalid photo extension');
+    if (!MEDIA_TYPES[ext]) throw new Error('Invalid photo extension');
     const label = nameLabel(photo.message);
     const record = {
       id: photo.id, message: photo.message, ts: photo.ts, siteId: site.id, siteName: site.name,
-      localName: photo.id + ext, mimeType: ({ '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.heic': 'image/heic', '.heif': 'image/heif', '.avif': 'image/avif', '.tif': 'image/tiff' })[ext],
+      localName: photo.id + ext, mimeType: MEDIA_TYPES[ext],
       // Korean time first, so sorting by name is chronological and matches the gallery.
       name: new Date(photo.ts + 9 * 3600000).toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-') + (label ? '_' + label : '') + '_' + photo.id.slice(0, 8) + ext,
       folderId: this.folderId, status: 'pending', attempts: 0, nextAttempt: 0, ...extra
@@ -242,7 +245,7 @@ class PhotoArchive {
     return { total: rows.length, photos: rows.slice(offset, offset + limit).map(r => ({
       id: r.id, message: r.message, ts: r.ts, siteName: r.siteName, name: r.name,
       year: r.target?.year, eventName: r.target?.eventName, uploaderName: r.uploaderName, capturedAt: r.capturedAt,
-      status: r.status, error: r.error || '', url: '/api/photos/' + encodeURIComponent(r.id) + '/image'
+      status: r.status, error: r.error || '', video: String(r.mimeType || '').startsWith('video/'), url: '/api/photos/' + encodeURIComponent(r.id) + '/image'
     })) };
   }
 
@@ -274,7 +277,8 @@ class PhotoArchive {
       await this.drive.files.create({ supportsAllDrives: true, fields: 'id', requestBody: {
         id: r.driveId, name: r.name, parents: [r.folderId],
         description: META_PREFIX + JSON.stringify(metadata), appProperties: { signagePhotoId: r.id }
-      }, media: { mimeType: r.mimeType, body } }, REQUEST);
+      // A video original can be hundreds of MB: allow one minute plus a second per 250 KB.
+      }, media: { mimeType: r.mimeType, body } }, { ...REQUEST, timeout: REQUEST.timeout + Math.ceil(fs.statSync(file).size / 250) });
     } catch (e) {
       if (Number(e.code || e.response?.status) !== 409) throw e;
       // A timed-out request may already have succeeded. Verify identity before accepting conflict.
@@ -331,7 +335,7 @@ class PhotoArchive {
     let pageToken;
     do {
       const { data } = await this.drive.files.list({
-        q: `'${folderId}' in parents and trashed = false and mimeType contains 'image/'`,
+        q: `'${folderId}' in parents and trashed = false and (mimeType contains 'image/' or mimeType contains 'video/')`,
         pageSize: 1000, pageToken, fields: `nextPageToken,files(${FIELDS})`,
         supportsAllDrives: true, includeItemsFromAllDrives: true
       }, REQUEST);
@@ -408,7 +412,7 @@ class PhotoArchive {
     tick(); this.timer = setInterval(tick, 30000); this.timer.unref();
   }
 
-  async image(id, res, download = false) {
+  async image(id, res, download = false, range = '') {
     const r = this.get(id);
     if (!r) return res.status(404).json({ error: '사진을 찾을 수 없습니다.' });
     res.set('Cache-Control', 'private, no-store');
@@ -423,7 +427,13 @@ class PhotoArchive {
       await this.folders.validateRecord(r);
       const { data } = await this.drive.files.get({ fileId: r.driveId, supportsAllDrives: true, fields: 'id,parents,trashed' }, REQUEST);
       if (data.trashed || !data.parents?.includes(r.folderId)) return res.status(404).json({ error: '드라이브 폴더에 사진이 없습니다.' });
-      const result = await this.drive.files.get({ fileId: r.driveId, alt: 'media', supportsAllDrives: true }, { ...REQUEST, responseType: 'stream' });
+      // Browsers fetch videos in byte ranges; pass the range through to Drive.
+      const partial = /^bytes=\d*-\d*$/.test(range) ? { headers: { Range: range } } : {};
+      const result = await this.drive.files.get({ fileId: r.driveId, alt: 'media', supportsAllDrives: true }, { ...REQUEST, responseType: 'stream', ...partial });
+      res.set('Accept-Ranges', 'bytes');
+      const header = name => result.headers?.get ? result.headers.get(name) : result.headers?.[name];
+      if (result.status === 206 && header('content-range')) { res.status(206); res.set('Content-Range', header('content-range')); }
+      if (header('content-length')) res.set('Content-Length', header('content-length'));
       result.data.on('error', () => res.destroy());
       res.on('close', () => result.data.destroy());
       result.data.pipe(res);

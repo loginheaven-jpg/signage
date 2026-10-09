@@ -132,7 +132,7 @@ async function persistDraft() {
     const db = await openDb();
     await new Promise((resolve, reject) => {
       const tx = db.transaction('drafts', 'readwrite');
-      tx.objectStore('drafts').put({ settings, entries: selected.map(({ url, ...r }) => r), originals, message: el('message').value, keepMessage: el('keepMessage').checked, shareBatch }, 'current');
+      tx.objectStore('drafts').put({ settings, entries: selected.filter(r => r.kind !== 'video').map(({ url, ...r }) => r), originals, message: el('message').value, keepMessage: el('keepMessage').checked, shareBatch }, 'current');
       tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
     });
     return true;
@@ -483,15 +483,56 @@ function updateWorkWarning() {
   el('workWarning').textContent = warnings.join(' ');
 }
 function localDate(ts) { return new Date(ts + 9 * 3600000).toISOString().slice(0, 19); }
+// 기기가 읽을 수 있는 영상이면 길이(초)를 알려 준다. 읽지 못하면 0 — 길이 제한은 서버가 다시 확인한다.
+function videoSeconds(file) {
+  return new Promise(resolve => {
+    const video = document.createElement('video'), url = URL.createObjectURL(file);
+    const done = seconds => { clearTimeout(timer); URL.revokeObjectURL(url); video.removeAttribute('src'); resolve(Number.isFinite(seconds) ? seconds : 0); };
+    const timer = setTimeout(() => done(0), 8000);
+    video.preload = 'metadata'; video.muted = true;
+    video.onloadedmetadata = () => done(video.duration); video.onerror = () => done(0);
+    video.src = url;
+  });
+}
+function hasVideo() { return selected.some(r => r.kind === 'video'); }
+// 영상은 수백 MB라 진행률이 필요하다. fetch 는 업로드 진행률을 알려 주지 않아 XHR 을 쓴다.
+function uploadVideo(form, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/live/api/camera/video');
+    const legacyToken = new URLSearchParams(location.search).get('t') || storage.get('token');
+    if (legacyToken) xhr.setRequestHeader('x-live-token', legacyToken);
+    xhr.timeout = 30 * 60000;
+    xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(event.loaded / event.total); };
+    xhr.onload = () => {
+      let data = {}; try { data = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status === 401) { location.replace('/login?role=camera'); return reject(new Error('다시 로그인해 주세요.')); }
+      if (xhr.status < 200 || xhr.status >= 300) return reject(Object.assign(new Error(data.error || '연결을 확인하고 다시 시도해 주세요.'), { status: xhr.status }));
+      resolve(data);
+    };
+    xhr.onerror = () => reject(new Error('연결이 끊겼습니다. 같은 영상으로 다시 시도해 주세요.'));
+    xhr.ontimeout = () => reject(new Error('응답 시간이 초과되었습니다. 같은 요청으로 다시 시도해 주세요.'));
+    xhr.send(form);
+  });
+}
 async function addFiles(files, captured = false) {
   storage.set('capturePending', false);
   const slots = 30 - selected.length;
   if (files.length > slots) notice('한 번에 30장까지 가능합니다. 초과 사진은 추가하지 않았습니다.', true);
   for (const file of [...files].slice(0, slots)) {
     if (!file.size) { notice(file.name + ': 사진 파일이 비어 있습니다. 저장을 마친 뒤 다시 선택해 주세요.', true); continue; }
-    if (file.size > config.maxBytes) { notice(file.name + ': 한 장당 50MB까지 가능합니다.', true); continue; }
+    const isVideo = /^video\//.test(file.type) || /\.(mp4|mov|m4v|webm|mkv|3gp)$/i.test(file.name);
+    if (isVideo && file.size > (config.maxVideoBytes || 500 * 1024 * 1024)) { notice(file.name + ': 영상은 500MB까지 가능합니다.', true); continue; }
+    if (!isVideo && file.size > config.maxBytes) { notice(file.name + ': 한 장당 50MB까지 가능합니다.', true); continue; }
     if (selected.some(r => r.file.name === file.name && r.file.size === file.size && r.file.lastModified === file.lastModified)) continue;
     let date = '', dateSource = 'unknown';
+    if (isVideo) {
+      const seconds = await videoSeconds(file);
+      if (seconds > (config.maxVideoSeconds || 180) + 2) { notice(file.name + ': 영상은 3분까지 가능합니다. (' + Math.round(seconds) + '초)', true); continue; }
+      date = localDate(file.lastModified || Date.now()); dateSource = captured ? 'capture' : 'fileModified';
+      selected.push({ file, kind: 'video', seconds, requestId: uuid(), date, dateSource, url: URL.createObjectURL(file), error: '' });
+      continue;
+    }
     try {
       const tags = await window.exifr?.parse(file, { pick: ['DateTimeOriginal', 'CreateDate'], reviveValues: false });
       const raw = String(tags?.DateTimeOriginal || tags?.CreateDate || '').replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3').replace(' ', 'T');
@@ -505,27 +546,31 @@ async function addFiles(files, captured = false) {
 }
 function renderReview() {
   el('review').hidden = !selected.length;
-  el('reviewTitle').textContent = '사진 ' + selected.length + '장';
+  const videos = selected.filter(r => r.kind === 'video').length, photos = selected.length - videos;
+  const countText = [photos ? '사진 ' + photos + '장' : '', videos ? '영상 ' + videos + '개' : ''].filter(Boolean).join(' · ');
+  el('reviewTitle').textContent = countText;
+  el('muteLabel').hidden = !videos || mode === 'archive'; el('muteVideo').disabled = busy;
   el('reviewDestination').textContent = settings ? destination(settings).replace(/\n/g, ' · ') : '';
   el('messageLabel').hidden = mode === 'archive'; el('keepMessageLabel').hidden = mode === 'archive';
   el('messageCount').textContent = el('message').value.length;
   renderEmail();
   el('selectedPhotos').replaceChildren(...selected.map(r => {
-    const card = node('div', undefined, 'photoCard'); const img = node('img'); img.src = r.url; img.alt = r.file.name;
-    const caption = node('p', r.file.name); const state = node('p', r.error || '원본 ' + (r.file.size / 1024 / 1024).toFixed(1) + 'MB');
+    const card = node('div', undefined, 'photoCard'); const img = node(r.kind === 'video' ? 'video' : 'img'); img.src = r.url; img.alt = r.file.name;
+    if (r.kind === 'video') { img.muted = true; img.playsInline = true; img.preload = 'metadata'; img.controls = true; }
+    const caption = node('p', r.file.name); const state = node('p', r.error || (r.kind === 'video' ? '영상 ' + (r.seconds ? Math.round(r.seconds) + '초 · ' : '') : '원본 ') + (r.file.size / 1024 / 1024).toFixed(1) + 'MB');
     img.onerror = () => { img.hidden = true; caption.textContent = r.file.name + ' · 미리보기 불가, 원본 보관 가능'; };
-    const label = node('label', '사진 날짜 (한국 시간)'); const input = node('input'); input.type = 'datetime-local'; input.step = '1'; input.value = r.date; input.disabled = !!r.submission || busy;
+    const label = node('label', (r.kind === 'video' ? '영상' : '사진') + ' 날짜 (한국 시간)'); const input = node('input'); input.type = 'datetime-local'; input.step = '1'; input.value = r.date; input.disabled = !!r.submission || busy;
     input.onchange = () => { r.date = input.value; r.dateSource = 'user'; persistDraft(); }; label.append(input);
     const dateInfo = node('p', ({ exif: '사진 촬영정보', capture: '방금 촬영한 날짜', fileModified: '파일 수정일시 — 필요하면 수정하세요', user: '직접 지정', unknown: '날짜미상' })[r.dateSource]);
     const remove = node('button', '제외'); remove.disabled = busy;
     remove.onclick = () => { if (r.submission && !confirm('서버에 접수되었을 수 있는 사진입니다. 대기 목록에서 제외해도 이미 접수된 사진은 취소되지 않습니다. 제외할까요?')) return; URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r); persistDraft(); renderReview(); };
     card.append(img, caption, state, label, dateInfo, remove); return card;
   }));
-  el('send').textContent = mode === 'archive' ? '사진 ' + selected.length + '장 Drive에 저장' : '사진 ' + selected.length + '장 모니터에 먼저 게시';
+  el('send').textContent = countText + (mode === 'archive' ? ' Drive에 저장' : ' 모니터에 먼저 게시');
 }
 function setBusy(value) {
   busy = value;
-  for (const id of ['home', 'shoot', 'choose', 'changePurpose', 'changeSettings', 'send', 'discard', 'message', 'keepMessage', 'email']) el(id).disabled = value;
+  for (const id of ['home', 'shoot', 'shootVideo', 'choose', 'changePurpose', 'changeSettings', 'send', 'discard', 'message', 'keepMessage', 'email']) el(id).disabled = value;
   if (hasFrozen()) for (const id of ['message', 'keepMessage', 'email']) el(id).disabled = true;
   renderReview(); renderShare();
 }
@@ -546,6 +591,15 @@ async function sendPhotos() {
         requestId: r.requestId, siteId: s.siteId, message: s.message, email: s.email, batchTotal: s.batchTotal,
         capturedAt: s.date, dateSource: s.dateSource, lastModified: r.file.lastModified || '' })) form.append(key, String(value ?? ''));
       try {
+        if (r.kind === 'video') {
+          // 영상은 한 번에 올리고, 서버가 모니터용으로 변환해 게시한다. 미리보기·원본 분리 전송과 공유 묶음은 쓰지 않는다.
+          s.muted ??= el('muteVideo').checked;
+          form.append('muted', s.muted ? '1' : '0'); form.append('video', r.file, r.file.name);
+          const label = (accepted + 1) + ' / ' + originalCount + ' · ' + r.file.name;
+          await uploadVideo(form, ratio => { el('progress').textContent = label + (ratio < 1 ? ' 올리는 중 ' + Math.floor(ratio * 100) + '% · 화면을 닫지 마세요' : ' 서버에서 확인하는 중…'); });
+          accepted++; URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r);
+          await persistDraft(); continue;
+        }
         if (s.fast && !r.previewFile) {
           try { r.previewFile = await sharingFile(r.file, r.requestId, 2048, 0.82); }
           catch { r.previewFile = r.file; notice('이 사진 형식은 기기에서 축소할 수 없어 원본 전송 후 표출합니다.', true); }
@@ -571,11 +625,11 @@ async function sendPhotos() {
     }
     el('progress').textContent = accepted + '장 서버 접수 완료' + (selected.length ? ' · ' + selected.length + '장 응답 확인 필요. 같은 설정으로 재시도해 주세요.' : ' · 같은 작업으로 계속 촬영하거나 사진을 선택하세요.');
     if (selected.length) notice('전송하지 못했거나 응답을 확인하지 못한 사진을 대기 목록에 남겼습니다. 재시도해도 중복 접수하지 않습니다.', true);
-    else notice(accepted + '장 접수했습니다. 모니터 표시와 원본 보관 상태는 각각 확인하세요.');
+    else notice(accepted + '개 접수했습니다. 모니터 표시와 원본 보관 상태는 각각 확인하세요. 영상은 변환을 마친 뒤 모니터에 나옵니다.');
     if (accepted && mode !== 'archive' && el('email').value) rememberEmail(true);
     if (!el('keepMessage').checked) el('message').value = '';
   } finally {
-    if (!selected.length) { el('shootInput').value = ''; el('galleryInput').value = ''; }
+    if (!selected.length) { el('shootInput').value = ''; el('videoInput').value = ''; el('galleryInput').value = ''; }
     setBusy(false); await persistDraft(); renderOriginals(); runOriginals(); await loadHistory();
   }
 }
@@ -651,7 +705,7 @@ async function loadHistory() {
       if (r.archiveError) states.push(r.archiveError);
       if (r.live !== 'none' && !r.cancelled) {
         const displayed = r.delivery.filter(d => d.status === 'displayed').length;
-        states.push(r.live === 'withdrawn' ? '모니터 게시 취소' + (r.mode === 'both' ? ' · 보관은 유지' : '') : displayed ? '모니터 표시 확인 ' + displayed + '곳' : r.live === 'sent' ? '모니터 전달 요청 완료 · 표시 확인 대기' : r.live === 'pending' ? '모니터 처리 결과 미확인' : '모니터 표출 실패');
+        states.push(r.live === 'withdrawn' ? '모니터 게시 취소' + (r.mode === 'both' ? ' · 보관은 유지' : '') : displayed ? '모니터 표시 확인 ' + displayed + '곳' : r.live === 'sent' ? '모니터 전달 요청 완료 · 표시 확인 대기' : r.live === 'pending' ? (r.kind === 'video' ? '모니터용 영상으로 변환 중 · 끝나면 자동 게시' : '모니터 처리 결과 미확인') : '모니터 표출 실패');
         if (r.delivery.some(d => d.status === 'image_error' || d.status === 'stopped')) states.push('일부 모니터에서 표시 오류');
         if (r.liveError) states.push(r.liveError);
       }
@@ -744,7 +798,7 @@ el('closeSites').onclick = () => closeDialog('siteDialog');
 el('eventName').oninput = () => { updateNewPath(); rememberNewTarget(); };
 el('eventDate').onchange = () => { updateNewPath(); rememberNewTarget(); };
 el('continueResume').onclick = () => { if (settings) showWork(); };
-for (const [button, input] of [['shoot', 'shootInput'], ['choose', 'galleryInput']]) {
+for (const [button, input] of [['shoot', 'shootInput'], ['shootVideo', 'videoInput'], ['choose', 'galleryInput']]) {
   el(button).onclick = async () => {
     if (busy) return;
     if (button === 'shoot' && !isMobile) {
@@ -758,7 +812,7 @@ for (const [button, input] of [['shoot', 'shootInput'], ['choose', 'galleryInput
     }
     storage.set('capturePending', true); el(input).value = ''; el(input).click();
   };
-  el(input).onchange = () => addFiles(el(input).files);
+  el(input).onchange = () => addFiles(el(input).files, input === 'videoInput');
   el(input).addEventListener('cancel', () => storage.set('capturePending', false));
 }
 el('closeCamera').onclick = () => closeDialog('cameraDialog');
@@ -813,7 +867,7 @@ async function init() {
     } else if (storage.get('capturePending')) { notice('촬영·사진 선택 중 화면이 다시 열렸습니다. 사진이 전달되지 않았다면 앨범에서 다시 선택해 주세요.', true); storage.set('capturePending', false); }
     if (settings?.target && !storage.get('lastTarget')) rememberTarget(settings.target);
     navigation = { camera: true, page: 'purpose', depth: 0 }; history.replaceState(navigation, ''); view('purpose', false);
-    if (!isMobile) el('choose').textContent = '🖼 사진 파일 선택';
+    if (!isMobile) el('choose').textContent = '🖼 사진·영상 파일 선택';
     if (!isMobile && !navigator.mediaDevices?.getUserMedia) { el('shoot').disabled = true; el('shoot').title = '카메라를 사용할 수 있는 기기에서 촬영해 주세요.'; }
     renderOriginals(); runOriginals();
   } catch (e) { notice(e.message, true); }

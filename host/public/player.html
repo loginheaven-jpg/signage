@@ -158,6 +158,13 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font
   transform: scale(1.08);
 }
 .lphoto img { position: relative; width: 100%; height: 100%; object-fit: contain; display: block; }
+/* 라이브 영상: 대표 장면(img) 위에 겹쳐 재생한다. 그리드 칸에는 대표 장면과 ▶ 표시만 둔다. */
+.lphoto video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.lphoto.isvideo::after {
+  content: '▶'; position: absolute; top: 4%; right: 4%; width: 2.6em; height: 2.6em; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; padding-left: .2em;
+  background: rgba(0,0,0,.55); color: #fff; font-size: 1.4vw;
+}
 .lphoto .lcap {
   position: absolute; left: 0; right: 0; bottom: 0;
   background: linear-gradient(to top, rgba(0,0,0,0.86) 10%, rgba(0,0,0,0));
@@ -657,6 +664,7 @@ let liveSlotCursor = 0;
 let liveQueue = [];
 let liveState = 'off';       // off | hero | grid | corner
 let liveHeroTimer = null;
+let liveHeroVideo = false;   // 히어로에서 영상을 재생 중인지
 let liveHeroStartedAt = 0;
 let liveHeroFullMs = 0;
 let liveReturnTimer = null;
@@ -713,9 +721,9 @@ function liveDrive() {
   // 한계를 높게 둔다 (여러 사람이 동시에 몰리는 경우와 구분).
   const isBatch = liveQueue.some(function (p) { return ((p && p.batchTotal) || 1) > 1; });
   if (liveQueue.length >= (isBatch ? LIVE_BATCH_BURST : LIVE_BURST)) {
-    liveQueue.length = 0;
-    showLiveGrid();
-    return;
+    // 사진은 그리드로 바로 보내지만, 영상은 건너뛰지 않고 차례로 재생한다.
+    liveQueue = liveQueue.filter(function (p) { return p && p.video; });
+    if (!liveQueue.length) { showLiveGrid(); return; }
   }
   const next = liveQueue.shift();
   if (!next) { showLiveGrid(); return; }
@@ -730,7 +738,7 @@ function liveOn() {
   if (liveCornerTimer) { clearTimeout(liveCornerTimer); liveCornerTimer = null; }
 }
 
-function livePhotoEl(photo, extraClass) {
+function livePhotoEl(photo, extraClass, playVideo) {
   // hostBaseUrl 은 connectToHost() 에서 설정되지만, 그에 의존하지 않도록 origin 으로 폴백
   const base = hostBaseUrl || location.origin || '';
   const url = /^https?:\/\//i.test(photo.url) ? photo.url : base + photo.url;
@@ -747,6 +755,18 @@ function livePhotoEl(photo, extraClass) {
   liveDelivery.bind(img, photo);
   img.src = url;
   box.appendChild(img);
+
+  // 영상은 히어로(전체 화면)에서만 재생한다. 표시 확인은 아래 대표 장면 이미지가 맡는다.
+  if (photo.video && playVideo) {
+    const video = document.createElement('video');
+    video.src = /^https?:\/\//i.test(photo.video) ? photo.video : base + photo.video;
+    video.playsInline = true;
+    video.muted = photo.muted !== false;
+    box.appendChild(video);
+    box.liveVideo = video;
+  } else if (photo.video) {
+    box.classList.add('isvideo');
+  }
 
   if (photo.message) {
     const cap = document.createElement('div');
@@ -765,7 +785,8 @@ function showLiveHero(photo, ms) {
   hero.innerHTML = '';
   hero.dataset.photoId = photo.id || '';
   hero.classList.remove('in', 'out');
-  hero.appendChild(livePhotoEl(photo));
+  const box = livePhotoEl(photo, '', true);
+  hero.appendChild(box);
 
   // 셔터 플래시
   const flash = liveEl('live-flash');
@@ -776,14 +797,39 @@ function showLiveHero(photo, ms) {
   requestAnimationFrame(function () { requestAnimationFrame(function () { hero.classList.add('in'); }); });
 
   clearTimeout(liveHeroTimer);
-  liveHeroFullMs = Math.max(LIVE_HERO_MIN_MS, ms || LIVE_DEFAULTS.heroMs);
   liveHeroStartedAt = Date.now();
+  const video = box.liveVideo;
+  liveHeroVideo = !!video;
+  if (video) {
+    // 영상은 영상 길이만큼 재생한다. 끝나면 다음으로 넘어가고, 그때부터 복귀 시간을 다시 센다.
+    const finish = function () {
+      if (liveState !== 'hero' || liveEl('live-hero').dataset.photoId !== (photo.id || '')) return;
+      clearTimeout(liveHeroTimer);
+      liveHeroVideo = false;
+      armLiveReturn();
+      heroDone();
+    };
+    video.onended = finish;
+    // 재생할 수 없으면 대표 장면을 사진처럼 보여 주고 넘어간다.
+    video.onerror = function () { clearTimeout(liveHeroTimer); liveHeroTimer = setTimeout(finish, liveSettings.heroMs || LIVE_DEFAULTS.heroMs); };
+    liveHeroFullMs = (photo.durationMs || 180000) + 5000;
+    liveHeroTimer = setTimeout(finish, liveHeroFullMs);
+    // 소리와 함께 자동 재생이 막힌 브라우저에서는 소리 없이 재생한다.
+    video.play().catch(function () { video.muted = true; video.play().catch(function () {}); });
+    return;
+  }
+  liveHeroFullMs = Math.max(LIVE_HERO_MIN_MS, ms || LIVE_DEFAULTS.heroMs);
   liveHeroTimer = setTimeout(heroDone, liveHeroFullMs);
+}
+
+function stopHeroVideo() {
+  liveHeroVideo = false;
+  liveEl('live-hero').querySelectorAll('video').forEach(function (v) { v.onended = v.onerror = null; v.pause(); });
 }
 
 // 히어로 중 새 사진이 도착하면 현재 히어로를 '대기 있을 때' 시간으로 줄인다
 function shortenHero() {
-  if (liveState !== 'hero') return;
+  if (liveState !== 'hero' || liveHeroVideo) return;   // 영상은 줄이지 않는다
   const busy = Math.max(LIVE_HERO_MIN_MS, liveSettings.heroBusyMs || LIVE_DEFAULTS.heroBusyMs);
   const elapsed = Date.now() - liveHeroStartedAt;
   const target = Math.max(600, busy - elapsed);
@@ -800,6 +846,7 @@ function heroDone() {
 
 function showLiveGrid() {
   if (!liveSlots.length) { endLive(); return; }
+  stopHeroVideo();
   liveState = 'grid';
   liveOn();
 
@@ -839,6 +886,8 @@ function armLiveReturn() {
 
 // 편성표로 복귀 — 뚝 끊지 않고 코너에 잠시 축소되어 남는다
 function toLiveCorner() {
+  // 영상이 재생 중이면 끝날 때까지 편성표로 돌아가지 않는다.
+  if (liveState === 'hero' && liveHeroVideo) { liveReturnTimer = setTimeout(toLiveCorner, 2000); return; }
   const cornerMs = liveSettings.cornerMs;
   if (!cornerMs || cornerMs <= 0) { endLive(); return; }
   if (liveState === 'hero') {
@@ -852,6 +901,7 @@ function toLiveCorner() {
 
 function endLive() {
   liveDelivery.clear();
+  stopHeroVideo();
   clearTimeout(liveHeroTimer);
   clearTimeout(liveReturnTimer);
   clearTimeout(liveCornerTimer);

@@ -102,7 +102,7 @@ function mountPhotoRoutes(app, archive, removeFromScreen) {
     } catch { session.saving = false; res.status(400).json({ error: '선택한 폴더의 접근·편집 권한을 확인하지 못했습니다. 폴더 선택을 다시 시도해 주세요.' }); }
   });
   app.get('/api/photos/:id/image', (req, res, next) => {
-    archive.image(req.params.id, res, req.query.download === '1').catch(next);
+    archive.image(req.params.id, res, req.query.download === '1', String(req.headers.range || '')).catch(next);
   });
   app.delete('/api/photos/:id', (req, res) => {
     if (!archive.markDelete(req.params.id)) return res.status(404).json({ error: '사진을 찾을 수 없습니다.' });
