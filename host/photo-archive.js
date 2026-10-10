@@ -78,8 +78,17 @@ class PhotoArchive {
     this.error = '';
     this.folder = null;
     this.lastSync = 0;
+    this.catalogFile = path.join(this.root, 'folder-catalog.json');
+    this.folderCatalog = { rootId: this.folderId, checkedAt: 0, years: [] };
+    try {
+      const cached = JSON.parse(fs.readFileSync(this.catalogFile, 'utf8'));
+      if (cached.rootId === this.folderId && Number.isFinite(cached.checkedAt) && Array.isArray(cached.years) && cached.years.every(group =>
+        /^[\w-]{1,128}$/.test(group.id) && /^(19|20|21)\d{2}$/.test(group.year) && Array.isArray(group.events) && group.events.every(event =>
+          /^[\w-]{1,128}$/.test(event.id) && typeof event.name === 'string'))) this.folderCatalog = cached;
+    } catch { /* A first sync rebuilds a missing or damaged browsing snapshot. */ }
     this.tail = Promise.resolve();
     this.folders = new (require('./drive-folders').DriveFolders)(this);
+    this.folderBrowser = new (require('./photo-folder-catalog').PhotoFolderCatalog)(this);
     this.oauthFile = path.join(this.root, 'google-oauth.json');
     this.clientId = process.env.GOOGLE_PHOTO_OAUTH_CLIENT_ID || '';
     this.clientSecret = process.env.GOOGLE_PHOTO_OAUTH_CLIENT_SECRET || '';
@@ -91,6 +100,10 @@ class PhotoArchive {
   save(record) {
     atomicJSON(path.join(this.entries, record.id + '.json'), record);
     this.records.set(record.id, record);
+  }
+
+  saveFolderCatalog(catalog) {
+    atomicJSON(this.catalogFile, catalog); this.folderCatalog = catalog;
   }
 
   localPath(record) {
@@ -238,15 +251,55 @@ class PhotoArchive {
       error: this.error || this.syncError || '', counts, lastSync: this.lastSync || null };
   }
 
-  list({ date = '', offset = 0, limit = 40 } = {}) {
-    const rows = [...this.records.values()].filter(r => !['deleted', 'missing'].includes(r.status))
+  list({ date = '', year = '', yearId = '', eventId = '', scope = '', kind = '', offset = 0, limit = 40 } = {}) {
+    const inventory = [...this.records.values()].filter(r => !['deleted', 'missing'].includes(r.status));
+    // The navigation comes from actual Drive folders, including empty folders.
+    // Counts come from the full inventory, independently of date/type/page filters.
+    const years = this.folderCatalog.years.map(group => ({ ...group, total: 0,
+      events: group.events.map(event => ({ ...event, total: 0, photos: 0, videos: 0 })) }));
+    const byYear = new Map(years.map(group => [group.id, group]));
+    const byEvent = new Map();
+    for (const group of years) for (const event of group.events) byEvent.set(event.id, { group, event });
+    const groupFor = r => {
+      if (!r.target || r.status === 'awaiting_target') return null;
+      if (byEvent.has(r.target.eventId)) return byEvent.get(r.target.eventId).group;
+      if (byYear.has(r.target.yearId)) return byYear.get(r.target.yearId);
+      if (r.target.yearId) return null; // An explicitly selected missing year must not bind to a namesake.
+      // New folders may still be waiting for creation. Never guess between duplicate years.
+      const matches = years.filter(group => group.year === String(r.target.year || ''));
+      return matches.length === 1 ? matches[0] : null;
+    };
+    const isVideo = r => String(r.mimeType || '').startsWith('video/');
+    let rootTotal = 0, awaitingTotal = 0;
+    for (const r of inventory) {
+      if (r.status === 'awaiting_target') { awaitingTotal++; continue; }
+      if (!r.target) { rootTotal++; continue; }
+      const group = groupFor(r); if (group) group.total++;
+      const event = byEvent.get(r.target.eventId)?.event;
+      if (event) { event.total++; if (isVideo(r)) event.videos++; else event.photos++; }
+    }
+    const folders = {
+      years: years.sort((a, b) => b.year.localeCompare(a.year) || a.id.localeCompare(b.id)).map(group => ({
+        ...group, events: group.events.sort((a, b) => b.name.localeCompare(a.name, 'ko', { numeric: true }) || a.id.localeCompare(b.id))
+      })), rootTotal, awaitingTotal, checkedAt: this.folderCatalog.checkedAt, error: this.folderError || '', refreshing: !!this.folderBrowser.pending
+    };
+    const rows = inventory
+      .filter(r => !scope || (scope === 'root' ? !r.target && r.status !== 'awaiting_target' : r.status === 'awaiting_target'))
+      .filter(r => !year || (r.status !== 'awaiting_target' && (groupFor(r)?.year || String(r.target?.year || '')) === year))
+      .filter(r => !yearId || groupFor(r)?.id === yearId)
+      .filter(r => !eventId || (r.status !== 'awaiting_target' && r.target?.eventId === eventId))
+      .filter(r => !kind || (kind === 'video' ? isVideo(r) : !isVideo(r)))
       .filter(r => !date || new Date(r.ts + 9 * 3600000).toISOString().slice(0, 10) === date)
       .sort((a, b) => b.ts - a.ts || a.id.localeCompare(b.id));
-    return { total: rows.length, photos: rows.slice(offset, offset + limit).map(r => ({
-      id: r.id, message: r.message, ts: r.ts, siteName: r.siteName, name: r.name,
-      year: r.target?.year, eventName: r.target?.eventName, uploaderName: r.uploaderName, capturedAt: r.capturedAt,
-      status: r.status, error: r.error || '', video: String(r.mimeType || '').startsWith('video/'), url: '/api/photos/' + encodeURIComponent(r.id) + '/image'
-    })) };
+    const videos = rows.filter(isVideo).length;
+    return { total: rows.length, counts: { photos: rows.length - videos, videos }, folders, photos: rows.slice(offset, offset + limit).map(r => {
+      const group = groupFor(r), event = byEvent.get(r.target?.eventId)?.event;
+      return {
+        id: r.id, message: r.message, ts: r.ts, siteName: r.siteName, name: r.name,
+        year: group?.year || r.target?.year, yearId: group?.id || r.target?.yearId, eventId: r.target?.eventId, eventName: event?.name || r.target?.eventName, uploaderName: r.uploaderName, capturedAt: r.capturedAt,
+        status: r.status, error: r.error || '', video: String(r.mimeType || '').startsWith('video/'), url: '/api/photos/' + encodeURIComponent(r.id) + '/image'
+      };
+    }) };
   }
 
   get(id) {
@@ -322,12 +375,12 @@ class PhotoArchive {
     if (file) fs.unlinkSync(file);
   }
 
-  async importFiles() {
+  async importFiles({ refreshFolders = true } = {}) {
+    const catalog = await this.folderBrowser.get({ force: refreshFolders, wait: true });
     const inventoryFolders = new Map([[this.folderId, null]]);
-    const years = (await this.folders.children(this.folderId)).filter(f => f.mimeType === 'application/vnd.google-apps.folder' && /^(19|20|21)\d{2}$/.test(f.name));
-    for (const year of years) {
-      for (const event of await this.folders.children(year.id)) {
-        if (event.mimeType === 'application/vnd.google-apps.folder') inventoryFolders.set(event.id, { year: year.name, yearId: year.id, eventId: event.id, eventName: event.name, folderName: event.name });
+    for (const year of catalog.years) {
+      for (const event of year.events) {
+        inventoryFolders.set(event.id, { year: year.year, yearId: year.id, eventId: event.id, eventName: event.name, folderName: event.name });
       }
     }
     const files = [];
@@ -347,9 +400,18 @@ class PhotoArchive {
     for (const f of files) {
       seen.add(f.id);
       const existing = byDrive.get(f.id);
+      const folderId = f.parents?.find(parent => inventoryFolders.has(parent)) || this.folderId;
+      const target = inventoryFolders.get(folderId);
       if (existing) {
         // Local deletion tombstones win over eventual-consistency list results.
-        if (existing.status === 'missing') { existing.status = 'saved'; this.save(existing); }
+        // Also keep deletion's original parent binding: a moved file must not be trashed.
+        if (['saved', 'missing'].includes(existing.status)) {
+          const updated = { status: 'saved', folderId, rootId: this.folderId, target, targetResolved: !!target,
+            name: f.name, mimeType: f.mimeType };
+          if (Object.entries(updated).some(([key, value]) => JSON.stringify(existing[key]) !== JSON.stringify(value))) {
+            Object.assign(existing, updated); this.save(existing);
+          }
+        }
         continue;
       }
       let meta = {};
@@ -363,8 +425,6 @@ class PhotoArchive {
       const id = candidate && /^[\w-]{1,128}$/.test(candidate) && !this.records.has(candidate) ? candidate : 'drive_' + f.id;
       if (this.records.has(id)) continue;
       const ts = Number(meta.ts) || Date.parse(f.createdTime);
-      const folderId = f.parents?.find(parent => inventoryFolders.has(parent)) || this.folderId;
-      const target = inventoryFolders.get(folderId);
       const r = { id, driveId: f.id, folderId, rootId: this.folderId, target, targetResolved: !!target, name: f.name, mimeType: f.mimeType,
         capturedAt: Number(meta.capturedAt) || null, dateSource: String(meta.dateSource || ''), uploaderName: String(meta.uploaderName || '').slice(0, 20), originalName: String(meta.originalName || '').slice(0, 255),
         message: String(meta.message ?? f.description ?? '').slice(0, 2000),
@@ -400,7 +460,7 @@ class PhotoArchive {
         }
       }
       if (this.ready && this.drive && (force || Date.now() - this.lastSync > 180000)) {
-        try { await this.importFiles(); this.syncError = ''; }
+        try { await this.importFiles({ refreshFolders: force }); this.syncError = ''; }
         catch (e) { this.syncError = errorText(e); }
       }
     }).finally(() => { this.cycling = null; });
@@ -408,6 +468,7 @@ class PhotoArchive {
   }
 
   start() {
+    this.folderBrowser.get().catch(() => {});
     const tick = () => this.cycle().catch(() => { this.error = '서버 보관 상태를 확인해 주세요.'; });
     tick(); this.timer = setInterval(tick, 30000); this.timer.unref();
   }

@@ -16,11 +16,25 @@ function mountPhotoRoutes(app, archive, removeFromScreen) {
     next();
   });
   app.get('/api/photos/status', (req, res) => res.json(archive.status()));
+  app.get('/api/photos/folders', async (req, res) => {
+    try {
+      await archive.folderBrowser.get({ force: req.query.refresh === '1' });
+      res.json(archive.list({ limit: 0 }).folders);
+    } catch {
+      // Photo browsing remains available even when the separate Drive read fails.
+      res.json(archive.list({ limit: 0 }).folders);
+    }
+  });
   app.get('/api/photos', (req, res) => {
     const date = String(req.query.date || '');
     if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: '날짜를 확인해 주세요.' });
+    const year = String(req.query.year || ''), yearId = String(req.query.yearId || ''), eventId = String(req.query.eventId || '');
+    const scope = String(req.query.scope || ''), kind = String(req.query.kind || '');
+    if ((year && !/^(19|20|21)\d{2}$/.test(year)) || (yearId && !/^[\w-]{1,128}$/.test(yearId)) || (eventId && !/^[\w-]{1,128}$/.test(eventId)) ||
+      !['', 'root', 'awaiting_target'].includes(scope) || !['', 'photo', 'video'].includes(kind) ||
+      (scope && (year || yearId || eventId)) || ((yearId || eventId) && !year)) return res.status(400).json({ error: '연도·행사·종류 필터를 확인해 주세요.' });
     const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
-    res.json({ ...archive.list({ date, offset }), status: archive.status() });
+    res.json({ ...archive.list({ date, year, yearId, eventId, scope, kind, offset }), status: archive.status() });
   });
   app.post('/api/photos/sync', (req, res) => {
     archive.cycle(true).catch(() => {});

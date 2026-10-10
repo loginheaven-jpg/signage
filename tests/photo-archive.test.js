@@ -7,6 +7,7 @@ const { randomUUID } = require('node:crypto');
 const { Readable } = require('node:stream');
 const http = require('node:http');
 const { PhotoArchive, META_PREFIX, PHOTO_SCOPE, connectReason, nameLabel } = require('../host/photo-archive');
+const { fixture: folderFixture } = require('./helpers/camera-fixture');
 
 function fixture(t, { shared = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'signage-archive-test-'));
@@ -48,6 +49,98 @@ function fixture(t, { shared = true } = {}) {
   }
   return { root, archive, drive, remote, calls, add };
 }
+
+test('library filters the whole inventory before pagination and separates same-name event folders', t => {
+  const { archive } = fixture(t);
+  const stamp = Date.parse('2026-10-10T16:30:00Z'); // Registered in 2026, stored in a 2025 folder.
+  const add = (id, extra = {}) => archive.records.set(id, {
+    id, ts: stamp, status: 'saved', mimeType: 'image/jpeg', name: id + '.jpg', ...extra
+  });
+  const first = { year: '2025', yearId: 'year-2025', eventId: 'event-a', eventName: '가을소풍' };
+  const second = { ...first, eventId: 'event-b' };
+  for (let i = 0; i < 45; i++) add('photo-' + i, { target: first });
+  add('video-a', { target: first, mimeType: 'video/mp4' });
+  add('photo-b', { target: second });
+  add('current', { target: { year: '2026', eventId: 'event-current', eventName: '감사예배' } });
+  add('root-photo'); add('root-video', { mimeType: 'video/webm' });
+  add('awaiting', { status: 'awaiting_target' });
+  add('pending-new', { status: 'pending', target: { year: '2027', eventName: '새 행사' } });
+  add('deleted', { status: 'deleted', target: first }); add('missing', { status: 'missing', target: first });
+  archive.folderCatalog = { rootId: 'folder', checkedAt: 1, years: [
+    { id: 'year-2027', year: '2027', events: [] },
+    { id: 'year-2026', year: '2026', events: [{ id: 'event-current', name: '감사예배' }] },
+    { id: 'year-2025', year: '2025', events: [{ id: 'event-a', name: '가을소풍' }, { id: 'event-b', name: '가을소풍' }] }
+  ] };
+
+  const page = archive.list({ year: '2025', eventId: 'event-a', kind: 'photo', offset: 40 });
+  assert.equal(page.total, 45); assert.equal(page.photos.length, 5);
+  assert.ok(page.photos.every(photo => photo.eventId === 'event-a' && !photo.video));
+  assert.deepEqual(page.counts, { photos: 45, videos: 0 });
+  assert.deepEqual(page.folders.years.map(group => group.year), ['2027', '2026', '2025']);
+  assert.deepEqual(page.folders.years[2].events.map(event => [event.id, event.total]), [['event-a', 46], ['event-b', 1]]);
+  assert.equal(page.folders.rootTotal, 2); assert.equal(page.folders.awaitingTotal, 1);
+  assert.equal(archive.list({ year: '2025', eventId: 'event-b' }).total, 1);
+  assert.deepEqual(archive.list({ year: '2025', kind: 'video' }).counts, { photos: 0, videos: 1 });
+  assert.equal(archive.list({ scope: 'root' }).total, 2);
+  assert.deepEqual(archive.list({ scope: 'awaiting_target' }).photos.map(photo => photo.id), ['awaiting']);
+  assert.equal(archive.list({ year: '2027' }).total, 1, 'unresolved new targets remain visible under their year');
+  assert.equal(archive.list({ year: '2025', date: '2026-10-11' }).total, 47, 'folder year is independent of registration date');
+  const empty = archive.list({ year: '2025', eventId: 'gone-event', date: '2026-01-01' });
+  assert.equal(empty.total, 0);
+  assert.deepEqual(empty.folders, page.folders, 'empty results do not erase folder navigation');
+  add('orphan-target', { status: 'pending', target: { year: '2025', yearId: 'removed-year', eventName: '미생성 행사' } });
+  assert.equal(archive.list({ year: '2025', yearId: 'year-2025' }).total, 47, 'a removed explicit year is never rebound by name');
+});
+
+test('actual Drive folders include empty folders, survive restart, and synchronize renames and moves without reviving deletions', async t => {
+  const f = folderFixture(t);
+  f.folder('year-2026', '2026', 'root'); f.folder('year-copy', '2026', 'root'); f.folder('year-empty', '2024', 'root');
+  f.folder('event-a', '가을소풍', 'year-2026'); f.folder('event-b', '가을소풍', 'year-copy');
+  f.folder('event-empty', '빈 행사', 'year-2026');
+  f.remote.set('remote-photo', { id: 'remote-photo', name: 'photo.jpg', mimeType: 'image/jpeg', parents: ['event-a'], createdTime: '2026-10-10T03:00:00Z', bytes: Buffer.from('photo') });
+  await f.archive.importFiles();
+  const r = f.archive.get('drive_remote-photo');
+  const folders = f.archive.list().folders;
+  assert.equal(folders.years.length, 3);
+  assert.equal(folders.years.find(group => group.id === 'year-empty').total, 0);
+  assert.equal(folders.years.find(group => group.id === 'year-2026').events.find(event => event.id === 'event-empty').total, 0);
+  assert.equal(f.archive.list({ year: '2026', yearId: 'year-copy' }).total, 0, 'duplicate year folders are independent');
+  const restored = new PhotoArchive({ dataDir: f.root, folderId: 'root', drive: f.drive, authMode: 'oauth' });
+  assert.deepEqual(restored.list().folders, folders, 'the real folder snapshot persists independently of photo records');
+  const otherRoot = new PhotoArchive({ dataDir: f.root, folderId: 'other-root', drive: f.drive });
+  assert.equal(otherRoot.list().folders.years.length, 0, 'a cached catalog is never reused for a different root');
+
+  f.remote.get('year-2026').name = '2027';
+  f.remote.get('event-a').name = '새 소풍 이름';
+  await f.archive.importFiles();
+  assert.equal(r.target.year, '2027'); assert.equal(r.target.eventName, '새 소풍 이름');
+  assert.equal(f.archive.list({ year: '2027', yearId: 'year-2026', eventId: 'event-a' }).total, 1);
+  f.remote.get('remote-photo').parents = ['event-b'];
+  await f.archive.importFiles();
+  assert.equal(r.target.yearId, 'year-copy'); assert.equal(r.target.eventId, 'event-b');
+  assert.equal(f.archive.list({ year: '2027', eventId: 'event-a' }).total, 0);
+  assert.equal(f.archive.list({ year: '2026', yearId: 'year-copy', eventId: 'event-b' }).total, 1);
+  f.remote.get('remote-photo').parents = ['root'];
+  await f.archive.importFiles(); assert.equal(r.target, null); assert.equal(f.archive.list({ scope: 'root' }).total, 1);
+  f.remote.get('remote-photo').parents = ['outside'];
+  await f.archive.importFiles(); assert.equal(f.archive.get(r.id), null);
+  f.remote.get('remote-photo').parents = ['event-a'];
+  await f.archive.importFiles(); assert.equal(f.archive.get(r.id).target.eventName, '새 소풍 이름');
+
+  const lastCatalog = structuredClone(f.archive.folderCatalog);
+  const children = f.archive.folders.children.bind(f.archive.folders);
+  f.archive.folders.children = async parent => { if (parent === 'year-copy') throw new Error('folder list failed'); return children(parent); };
+  await assert.rejects(f.archive.importFiles());
+  assert.deepEqual(f.archive.folderCatalog, lastCatalog, 'partial listings never replace the last successful snapshot');
+  f.archive.folders.children = children;
+  f.archive.markDelete(r.id);
+  f.remote.get('remote-photo').parents = ['event-b'];
+  await f.archive.importFiles();
+  assert.equal(r.status, 'deleting'); assert.equal(r.folderId, 'event-a', 'a pending deletion keeps its original parent guard');
+  await assert.rejects(f.archive.trash(r)); assert.equal(f.remote.get('remote-photo').trashed, undefined);
+  r.status = 'deleted'; f.archive.save(r);
+  await f.archive.importFiles(); assert.equal(r.status, 'deleted', 'Drive inventory cannot resurrect a local deletion tombstone');
+});
 
 test('hung OAuth token refresh times out and a subsequent refresh can succeed', async t => {
   const { archive } = fixture(t);

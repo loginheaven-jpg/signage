@@ -3,6 +3,27 @@ const assert = require('node:assert/strict');
 const express = require('../host/node_modules/express');
 const { mountPhotoRoutes } = require('../host/photo-routes');
 
+test('library API validates folder/type filters and passes the complete selection to the archive', async t => {
+  const app = express(), calls = [];
+  const archive = {
+    status: () => ({ ready: true }),
+    list: filters => { calls.push(filters); return { total: 0, photos: [], counts: { photos: 0, videos: 0 }, folders: { years: [], rootTotal: 0, awaitingTotal: 0 } }; }
+  };
+  mountPhotoRoutes(app, archive, () => {});
+  const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = 'http://127.0.0.1:' + server.address().port + '/api/photos';
+  const response = await fetch(base + '?year=2025&yearId=year-2025&eventId=event-a&kind=video&date=2026-10-11&offset=40');
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls[0], { year: '2025', yearId: 'year-2025', eventId: 'event-a', kind: 'video', date: '2026-10-11', scope: '', offset: 40 });
+  assert.deepEqual((await response.json()).counts, { photos: 0, videos: 0 });
+  assert.equal((await fetch(base + '?scope=root&kind=photo')).status, 200);
+  for (const query of ['year=202', 'year=2026&yearId=bad/id', 'yearId=year-2025', 'year=2026&eventId=bad/id', 'eventId=event-a', 'scope=root&year=2026', 'scope=outside', 'kind=audio']) {
+    assert.equal((await fetch(base + '?' + query)).status, 400, query);
+  }
+  assert.equal(calls.length, 2, 'invalid inputs never reach the inventory');
+});
+
 test('photo APIs inherit administrator authentication; OAuth binds state to browser and consumes it once', async t => {
   const app = express();
   app.use(express.json());
@@ -22,6 +43,7 @@ test('photo APIs inherit administrator authentication; OAuth binds state to brow
   t.after(() => new Promise(resolve => server.close(resolve)));
   const base = 'http://127.0.0.1:' + server.address().port;
   assert.equal((await fetch(base + '/api/photos/status')).status, 401);
+  assert.equal((await fetch(base + '/api/photos/folders')).status, 401);
   const headers = { authorization: 'Basic test' };
   const start = await fetch(base + '/api/photos/oauth/start?picker=1', { headers, redirect: 'manual' });
   assert.equal(start.status, 302);

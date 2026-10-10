@@ -5,6 +5,153 @@ let requestSequence = 0;
 let toastTimer;
 let lastGridSignature = '';
 let connectionFailure = '';
+const filterStorageKey = 'signage.photos.filters.v1';
+const emptyFilters = () => ({ year: '', yearId: '', eventId: '', eventName: '', scope: '', kind: '', date: '' });
+let filters = emptyFilters();
+let folders = { years: [], rootTotal: 0, awaitingTotal: 0 };
+let folderRequestSequence = 0, folderPollTimer, folderController;
+function acceptFolders(incoming) {
+  if ((incoming.checkedAt || 0) < (folders.checkedAt || 0)) return;
+  folders = incoming;
+}
+async function loadFolders(force = false) {
+  const seq = ++folderRequestSequence;
+  clearTimeout(folderPollTimer); folderController?.abort();
+  const controller = new AbortController(); folderController = controller;
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const data = await api('/api/photos/folders' + (force ? '?refresh=1' : ''), { signal: controller.signal });
+    if (seq !== folderRequestSequence) return;
+    const previousSelection = folderSelectionKey(), previousCheckedAt = folders.checkedAt || 0;
+    acceptFolders(data); reconcileFolderSelection(); renderFolderFilters(); rememberFilters();
+    // The first folder-only read can complete while the much larger media sync is still running.
+    if (previousSelection !== folderSelectionKey() || (data.checkedAt || 0) > previousCheckedAt) await load();
+    if (data.refreshing) folderPollTimer = setTimeout(() => loadFolders(), 1000);
+  } catch (e) {
+    if (seq !== folderRequestSequence) return;
+    folders = { ...folders, refreshing: false, error: controller.signal.aborted ? '폴더 조회 시간이 초과되었습니다.' : e.message };
+    renderFolderFilters();
+  } finally { clearTimeout(timeout); }
+}
+try {
+  const saved = JSON.parse(localStorage.getItem(filterStorageKey));
+  if (saved && typeof saved === 'object') {
+    if (/^(19|20|21)\d{2}$/.test(saved.year)) filters.year = saved.year;
+    if (filters.year && typeof saved.yearId === 'string' && /^[\w-]{1,128}$/.test(saved.yearId)) filters.yearId = saved.yearId;
+    if (['root', 'awaiting_target'].includes(saved.scope)) { filters.scope = saved.scope; filters.year = ''; filters.yearId = ''; }
+    if (filters.year && typeof saved.eventId === 'string' && /^[\w-]{1,128}$/.test(saved.eventId)) {
+      filters.eventId = saved.eventId; filters.eventName = typeof saved.eventName === 'string' ? saved.eventName : '';
+    }
+    if (['photo', 'video'].includes(saved.kind)) filters.kind = saved.kind;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(saved.date)) filters.date = saved.date;
+  }
+} catch { /* Browsing still works when local storage is unavailable. */ }
+function rememberFilters() {
+  try { localStorage.setItem(filterStorageKey, JSON.stringify(filters)); } catch { /* Optional preference. */ }
+}
+function changeFilters(changes) {
+  filters = { ...filters, ...changes }; offset = 0;
+  rememberFilters(); renderFolderFilters(); load();
+}
+function selectedYear() {
+  if (filters.yearId) return folders.years.find(group => group.id === filters.yearId);
+  const matches = folders.years.filter(group => group.year === filters.year);
+  return matches.length === 1 ? matches[0] : null;
+}
+function reconcileFolderSelection() {
+  const group = (filters.eventId && folders.years.find(group => group.events.some(event => event.id === filters.eventId))) || selectedYear();
+  if (group) { filters.year = group.year; filters.yearId = group.id; }
+}
+function folderSelectionKey() { return JSON.stringify([filters.year, filters.yearId, filters.eventId]); }
+function eventLabels(events) {
+  const totals = new Map(), seen = new Map();
+  for (const event of events) totals.set(event.name, (totals.get(event.name) || 0) + 1);
+  return new Map(events.map(event => {
+    seen.set(event.name, (seen.get(event.name) || 0) + 1);
+    return [event.id, event.name + (totals.get(event.name) > 1 ? ' (동명 폴더 ' + seen.get(event.name) + ')' : '')];
+  }));
+}
+function renderFolderFilters() {
+  const options = [new Option('전체 연도', '')];
+  const yearNames = eventLabels(folders.years.map(group => ({ id: group.id, name: group.year + '년' })));
+  for (const group of folders.years) options.push(new Option(yearNames.get(group.id) + ' · ' + group.total + '개', group.id));
+  if (filters.year && !selectedYear()) options.push(new Option(filters.year + '년 · 폴더 확인 필요', filters.yearId || '__year_' + filters.year));
+  options.push(new Option('루트 폴더 자료 · ' + folders.rootTotal + '개', '__root__'));
+  options.push(new Option('저장 위치 지정 필요 · ' + folders.awaitingTotal + '개', '__awaiting__'));
+  const value = filters.scope === 'root' ? '__root__' : filters.scope === 'awaiting_target' ? '__awaiting__' : filters.yearId || (filters.year ? '__year_' + filters.year : '');
+  // Keep the focused native select intact during background refreshes.
+  const signature = JSON.stringify(options.map(option => [option.value, option.text]));
+  if ($('year').dataset.signature !== signature) { $('year').replaceChildren(...options); $('year').dataset.signature = signature; }
+  $('year').value = value;
+  const events = selectedYear()?.events || [], labels = eventLabels(events);
+  const selected = events.find(event => event.id === filters.eventId);
+  if (selected) { filters.eventName = labels.get(selected.id); rememberFilters(); }
+  $('chooseEvent').disabled = !filters.year;
+  $('eventChoiceText').textContent = !filters.year ? '연도를 먼저 선택하세요' : filters.eventId ? (filters.eventName || '선택한 행사') + (selected ? '' : ' · 폴더 확인 필요') : '전체 행사';
+  document.querySelectorAll('[data-kind]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.kind === filters.kind)));
+  $('date').value = filters.date;
+  $('dateSummary').textContent = filters.date ? '등록 날짜: ' + filters.date : '등록 날짜로 더 좁히기';
+  if (filters.date) $('dateFilters').open = true;
+  const path = $('folderPath'); path.replaceChildren();
+  const addCrumb = (label, changes) => {
+    if (path.childElementCount) path.append(node('span', 'separator', '›'));
+    const crumb = node(changes ? 'button' : 'span', '', label);
+    if (changes) crumb.addEventListener('click', () => changeFilters(changes));
+    path.append(crumb);
+  };
+  addCrumb('사진 보관함', filters.year || filters.scope ? { year: '', yearId: '', eventId: '', eventName: '', scope: '' } : null);
+  if (filters.scope) addCrumb(filters.scope === 'root' ? '루트 폴더 자료' : '저장 위치 지정 필요');
+  else if (filters.year) {
+    addCrumb(yearNames.get(filters.yearId)?.replace('년', '') || filters.year, filters.eventId ? { eventId: '', eventName: '' } : null);
+    addCrumb(filters.eventId ? filters.eventName || '선택한 행사' : '전체 행사');
+  } else addCrumb('전체 연도');
+  $('folderSearch').placeholder = filters.year ? filters.year + '년 행사명 검색 (예: 소풍)' : '전체 연도에서 행사명 검색 (예: 소풍)';
+  $('folderNotice').hidden = !!folders.checkedAt && !folders.error && !folders.refreshing;
+  $('folderNotice').textContent = folders.error ? '폴더 목록을 갱신하지 못했습니다. ' + (folders.checkedAt ? '마지막으로 확인한 목록을 표시합니다. ' : '') + '새로고침으로 다시 확인해 주세요.' : folders.refreshing || !folders.checkedAt ? (folders.checkedAt ? '최근 폴더 목록을 표시하고 있습니다. 최신 목록을 확인 중입니다.' : 'Drive 폴더 목록을 불러오는 중입니다. 사진 목록은 먼저 볼 수 있습니다.') : '';
+  renderFolderSearch();
+}
+function renderFolderSearch() {
+  const query = $('folderSearch').value.normalize('NFC').trim().toLocaleLowerCase('ko');
+  $('folderSearchResults').hidden = !query;
+  if (!query) return;
+  const matches = [];
+  const yearNames = eventLabels(folders.years.map(group => ({ id: group.id, name: group.year })));
+  for (const group of folders.years) {
+    if (filters.yearId ? group.id !== filters.yearId : filters.year && group.year !== filters.year) continue;
+    const labels = eventLabels(group.events);
+    for (const event of group.events) if (event.name.normalize('NFC').toLocaleLowerCase('ko').includes(query)) matches.push({ group, event, label: labels.get(event.id) });
+  }
+  $('folderSearchSummary').textContent = (filters.year ? filters.year + '년' : '전체 연도') + ' · 행사폴더 ' + matches.length + '개';
+  const list = $('folderSearchList'); list.replaceChildren();
+  for (const { group, event, label } of matches) {
+    const button = node('button', 'folder-result'); button.dataset.folderId = event.id;
+    button.append(node('span', 'folder-result-path', yearNames.get(group.id) + ' › ' + label),
+      node('span', 'folder-count', `사진 ${event.photos}장 · 영상 ${event.videos}개`));
+    button.addEventListener('click', () => {
+      $('folderSearch').value = '';
+      changeFilters({ year: group.year, yearId: group.id, eventId: event.id, eventName: label, scope: '' });
+      $('chooseEvent').focus();
+    });
+    list.append(button);
+  }
+  if (!matches.length) list.append(node('p', 'event-empty', folders.checkedAt ? '검색한 행사폴더가 없습니다. 연도 선택이나 검색어를 확인해 주세요.' : 'Drive 폴더 목록을 확인한 후 검색할 수 있습니다.'));
+}
+function renderEvents() {
+  const events = selectedYear()?.events || [], labels = eventLabels(events);
+  const query = $('eventSearch').value.normalize('NFC').trim().toLocaleLowerCase('ko');
+  const list = $('eventList'); list.replaceChildren();
+  const option = (id, name, total) => {
+    const button = node('button', 'event-option'); button.dataset.eventId = id;
+    button.setAttribute('aria-pressed', String(filters.eventId === id));
+    button.append(node('span', '', name), node('span', 'folder-count', total + '개'));
+    button.addEventListener('click', () => { $('eventDialog').close(); changeFilters({ eventId: id, eventName: id ? name : '' }); });
+    list.append(button);
+  };
+  option('', '전체 행사', selectedYear()?.total || 0);
+  const matches = events.filter(event => event.name.normalize('NFC').toLocaleLowerCase('ko').includes(query));
+  for (const event of matches) option(event.id, labels.get(event.id), event.total);
+  if (!matches.length) list.append(node('p', 'event-empty', query ? '검색한 행사가 없습니다.' : '이 연도에 행사폴더가 없습니다.'));
+}
 // 서버가 알려 주는 연결 실패 사유 — 사라지는 안내 대신 연결될 때까지 상태 상자에 남긴다.
 const failures = {
   invalid_client: '서버에 입력한 Google OAuth 클라이언트 ID 또는 보안 비밀이 Google Cloud의 값과 다릅니다. 서버 변수 GOOGLE_PHOTO_OAUTH_CLIENT_ID, GOOGLE_PHOTO_OAUTH_CLIENT_SECRET을 다시 입력해 주세요.',
@@ -118,27 +265,49 @@ function card(photo) {
 async function load() {
   const seq = ++requestSequence;
   try {
-    const data = await api('/api/photos?' + new URLSearchParams({ date: $('date').value, offset }));
+    $('grid').setAttribute('aria-busy', 'true');
+    const selection = folderSelectionKey();
+    const data = await api('/api/photos?' + new URLSearchParams({ date: filters.date, year: filters.year, yearId: filters.yearId, eventId: filters.eventId, scope: filters.scope, kind: filters.kind, offset }));
     if (seq !== requestSequence) return;
     if (offset && offset >= data.total) { offset = Math.max(0, Math.floor((data.total - 1) / 40) * 40); return load(); }
     renderStatus(data.status);
-    const signature = JSON.stringify([data.photos, $('date').value, offset]);
+    acceptFolders(data.folders); reconcileFolderSelection(); renderFolderFilters();
+    if (selection !== folderSelectionKey()) { offset = 0; rememberFilters(); return load(); }
+    $('listError').hidden = true;
+    const signature = JSON.stringify([data.photos, filters, offset]);
     if (signature !== lastGridSignature) {
       $('grid').replaceChildren(...data.photos.map(card));
-      if (!data.photos.length) $('grid').append(node('div', 'empty', $('date').value ? '이 날짜에 등록한 사진이 없습니다.' : '아직 보관된 사진이 없습니다. 휴대폰에서 올린 사진이 여기에 나타납니다.'));
+      if (!data.photos.length) $('grid').append(node('div', 'empty', Object.values(filters).some(Boolean) ? '선택한 조건에 맞는 자료가 없습니다. 행사·종류·등록 날짜 필터를 확인해 주세요.' : '아직 보관된 자료가 없습니다. 휴대폰에서 올린 사진과 영상이 여기에 나타납니다.'));
       lastGridSignature = signature;
     }
-    $('count').textContent = `사진 ${data.total}장`;
+    $('count').textContent = `사진 ${data.counts.photos}장 · 영상 ${data.counts.videos}개`;
     $('page').textContent = `${Math.floor(offset / 40) + 1} / ${Math.max(1, Math.ceil(data.total / 40))}`;
     $('prev').disabled = offset === 0; $('next').disabled = offset + 40 >= data.total;
-  } catch (e) { if (seq === requestSequence) { $('connectionTitle').textContent = '목록을 불러오지 못했습니다'; $('connectionText').textContent = e.message; } }
+  } catch (e) { if (seq === requestSequence) { $('listError').textContent = '목록을 불러오지 못했습니다. ' + e.message; $('listError').hidden = false; } }
+  finally { if (seq === requestSequence) $('grid').setAttribute('aria-busy', 'false'); }
 }
-$('date').addEventListener('change', () => { offset = 0; load(); });
-$('all').addEventListener('click', () => { $('date').value = ''; offset = 0; load(); });
+$('year').addEventListener('change', () => {
+  const value = $('year').value;
+  const group = folders.years.find(group => group.id === value);
+  changeFilters({ year: group?.year || (value.startsWith('__year_') ? value.slice(7) : ''), yearId: group?.id || '', scope: value === '__root__' ? 'root' : value === '__awaiting__' ? 'awaiting_target' : '', eventId: '', eventName: '' });
+});
+$('folderSearch').addEventListener('input', renderFolderSearch);
+$('clearFolderSearch').addEventListener('click', () => { $('folderSearch').value = ''; renderFolderSearch(); $('folderSearch').focus(); });
+$('chooseEvent').addEventListener('click', () => {
+  $('eventDialogTitle').textContent = filters.year + '년 행사 선택';
+  $('eventSearch').value = ''; renderEvents(); $('eventDialog').showModal(); $('eventSearch').focus();
+});
+$('closeEvents').addEventListener('click', () => $('eventDialog').close());
+$('eventSearch').addEventListener('input', renderEvents);
+document.querySelectorAll('[data-kind]').forEach(button => button.addEventListener('click', () => changeFilters({ kind: button.dataset.kind })));
+$('resetFilters').addEventListener('click', () => { $('dateFilters').open = false; $('folderSearch').value = ''; changeFilters(emptyFilters()); });
+$('date').addEventListener('change', () => changeFilters({ date: $('date').value }));
+$('all').addEventListener('click', () => changeFilters({ date: '' }));
 $('prev').addEventListener('click', () => { offset = Math.max(0, offset - 40); load(); });
 $('next').addEventListener('click', () => { offset += 40; load(); });
 $('refresh').addEventListener('click', async () => {
   lastGridSignature = '';
+  loadFolders(true);
   try { await api('/api/photos/sync', { method: 'POST' }); await load(); toast('드라이브와 동기화 중입니다. 완료되면 목록이 갱신됩니다.'); } catch (e) { toast(e.message); }
 });
 $('closePreview').addEventListener('click', () => $('preview').close());
@@ -151,5 +320,5 @@ if (connection === 'select-folder') {
   toast(({ success: 'Google 계정 연결 완료. 대기 사진을 자동 보관합니다.', cancelled: 'Google 계정 연결을 취소했습니다.', failed: '계정 연결에 실패했습니다. 자동 보관 권한과 Google 연결 설정을 확인해 주세요.', 'scope-required': '연도·행사 폴더 보관 권한으로 Google 계정을 다시 연결해 주세요.' })[connection] || '');
   history.replaceState(null, '', '/photos');
 }
-load();
-setInterval(() => { if (!document.hidden && !$('preview').open && !document.querySelector('.actions button:disabled')) load(); }, 15000);
+renderFolderFilters(); load(); loadFolders();
+setInterval(() => { if (!document.hidden && !$('preview').open && !$('eventDialog').open && !document.querySelector('.actions button:disabled')) { load(); loadFolders(); } }, 15000);
