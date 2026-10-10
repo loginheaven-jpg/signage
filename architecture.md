@@ -259,6 +259,31 @@ signage/
 }
 ```
 
+### 3.5.1 큐시트 (서버 1.9.0)
+
+`schedule.json`은 이름 붙인 큐시트 목록이다(`host/cue-sheets.js`). 위 `entries` 형식은 예전 서버로 되돌릴 때를 위한 사본으로만 함께 저장한다(장소별 기본 큐시트가 함께 넘기기일 때 그 줄들).
+
+```json
+{
+  "sheets": [
+    { "id": "sheet_ab12", "siteId": "site_abc", "name": "평일용", "type": "sync", "rules": [], "rows": [ { "file1": "a.jpg", "file2": "b.jpg", "duration": 10, "...": "예전 편성표 항목과 같은 필드" } ], "a": [], "b": [] },
+    { "id": "sheet_cd34", "siteId": "site_abc", "name": "주일용", "type": "separate",
+      "rules": [ { "kind": "week", "days": [0], "from": "07:00", "to": "14:00" }, { "kind": "date", "date": "2026-12-25", "from": "", "to": "" } ],
+      "rows": [], "a": [ { "file": "a.jpg", "mime": "image/jpeg", "duration": 20, "sound": false, "transition": "fade", "validFrom": null, "validTo": null, "enabled": true } ], "b": [] }
+  ],
+  "siteState": { "site_abc": { "defaultId": "sheet_ab12", "pinnedId": null } }
+}
+```
+
+- 지금 내보낼 큐시트: 수동 고정(`pinnedId`) > 특정 날짜 규칙 > 요일 반복 규칙(목록 위쪽 우선) > 기본(`defaultId`). 시간은 한국 시간, `from` 이상 `to` 미만.
+- API: `GET /api/sheets`(큐시트 전체 + 장소별 `activeId`·`next`), `POST /api/sheets`, `PUT /api/sheets/:id`, `DELETE /api/sheets/:id`, `PUT /api/sheets/state/:siteId`(`defaultId`, `pinnedId`). 예전 `PUT /api/schedule`은 410.
+- 플레이어에 보내는 `schedule_update`의 `schedule`: `{ version, mode: "sync"|"separate", name, entries, entriesB }`. `entries`는 기존 형식(함께 넘기기의 줄, 또는 따로 재생의 A 목록), `entriesB`는 따로 재생의 B 목록.
+  `version`은 내보낼 내용이 바뀔 때만 바뀐다. 그래서 재접속해 같은 큐시트를 다시 받은 플레이어는 처음부터 다시 틀지 않고, 자동 전환·저장 때는 새로 시작한다.
+- 서버는 30초마다, 그리고 큐시트를 저장할 때마다 장소별로 보낼 내용을 다시 계산해 달라진 장소에만 푸시한다(항목의 시작일·종료일이 지나는 것도 이때 반영된다).
+- 설치형 2.5.0: 따로 재생이면 보조 창이 `entriesB`를 스스로 돌린다(주 창이 `screen2-media { own: true }`로 시작, `null`로 멈춤). 화면이 하나뿐이면 A 목록 다음에 B 목록을 이어서 보여 준다.
+  함께 넘기기의 시간 0인 줄에서 B가 영상이면 주 창은 보조 창의 `screen2-ended` 신호를 기다린다. 2.4.0 이하 플레이어는 따로 재생에서 A 목록만 A 화면에 보여 준다.
+- 설치형 플레이어가 접속하면 그 PC의 모니터 수 설정을 장소 정보(`sites.json`의 `monitors`)에 맞춘다. 큐시트 화면이 이 값으로 A·B 편집 여부를 정한다.
+
 ### 3.6 편성표 데이터 변환
 
 호스트 편성표(관리자 편집용)와 클라이언트 플레이어가 기대하는 형식이 다르므로, `getSiteSchedule()` 함수에서 변환한다:

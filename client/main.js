@@ -123,7 +123,8 @@ function isCached(rel) {
 // 캐시된 파일은 file:// 로컬 경로, 없으면 호스트 원격 URL(온라인 시 스트리밍).
 function resolveSchedule(raw) {
   if (!raw) return { version: 0, entries: [] };
-  const entries = (raw.entries || []).map(e => {
+  // 따로 재생(mode: separate)은 B 모니터 목록(entriesB)도 같은 방식으로 바꾼다.
+  const resolveList = list => (list || []).map(e => {
     const resolved = { ...e };
     for (const { key, rel } of entryRelUrls(e)) {
       resolved[key] = isCached(rel)
@@ -134,13 +135,15 @@ function resolveSchedule(raw) {
     }
     return resolved;
   });
-  return { version: raw.version, entries };
+  return { ...raw, entries: resolveList(raw.entries), entriesB: resolveList(raw.entriesB) };
 }
 
+// 보조 창도 편성표를 받는다. 따로 재생일 때 B 목록을 스스로 돌리기 때문이다.
 function sendScheduleToRenderer() {
   if (!currentRawSchedule) return;
-  if (mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
-    mainWindow.webContents.send('schedule-update', resolveSchedule(currentRawSchedule));
+  const resolved = resolveSchedule(currentRawSchedule);
+  for (const w of [mainWindow, secondWindow]) {
+    if (w && !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed()) w.webContents.send('schedule-update', resolved);
   }
 }
 
@@ -179,7 +182,7 @@ async function downloadMissing(raw) {
   downloading = true;
   const keep = new Set();
   try {
-    for (const e of (raw.entries || [])) {
+    for (const e of [...(raw.entries || []), ...(raw.entriesB || [])]) {
       for (const { rel } of entryRelUrls(e)) {
         const dest = localFileFor(rel);
         keep.add(path.basename(dest));
@@ -214,6 +217,7 @@ let mainWindow = null;
 let secondWindow = null;   // 듀얼 모니터: 보조(우측) 화면
 let dualMonitor = false;   // 보조 창 활성 여부 (렌더러에 전달)
 let lastScreen2Media = null;   // 주 창이 마지막으로 보조 창에 보낸 화면
+let playingMain = null, playingSecond = null;   // 대시보드에 보고할 A·B 화면의 현재 콘텐츠
 let ws = null;
 let reconnectTimer = null;
 let heartbeatTimer = null;
@@ -251,6 +255,7 @@ function ensureSecondWindow() {
   secondContents.on('did-start-loading', () => liveReadyWindows.delete(secondContents.id));
   // 주 창이 보조 창보다 먼저 첫 항목을 보내면 놓치므로, 보조 창이 준비되면 마지막 화면을 다시 보낸다.
   secondContents.on('did-finish-load', () => {
+    sendScheduleToRenderer();
     if (lastScreen2Media && !secondContents.isDestroyed()) secondContents.send('screen2-media', lastScreen2Media);
   });
   secondWindow.loadFile('player.html', { query: { screen: '2' } });
@@ -462,9 +467,17 @@ ipcMain.on('screen2-media', (event, media) => {
 });
 
 // 플레이어가 현재 재생 중인 콘텐츠를 보고 → 대시보드 표시용으로 호스트에 즉시 전달
+// 따로 재생에서는 보조 창이 자기 화면(B)을 따로 보고하므로 주 창의 보고와 합친다.
 ipcMain.on('report-playing', (event, playing) => {
-  lastPlaying = playing;
+  if (secondWindow && !secondWindow.isDestroyed() && event.sender === secondWindow.webContents) playingSecond = playing ? playing.screen1 : null;
+  else playingMain = playing;
+  lastPlaying = playingMain && currentRawSchedule?.mode === 'separate' && dualMonitor ? { ...playingMain, screen2: playingSecond } : playingMain;
   sendHeartbeat();
+});
+
+// 함께 넘기기에서 시간 0인 줄: B 화면의 영상이 끝났다는 신호를 주 창에 전한다.
+ipcMain.on('screen2-ended', () => {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) mainWindow.webContents.send('screen2-ended');
 });
 
 // 화면 하단 컨트롤 바에서 오는 명령

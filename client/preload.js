@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('signage', {
   // 듀얼 모니터: 주 창(screen1)이 보조 창(screen2)에 표출할 미디어를 전달
   setScreen2Media: (media) => ipcRenderer.send('screen2-media', media),
   onScreen2Media: (callback) => ipcRenderer.on('screen2-media', (e, data) => callback(data)),
+  // 함께 넘기기의 시간 0인 줄: 보조 창의 영상이 끝났음을 주 창에 알린다
+  screen2Ended: () => ipcRenderer.send('screen2-ended'),
+  onScreen2Ended: (callback) => ipcRenderer.on('screen2-ended', () => callback()),
 
   // 라이브 사진 (폰 촬영 → 즉시 송출). 편성표 위 오버레이 레이어로 표출된다.
   onLivePhoto: (callback) => ipcRenderer.on('live-photo', (e, data) => callback(data)),

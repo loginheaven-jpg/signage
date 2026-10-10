@@ -317,16 +317,30 @@ function resolveUrl(u) {
 }
 
 // ═══════════════════════════════════════════════════════
-// 보조 화면 모드: 주 창이 보내주는 미디어만 표출
+// 보조 화면 모드
+//  - 함께 넘기기: 주 창이 줄마다 보내 주는 미디어만 표출한다.
+//  - 따로 재생: 편성표의 B 목록을 받아 두었다가, 주 창의 시작 신호({ own: true })를 받으면 스스로 돈다.
 // ═══════════════════════════════════════════════════════
+let ownQueue = false;   // 보조 창이 B 목록을 스스로 돌리는 중인지
 if (isSecondary) {
   idleScreen.querySelector('.text').textContent = '우측 화면 대기 중...';
+  window.signage.onScheduleUpdate((data) => configReady.then(() => {
+    const same = ownQueue && schedule && schedule.version === data.version;
+    schedule = { ...data, entries: data.entriesB || [] };
+    if (!ownQueue) return;
+    if (same) activeEntries = playlist(); else startPlayback();
+  }));
   window.signage.onScreen2Media((media) => {
+    if (media && media.own) { if (!ownQueue) { ownQueue = true; if (schedule) startPlayback(); } return; }
+    if (ownQueue) {   // 주 창이 멈췄거나 함께 넘기기로 바뀌었다: 스스로 돌리던 목록을 내려놓는다.
+      ownQueue = false; showGeneration++; report(null);
+      if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+    }
     // 같은 줄에 우측 파일이 없으면 2번 화면은 비워 둔다(검은 화면, 대기 문구 없음).
     if (media && media.blank) { idleScreen.style.display = 'none'; clearMedia(); return; }
-    if (!media || !media.url) { showIdle(); return; }
+    if (!media || !media.url) { clearMedia(); showIdle(); return; }
     idleScreen.style.display = 'none';
-    renderSingle(resolveUrl(media.url), media.mimeType, media.fitMode, media.sound === 'right', media.transition, media.duration);
+    renderSingle(resolveUrl(media.url), media.mimeType, media.fitMode, media.sound === 'right', media.transition, media.duration, media.once);
   });
 }
 
@@ -369,7 +383,7 @@ function applySchedule(data) {
     (schedule.entries || []).length === (data.entries || []).length;
   schedule = data;
   if (sameSchedule) {
-    activeEntries = schedule.entries.filter(e => e.active !== false);
+    activeEntries = playlist();
     return;
   }
   setStopped(false);              // 새 편성표 수신 시 재생 재개
@@ -417,10 +431,28 @@ function setupControlBar() {
   document.addEventListener('mousemove', showBar);
 }
 
+// 이 창이 돌릴 목록. 따로 재생인데 화면이 하나뿐이면(보조 창 없음) A 목록 다음에 B 목록을 이어서 보여 준다.
+function playlist() {
+  const live = list => (list || []).filter(e => e.active !== false);
+  if (!isSecondary && schedule.mode === 'separate' && !dualMonitor) return live(schedule.entries).concat(live(schedule.entriesB));
+  return live(schedule.entries);
+}
+
 function startPlayback() {
   if (!schedule || !schedule.entries) return;
-  activeEntries = schedule.entries.filter(e => e.active !== false);
-  if (activeEntries.length === 0) { report(null); showIdle(); return; }
+  activeEntries = playlist();
+  const separate = schedule.mode === 'separate';
+  if (!isSecondary && dualMonitor) {
+    // 따로 재생: 보조 창이 B 목록을 스스로 돌리도록 알린다. 함께 넘기기인데 줄이 없으면 보조 창도 비운다.
+    if (separate) window.signage.setScreen2Media({ own: true });
+    else if (!activeEntries.length) window.signage.setScreen2Media(null);
+  }
+  if (activeEntries.length === 0) {
+    report(null);
+    // 따로 재생에서 한쪽 목록만 비어 있으면 그 화면은 대기 문구 없이 비워 둔다.
+    if (isSecondary || (separate && dualMonitor)) { idleScreen.style.display = 'none'; clearMedia(); } else showIdle();
+    return;
+  }
   idleScreen.style.display = 'none';
   playingSchedule = true;
   currentIndex = -1;
@@ -451,13 +483,15 @@ function renderEntry(entry) {
   const m1 = { url: url1, mimeType: entry.mimeType, fitMode, audible: entry.sound === 'left' || (entry.sound && entry.sound !== 'none' && !hasSecond) };
   const m2 = hasSecond ? { url: url2, mimeType: entry.mimeType2, fitMode, audible: entry.sound === 'right' } : null;
 
-  if (dualMonitor) {
-    // 듀얼 모니터: 좌=주 창, 같은 줄의 우측=보조 창 동시 표출. 우측이 없는 줄이면 2번 화면은 비운다.
+  if (dualMonitor && !isSecondary && !(playingSchedule && schedule.mode === 'separate')) {
+    // 듀얼 모니터(함께 넘기기): 좌=주 창, 같은 줄의 우측=보조 창 동시 표출. 우측이 없는 줄이면 2번 화면은 비운다.
+    // 시간 0인 줄에서 우측이 영상이면 그 영상이 끝났다는 신호를 기다린다.
+    const waitSecond = hasSecond && !(duration > 0) && isVideoType(entry.mimeType2);
     window.signage.setScreen2Media(hasSecond
-      ? { url: entry.url2, mimeType: entry.mimeType2, fitMode, sound: entry.sound, transition: entry.transition, duration }
+      ? { url: entry.url2, mimeType: entry.mimeType2, fitMode, sound: entry.sound, transition: entry.transition, duration, once: waitSecond }
       : { blank: true, transition: entry.transition });
     report(entry, hasSecond ? 'both' : 'left');
-    showMedia([m1], false, entry, duration, playNext);
+    showMedia([m1], false, entry, duration, playNext, waitSecond);
   } else if (hasSecond && wantBoth) {
     // 단일 창에 좌/우 나란히
     report(entry, 'both');
@@ -475,19 +509,38 @@ function renderEntry(entry) {
   }
 }
 
-// panes: [{url, mimeType, fitMode, audible}], split: 좌우 배치 여부, onDone: 완료 콜백
-function showMedia(panes, split, entry, duration, onDone) {
+const isVideoType = mime => !!mime && mime.startsWith('video');
+let secondEnded = null;   // 보조 창의 영상이 끝났을 때 부를 함수 (함께 넘기기의 시간 0인 줄)
+if (!isSecondary) window.signage.onScreen2Ended(() => { if (secondEnded) secondEnded(); });
+
+// 영상이 한 번 끝나면 onEnd 를 부른다. 재생이 도중에 멈춰 'ended'가 오지 않아도 한 화면에 머물지 않도록
+// 영상 길이 + 5초를 상한으로 두고, 재생할 수 없는 형식·깨진 파일은 2초 뒤에 끝난 것으로 본다.
+function watchEnd(video, onEnd) {
+  let timer = setTimeout(onEnd, 30000);
+  video.onloadedmetadata = () => {
+    if (!Number.isFinite(video.duration)) return;
+    clearTimeout(timer); timer = setTimeout(onEnd, video.duration * 1000 + 5000);
+  };
+  video.onerror = () => { clearTimeout(timer); timer = setTimeout(onEnd, 2000); };
+  video.onended = () => { clearTimeout(timer); onEnd(); };
+  return () => clearTimeout(timer);
+}
+
+// panes: [{url, mimeType, fitMode, audible}], split: 좌우 배치 여부, onDone: 완료 콜백,
+// waitSecond: 보조 창(B 화면)의 영상이 끝나기를 함께 기다릴지
+function showMedia(panes, split, entry, duration, onDone, waitSecond = false) {
   const trans = entry.transition || 'fade';
   const container = document.createElement('div');
   container.className = 'media-element t-' + trans + (split ? ' split' : '');
   if (trans === 'zoom') container.style.setProperty('--kb', Math.max(6, duration / 1000) + 's');
 
-  // 시간 0인 영상은 영상 자체 길이만큼 한 번. 시간을 지정하면 그 시간까지 반복(짧을 때)하거나 자른다(길 때).
-  const primaryIsVideo = !!panes[0].mimeType && panes[0].mimeType.startsWith('video');
-  const natural = primaryIsVideo && (!(duration > 0) || entry.videoDuration === 'original');
-  let primaryVideo = null;
-  panes.forEach((p, i) => {
-    const el = createMediaEl({ ...p, loop: !(natural && i === 0) });
+  // 시간 0: 이 줄의 영상이 한 번 끝날 때까지 보여 준다. 영상이 둘이면 긴 쪽이 끝날 때까지 짧은 쪽은 반복한다.
+  // 시간을 지정하면 그 시간까지 반복(짧을 때)하거나 자른다(길 때). 영상이 없는 줄의 시간 0은 10초.
+  const untimed = !(duration > 0) || (entry.videoDuration === 'original' && isVideoType(panes[0].mimeType));
+  const natural = untimed && (waitSecond || panes.some(p => isVideoType(p.mimeType)));
+  const videos = [];
+  panes.forEach(p => {
+    const el = createMediaEl({ ...p, loop: !natural });
     if (split) {
       const pane = document.createElement('div');
       pane.className = 'pane';
@@ -496,7 +549,7 @@ function showMedia(panes, split, entry, duration, onDone) {
     } else {
       container.appendChild(el);
     }
-    if (i === 0 && el.tagName === 'VIDEO') primaryVideo = el;
+    if (el.tagName === 'VIDEO') videos.push(el);
   });
 
   swapIn(container, trans);
@@ -505,24 +558,32 @@ function showMedia(panes, split, entry, duration, onDone) {
 
   const generation = ++showGeneration;
   let finished = false;
+  const cancels = [];
   const done = () => {
     if (finished || generation !== showGeneration) return;
-    finished = true;
+    finished = true; secondEnded = null;
+    cancels.forEach(cancel => cancel());
     if (playTimer) { clearTimeout(playTimer); playTimer = null; }
     onDone();
   };
-  // 재생할 수 없는 형식·깨진 파일은 검은 화면으로 멈추지 않고 다음 항목으로 넘어간다.
-  if (primaryVideo) primaryVideo.onerror = () => { clearTimeout(playTimer); playTimer = setTimeout(done, 2000); };
-  if (natural && primaryVideo) {
-    primaryVideo.onended = done;
-    // 재생이 도중에 멈춰 'ended'가 오지 않아도 한 화면에 머물지 않도록 영상 길이 + 5초를 상한으로 둔다.
-    playTimer = setTimeout(done, 30000);
-    primaryVideo.onloadedmetadata = () => {
-      if (finished || !Number.isFinite(primaryVideo.duration)) return;
-      clearTimeout(playTimer);
-      playTimer = setTimeout(done, primaryVideo.duration * 1000 + 5000);
+  secondEnded = null;
+  if (natural) {
+    const pending = new Set(videos);
+    if (waitSecond) pending.add('second');
+    const ended = who => {
+      if (finished || generation !== showGeneration) return;
+      pending.delete(who);
+      if (!pending.size) return done();
+      if (who !== 'second') { who.currentTime = 0; who.play().catch(() => {}); }   // 긴 쪽을 기다리는 동안 반복
     };
+    videos.forEach(video => cancels.push(watchEnd(video, () => ended(video))));
+    if (waitSecond) {
+      secondEnded = () => ended('second');
+      playTimer = setTimeout(secondEnded, 30 * 60000);   // 보조 창이 응답하지 않을 때의 상한
+    }
   } else {
+    // 재생할 수 없는 형식·깨진 파일은 검은 화면으로 멈추지 않고 다음 항목으로 넘어간다.
+    if (videos[0]) videos[0].onerror = () => { clearTimeout(playTimer); playTimer = setTimeout(done, 2000); };
     playTimer = setTimeout(done, duration > 0 ? duration : 10000);
   }
 }
@@ -545,12 +606,18 @@ function createMediaEl(p) {
 }
 
 // 보조 화면(screen=2): 단일 미디어 표출 (주 화면과 동일한 전환효과 적용)
-function renderSingle(url, mimeType, fitMode, audible, trans, durationMs) {
+// once: 주 창이 이 영상의 끝을 기다린다(시간 0인 줄). 끝나면 알리고, 주 창이 넘길 때까지 반복한다.
+function renderSingle(url, mimeType, fitMode, audible, trans, durationMs, once) {
   trans = trans || 'fade';
   const container = document.createElement('div');
   container.className = 'media-element t-' + trans;
   if (trans === 'zoom') container.style.setProperty('--kb', Math.max(6, (durationMs || 12000) / 1000) + 's');
-  container.appendChild(createMediaEl({ url, mimeType, fitMode, audible }));
+  const el = createMediaEl({ url, mimeType, fitMode, audible, loop: !once });
+  if (once && el.tagName === 'VIDEO') watchEnd(el, () => {
+    if (!el.isConnected) return;
+    window.signage.screen2Ended(); el.currentTime = 0; el.play().catch(() => {});
+  });
+  container.appendChild(el);
   swapIn(container, trans);
 }
 
@@ -583,7 +650,8 @@ function clearMedia() {
 
 // 현재 재생 콘텐츠를 호스트에 보고 (which: 'left' | 'right' | 'both')
 function report(entry, which) {
-  if (isSecondary) return;
+  // 보조 창은 따로 재생으로 자기 목록을 돌릴 때만 보고한다(메인 프로세스가 B 화면으로 합친다).
+  if (isSecondary && !ownQueue && entry) return;
   if (!entry) { window.signage.reportPlaying(null); return; }
   const left  = { url: entry.srcUrl || entry.url, filename: entry.filename, mimeType: entry.mimeType };
   const right = { url: entry.srcUrl2 || entry.url2, filename: entry.filename2, mimeType: entry.mimeType2 };

@@ -17,6 +17,7 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const GDriveSync = require('./gdrive-sync');
+const { CueSheets } = require('./cue-sheets');
 
 const app = express();
 const server = http.createServer(app);
@@ -130,13 +131,20 @@ function loadSchedule() {
 
 function saveSchedule() {
   try {
-    fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(scheduleData, null, 2));
+    fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(cue.toJSON(), null, 2));
   } catch (e) {
     console.error('[Schedule] 저장 실패:', e.message);
   }
 }
 
 loadSchedule();
+// 이름 붙인 큐시트(cue-sheets.js). 예전 편성표는 장소마다 '기본' 큐시트로 옮기고, 옮기기 전 파일을 한 번 남겨 둔다.
+let cue = new CueSheets(scheduleData, sites);
+if (cue.migrated) {
+  try { fs.copyFileSync(SCHEDULE_FILE, path.join(DATA_DIR, 'schedule.before-sheets.json')); } catch (e) {}
+  saveSchedule();
+  console.log(`[Schedule] 예전 편성표를 큐시트 ${cue.sheets.length}개로 옮겼습니다.`);
+}
 
 // ─── 구글 드라이브 동기화 ────────────────────────────────
 const gdrive = new GDriveSync({
@@ -299,8 +307,7 @@ app.delete('/api/sites/:id', (req, res) => {
   const idx = sites.findIndex(s => s.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: '사이트를 찾을 수 없습니다.' });
   sites.splice(idx, 1);
-  scheduleData.entries = scheduleData.entries.filter(e => e.siteId !== req.params.id);
-  scheduleData.version = Date.now();
+  cue.removeSite(req.params.id);
   saveSchedule();
   saveSites();
   broadcastToAdmins({ type: 'sites_update' });
@@ -513,11 +520,11 @@ app.post('/api/reset-all', (req, res) => {
   saveApproved();
   sites = [];
   saveSites();
-  scheduleData = { version: Date.now(), entries: [] };
+  cue = new CueSheets({ sheets: [], siteState: {} }, sites);
   saveSchedule();
   broadcastToAdmins({ type: 'sites_update' });
   broadcastToAdmins({ type: 'client_update' });
-  broadcastToAdmins({ type: 'schedule_update', schedule: scheduleData });
+  broadcastToAdmins({ type: 'schedule_update' });
   console.log(`[Reset] 전체 초기화: 클라이언트 ${n}개 + 사이트/편성표 삭제`);
   res.json({ success: true, cleared: n });
 });
@@ -579,8 +586,9 @@ app.delete('/api/content/:id', (req, res) => {
 
 // ─── 편성표 API (확장) ─────────────────────────────────
 
+// 예전 형식 조회(장소별 기본 큐시트의 줄). 편집은 /api/sheets 로 한다.
 app.get('/api/schedule', (req, res) => {
-  res.json(scheduleData);
+  res.json({ version: cue.lastStamp, entries: cue.toJSON().entries });
 });
 
 app.get('/api/schedule/:siteId', (req, res) => {
@@ -588,27 +596,53 @@ app.get('/api/schedule/:siteId', (req, res) => {
 });
 
 app.put('/api/schedule', (req, res) => {
-  const { entries } = req.body;
-  if (!Array.isArray(entries)) return res.status(400).json({ error: 'entries 배열이 필요합니다.' });
-
-  scheduleData.entries = entries.map(entry => ({
-    siteId: entry.siteId || (sites.length > 0 ? sites[0].id : ''),
-    layoutType: 'independent',
-    audio: 'none',
-    transition: 'fade',
-    validFrom: null,
-    validTo: null,
-    enabled: true,
-    ...entry
-  }));
-  scheduleData.version = Date.now();
-  saveSchedule();
-
-  console.log(`[Schedule] 저장: 버전 ${scheduleData.version}, ${entries.length}개 항목`);
-  pushScheduleToAllClients();
-  broadcastToAdmins({ type: 'schedule_update', schedule: scheduleData });
-  res.json({ success: true, version: scheduleData.version });
+  res.status(410).json({ error: '큐시트 화면이 바뀌었습니다. 화면을 새로 고친 뒤 다시 저장해 주세요.' });
 });
+
+// ─── 큐시트 API ─────────────────────────────────────────
+// 장소마다 이름 붙인 큐시트를 여러 개 두고, 적용 시간·수동 고정으로 지금 내보낼 하나를 고른다.
+function sheetsView() {
+  const view = {};
+  for (const site of sites) {
+    const state = cue.state(site.id), active = cue.active(site.id), next = state.pinnedId && active?.id === state.pinnedId ? null : cue.next(site.id);
+    view[site.id] = { defaultId: state.defaultId, pinnedId: active?.id === state.pinnedId ? state.pinnedId : null, activeId: active?.id || null, next };
+  }
+  return { sheets: cue.sheets, sites: view, now: Date.now() };
+}
+// 큐시트를 바꾼 뒤: 저장하고, 내보낼 내용이 달라진 장소의 모니터에만 새로 보낸다.
+function sheetsChanged(res, extra = {}) {
+  saveSchedule(); syncSchedules();
+  broadcastToAdmins({ type: 'schedule_update' });
+  res.json({ success: true, ...extra, ...sheetsView() });
+}
+const sheetRoute = fn => (req, res) => { try { fn(req, res); } catch (error) { res.status(error.status || 400).json({ error: error.publicMessage || '큐시트를 저장하지 못했습니다.' }); } };
+
+app.get('/api/sheets', (req, res) => res.json(sheetsView()));
+
+app.post('/api/sheets', sheetRoute((req, res) => {
+  if (!sites.some(s => s.id === req.body?.siteId)) return res.status(404).json({ error: '장소를 찾을 수 없습니다.' });
+  const sheet = cue.create(req.body.siteId, req.body);
+  console.log(`[Sheets] 새 큐시트: ${sheet.name} (${sheet.type}) → ${req.body.siteId}`);
+  sheetsChanged(res, { id: sheet.id });
+}));
+
+app.put('/api/sheets/state/:siteId', sheetRoute((req, res) => {
+  if (!sites.some(s => s.id === req.params.siteId)) return res.status(404).json({ error: '장소를 찾을 수 없습니다.' });
+  const state = cue.setState(req.params.siteId, req.body);
+  console.log(`[Sheets] ${req.params.siteId}: 기본 ${state.defaultId}, 수동 고정 ${state.pinnedId || '없음'}`);
+  sheetsChanged(res);
+}));
+
+app.put('/api/sheets/:id', sheetRoute((req, res) => {
+  const sheet = cue.update(req.params.id, req.body);
+  console.log(`[Sheets] 저장: ${sheet.name}`);
+  sheetsChanged(res, { id: sheet.id });
+}));
+
+app.delete('/api/sheets/:id', sheetRoute((req, res) => {
+  cue.remove(req.params.id);
+  sheetsChanged(res);
+}));
 
 app.post('/api/schedule/apply', (req, res) => {
   pushScheduleToAllClients();
@@ -1256,6 +1290,12 @@ wss.on('connection', (ws, req) => {
           approved: wasApproved
         });
 
+        // 설치형 플레이어의 모니터 수 설정을 장소 정보에 맞춘다. 큐시트 화면이 A·B 편집 여부를 이 값으로 정한다.
+        const registeredSite = wasApproved && msg.clientVersion ? sites.find(s => s.id === assignedSiteId) : null;
+        if (registeredSite && [1, 2].includes(monitors) && registeredSite.monitors !== monitors) {
+          registeredSite.monitors = monitors; saveSites(); broadcastToAdmins({ type: 'sites_update' });
+        }
+
         ws.send(JSON.stringify({ type: 'registered', clientId, name: clientName, message: '호스트에 등록되었습니다.' }));
         console.log(`[WS] 클라이언트 등록: ${clientName} (${clientId}), 모니터: ${monitors}대, 사이트: ${assignedSiteId || '미지정'}, 승인: ${wasApproved}`);
 
@@ -1264,11 +1304,9 @@ wss.on('connection', (ws, req) => {
           ws.send(JSON.stringify({ type: 'approved', siteId: assignedSiteId }));
           if (assignedSiteId) {
             const siteSchedule = getSiteSchedule(assignedSiteId);
-            if (siteSchedule.entries.length > 0) {
+            if (siteSchedule.entries.length > 0 || siteSchedule.entriesB.length > 0) {
               ws.send(JSON.stringify({ type: 'schedule_update', schedule: siteSchedule }));
             }
-          } else if (scheduleData.entries.length > 0) {
-            ws.send(JSON.stringify({ type: 'schedule_update', schedule: scheduleData }));
           }
         } else {
           // 미승인(초기화된 경우 포함)이면 대기 화면으로 되돌린다.
@@ -1350,65 +1388,12 @@ function broadcastToAdmins(msg) {
   });
 }
 
+// 지금 그 장소에 내보낼 큐시트를 플레이어 형식으로 만든다(cue-sheets.js).
+// 실제 표출 방식은 플레이어가 모니터 수와 mode 로 정한다:
+//  - sync + 모니터 2대: 한 줄의 A·B 파일을 동시에 / 모니터 1대: A → B 순서로
+//  - separate + 모니터 2대: entries 는 A, entriesB 는 B 가 각자 따로 / 모니터 1대: A 목록 다음에 B 목록
 function getSiteSchedule(siteId) {
-  const now = new Date();
-  const rawEntries = scheduleData.entries.filter(e => {
-    if (e.siteId !== siteId) return false;
-    if (!e.enabled) return false;
-    if (e.validFrom && new Date(e.validFrom) > now) return false;
-    if (e.validTo && new Date(e.validTo) < now) return false;
-    return true;
-  });
-
-  // 클라이언트 플레이어가 이해할 수 있는 형식으로 변환
-  // 호스트 편성표: file1, file2, file1Mime, file2Mime, layoutType, duration, audio, transition
-  // 클라이언트 기대: entries[].{ url, filename, mimeType, duration, sound, active }
-  // 각 편성 항목은 file1(좌)+file2(우)를 쌍으로 유지한다.
-  // 실제 표출 방식(동시/순차/분할)은 클라이언트가 모니터 수와 layoutType으로 결정:
-  //  - 모니터 2대: file1 → 좌 화면, file2 → 우 화면 동시 표출
-  //  - 모니터 1대 + 독립(independent): file1 → file2 순차 표출
-  //  - 모니터 1대 + 분할(split): 한 화면에 좌/우 나란히
-  const entries = [];
-  for (const e of rawEntries) {
-    if (!e.file1 && !e.file2) continue;
-    const primary = e.file1 || e.file2;
-    const primaryMime = mediaMime(primary, e.file1 ? e.file1Mime : e.file2Mime);
-    const secondary = (e.file1 && e.file2) ? e.file2 : '';
-    // 영상 시간 0 = 영상 자체 길이만큼 한 번. 0보다 크면 그 시간만큼(짧은 영상은 반복, 긴 영상은 자름).
-    // 예전 편성표의 '원본'(videoDuration 없음 포함)은 0으로 읽는다. 사진은 0이면 10초.
-    let seconds = Number(e.duration);
-    if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
-    if (primaryMime.startsWith('video/')) { if (e.videoDuration !== 'custom') seconds = 0; }
-    else if (!seconds) seconds = 10;
-    entries.push({
-      filename: primary,
-      url: `/uploads/${primary}`,
-      mimeType: primaryMime,
-      filename2: secondary || '',
-      url2: secondary ? `/uploads/${secondary}` : '',
-      mimeType2: mediaMime(secondary, e.file2Mime),
-      duration: seconds,
-      // 2.1 이하 설치형은 이 값으로 '끝까지 재생'과 '시간 지정'을 구분한다.
-      videoDuration: seconds ? 'custom' : 'original',
-      sound: e.audio || 'none',
-      transition: e.transition || 'fade',
-      layoutType: e.layoutType || 'independent',
-      active: true
-    });
-  }
-  return { version: scheduleData.version, entries };
-}
-
-function pushScheduleToAllClients() {
-  let count = 0;
-  clients.forEach((info) => {
-    if (info.ws.readyState === WebSocket.OPEN && info.approved) {
-      const schedule = info.siteId ? getSiteSchedule(info.siteId) : { version: scheduleData.version, entries: [] };
-      info.ws.send(JSON.stringify({ type: 'schedule_update', schedule }));
-      count++;
-    }
-  });
-  console.log(`[Schedule] 편성표 푸시 → ${count}개 클라이언트`);
+  return cue.payload(siteId, mediaMime);
 }
 
 function pushScheduleToSiteClients(siteId) {
@@ -1416,14 +1401,31 @@ function pushScheduleToSiteClients(siteId) {
   const msg = JSON.stringify({ type: 'schedule_update', schedule: siteSchedule });
   let count = 0;
   clients.forEach((info) => {
-    if (info.siteId === siteId && info.ws.readyState === WebSocket.OPEN) {
+    if (info.siteId === siteId && info.approved && info.ws.readyState === WebSocket.OPEN) {
       info.ws.send(msg);
       count++;
     }
   });
-  console.log(`[Schedule] 사이트 ${siteId} 편성표 푸시 → ${count}개 클라이언트`);
+  pushedVersions.set(siteId, siteSchedule.version);
+  console.log(`[Schedule] ${siteId}: '${siteSchedule.name}' 푸시 → ${count}개 클라이언트`);
 }
 
+function pushScheduleToAllClients() {
+  for (const site of sites) pushScheduleToSiteClients(site.id);
+}
+
+// 내보낼 내용이 달라진 장소에만 새로 보낸다. 큐시트를 저장했을 때와, 적용 시간이 되어 자동으로 바뀔 때(30초마다 확인) 쓴다.
+const pushedVersions = new Map();
+function syncSchedules() {
+  let switched = false;
+  for (const site of sites) {
+    const version = getSiteSchedule(site.id).version;
+    // 같은 내용을 다시 받은 플레이어는 처음부터 다시 틀지 않으므로, 기록이 없는 첫 확인에서는 그냥 보낸다.
+    if (pushedVersions.get(site.id) !== version) { switched = switched || pushedVersions.has(site.id); pushScheduleToSiteClients(site.id); }
+  }
+  return switched;
+}
+setInterval(() => { if (syncSchedules()) broadcastToAdmins({ type: 'schedule_update' }); }, 30000).unref();
 function pushSyncNowToClients(siteId) {
   const msg = JSON.stringify({ type: 'sync_now' });
   clients.forEach((info) => {
