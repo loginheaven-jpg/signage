@@ -1306,9 +1306,14 @@ function renderSchedule(passive) {
     : dual
       ? `<div class="cue-ab">${cueListTable('a', 'A 모니터 목록', true)}${cueListTable('b', 'B 모니터 목록', true)}</div><p class="cue-hint">A와 B는 서로 기다리지 않고 각자 처음부터 끝까지 돈 뒤 반복합니다. 시간 0은 영상 길이만큼입니다.</p>`
       : `${cueListTable('a', '재생 목록')}<p class="cue-hint">위에서부터 차례로 보여 주고 반복합니다. 시간 0은 영상 길이만큼입니다.</p>`;
+  // 저장 단추는 목록이 길어도 바로 누를 수 있게 편집 화면 맨 위와 맨 아래에 둔다(suffix: 위쪽은 'Top').
+  const actions = suffix => `<button type="button" class="btn btn-secondary" id="cueSaveAsOpen${suffix}" onclick="cueSaveAsOpen()">다른 이름으로 저장</button>
+      ${isLive ? `<button type="button" class="btn btn-success" id="cueSave${suffix}" onclick="cueSave()">저장 및 적용</button>`
+        : `<button type="button" class="btn btn-secondary" id="cueSave${suffix}" onclick="cueSave()">저장</button><button type="button" class="btn btn-primary" id="cuePin${suffix}" onclick="cuePin()">지금 이 큐시트로 전환</button>`}`;
   editor.innerHTML = `
     <div class="cue-row cue-between"><div class="cue-row"><span class="cue-dot" style="background:${cueColor(d)}"></span><h2 class="cue-h2">${h(saved.name)} 편집</h2>${dual ? `<span class="cue-chip kind">${CUE_TYPE[d.type]}</span>` : ''}${isLive ? '<span class="cue-chip live">적용 중</span>' : ''}</div>
-      <label class="cue-field inline">이름<input id="cueName" maxlength="40" value="${h(d.name)}" onchange="cueDraft.name = this.value; cueDirty = true;"></label></div>
+      <div class="cue-row">${actions('Top')}</div></div>
+    <label class="cue-field inline">이름<input id="cueName" maxlength="40" value="${h(d.name)}" onchange="cueDraft.name = this.value; cueDirty = true;"></label>
     <div class="cue-stack"><div class="cue-row cue-between"><h3 class="cue-h3">적용 시간</h3>${isDefault ? '<span class="cue-chip">기본 큐시트</span>' : '<button type="button" class="cue-link" id="cueMakeDefault" onclick="cueMakeDefault()">기본 큐시트로 지정</button>'}</div>
       ${isDefault ? `<p class="cue-hint">기본 큐시트는 다른 큐시트의 적용 시간이 아닐 때 항상 나갑니다.${d.rules.length ? '' : ' 따로 시간을 정할 필요가 없습니다.'}</p>` : ''}${rules}
       <div class="cue-row"><button type="button" class="cue-link" id="cueAddWeek" onclick="cueRuleAdd('week')">+ 요일 반복</button><button type="button" class="cue-link" id="cueAddDate" onclick="cueRuleAdd('date')">+ 특정 날짜</button></div></div>
@@ -1316,9 +1321,7 @@ function renderSchedule(passive) {
     ${cueSaveAs ? `<div class="cue-rule"><label class="cue-field inline">새 이름<input id="cueSaveAsName" maxlength="40" value="${h(d.name)} 복사본"></label><button type="button" class="btn btn-primary" id="cueSaveAsDo" onclick="cueSaveAsDo()">이 이름으로 저장</button><button type="button" class="btn btn-secondary" onclick="cueSaveAs = false; renderSchedule()">취소</button>
       <p class="cue-hint" style="flex-basis:100%">지금 보이는 항목 그대로 새 큐시트를 만듭니다. 원래 큐시트(${h(saved.name)})는 바뀌지 않습니다. 적용 시간은 복사하지 않으니 새 큐시트에서 따로 정해 주세요.</p></div>` : ''}
     <div class="cue-savebar"><div class="cue-row">${isDefault && sheets.length > 1 ? '' : '<button type="button" class="cue-link" id="cueDelete" style="color:#c0392b" onclick="cueDelete()">큐시트 삭제</button>'}</div><div class="cue-row">
-      <button type="button" class="btn btn-secondary" id="cueSaveAsOpen" onclick="cueSaveAs = true; renderSchedule()">다른 이름으로 저장</button>
-      ${isLive ? '<button type="button" class="btn btn-success" id="cueSave" onclick="cueSave()">저장 및 적용</button>'
-        : '<button type="button" class="btn btn-secondary" id="cueSave" onclick="cueSave()">저장</button><button type="button" class="btn btn-primary" id="cuePin" onclick="cuePin()">지금 이 큐시트로 전환</button>'}</div></div>
+      ${actions('')}</div></div>
     ${isLive ? '' : '<p class="cue-hint">저장만 하면 모니터에는 영향이 없습니다. 지금 바로 내보내려면 전환을 누르세요. 전환하면 자동 전환을 멈추고 이 큐시트로 고정합니다.</p>'}`;
 }
 
@@ -1455,6 +1458,12 @@ async function cueDelete() {
   if (!confirm(`'${cueDraft.name}' 큐시트를 지울까요? 되돌릴 수 없습니다.`)) return;
   const data = await cueApi('DELETE', '/api/sheets/' + cueSheetId);
   if (data) { cueSheetId = null; cueDraft = null; cueDirty = false; cueApply(data); showToast('큐시트를 지웠습니다.'); }
+}
+// 새 이름 입력 칸은 편집 화면 아래쪽에 열리므로 그리로 옮겨 준다.
+function cueSaveAsOpen() {
+  cueSaveAs = true; renderSchedule();
+  const input = document.getElementById('cueSaveAsName');
+  if (input) { input.scrollIntoView({ block: 'center' }); input.focus(); input.select(); }
 }
 function cueNew() {
   if (!cueLeave()) return;

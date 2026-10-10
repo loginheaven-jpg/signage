@@ -73,7 +73,9 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.deepEqual(await third.locator('select[aria-label=소리] option').allTextContents(), ['없음', 'B'], 'sound can only come from the side that is a video');
     await third.locator('input[aria-label="시간(초)"]').fill('0'); await third.locator('input[aria-label="시간(초)"]').blur();
     assert.match(await third.textContent(), /영상 끝까지/);
-    await page.locator('#cueSave').click(); await toast('저장하고 모니터에 적용했습니다');
+    // The same buttons sit above the list, so a long sheet needs no scrolling to save.
+    assert.deepEqual(await page.locator('#cueEditor button[id$=Top]').allTextContents(), ['다른 이름으로 저장', '저장 및 적용']);
+    await page.locator('#cueSaveTop').click(); await toast('저장하고 모니터에 적용했습니다');
     const waited = await latest(s => s.entries.length === 3);
     assert.deepEqual([waited.entries[2].filename, waited.entries[2].filename2, waited.entries[2].duration], ['notice.jpg', 'clip.mp4', 0]);
 
