@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test ../tests/*.test.js",
-    "test:camera-ui": "node ../scripts/smoke-photo-ui.cjs && node ../scripts/smoke-camera-communications.cjs && node ../scripts/smoke-camera-reliability.cjs && node ../scripts/smoke-camera-fast.cjs && node ../scripts/smoke-camera-video.cjs"
+    "test:camera-ui": "node ../scripts/smoke-photo-ui.cjs && node ../scripts/smoke-camera-communications.cjs && node ../scripts/smoke-camera-reliability.cjs && node ../scripts/smoke-camera-fast.cjs && node ../scripts/smoke-camera-video.cjs && node ../scripts/smoke-camera-bulk.cjs"
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",

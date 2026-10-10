@@ -68,7 +68,7 @@ function hashFile(file) {
   });
 }
 
-function mountVideoUpload(app, { archive, getConfig, getSites, publish, receipts, inflight, save, row, liveOriginals, staging, parsePhotoDate, videoJobs }) {
+function mountVideoUpload(app, { archive, getConfig, getSites, publish, receipts, inflight, save, row, liveOriginals, staging, parsePhotoDate, videoJobs, requireArchiveSpace = () => {} }) {
   const upload = multer({ storage: multer.diskStorage({ destination: staging,
     filename: (req, file, cb) => cb(null, crypto.randomUUID() + '.upload') }),
     limits: { fileSize: MAX_VIDEO_BYTES, files: 1, fields: 18, fieldSize: 16384 } });
@@ -117,6 +117,7 @@ function mountVideoUpload(app, { archive, getConfig, getSites, publish, receipts
         if (!['archive', 'live', 'both'].includes(mode)) throw fail('사용 목적을 선택해 주세요.');
         const target = mode === 'live' || !req.body.target || ['{}', 'null'].includes(req.body.target) ? null : targetInput(JSON.parse(req.body.target));
         if (mode === 'archive' && !target) throw fail('저장할 폴더를 선택해 주세요.');
+        if (mode !== 'live') requireArchiveSpace(archive.root);
         const uploaderName = String(req.body.uploaderName || '').normalize('NFC').replace(/[\x00-\x1f\x7f]/g, '').trim();
         if (!uploaderName || [...uploaderName].length > 20) throw fail('업로더 이름을 1~20자로 입력해 주세요.');
         const requestId = String(req.body.requestId || '');
@@ -158,7 +159,7 @@ function mountVideoUpload(app, { archive, getConfig, getSites, publish, receipts
         if (receipt.live === 'pending') enqueueDisplay(receipt);
         if (record) archive.cycle().catch(() => {});
         res.json({ success: true, upload: row(receipt) });
-      })().catch(error => res.status(error.status || 400).json({ error: error.publicMessage || '영상을 접수하지 못했습니다. 설정과 연결을 확인하고 다시 시도해 주세요.' }))
+      })().catch(error => res.status(error.status || 400).json({ error: error.publicMessage || '영상을 접수하지 못했습니다. 설정과 연결을 확인하고 다시 시도해 주세요.', ...(error.backlog ? { backlog: true } : {}) }))
         .finally(() => { if (locked) inflight.delete(id); if (source) try { fs.unlinkSync(source); } catch {} });
     });
   });

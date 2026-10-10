@@ -10,6 +10,15 @@ const { targetInput, fail } = require('./drive-folders');
 const { CameraFolderCatalog } = require('./camera-folder-catalog');
 const { mountVideoUpload, MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS } = require('./camera-video');
 const MAX_BYTES = 50 * 1024 * 1024;
+const MAX_ARCHIVE_BATCH = 500;
+
+// 원본은 Drive 저장을 확인할 때까지 서버 디스크에 머문다. 올리는 속도가 Drive 전송보다 빨라
+// 디스크가 차면 새 접수를 잠시 미루고, 휴대폰은 backlog 응답을 받으면 기다렸다가 이어서 보낸다.
+function requireArchiveSpace(root, minFree = Number(process.env.CAMERA_MIN_FREE_BYTES) || 1024 * 1024 * 1024) {
+  let free;
+  try { const stat = fs.statfsSync(root); free = stat.bavail * stat.bsize; } catch { return; }
+  if (free < minFree) throw Object.assign(fail('서버가 앞서 받은 사진을 Drive로 옮기고 있습니다. 잠시 후 자동으로 이어서 올립니다.', 503), { backlog: true });
+}
 const ALLOWED = new Set(['jpg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'tif']);
 
 function parsePhotoDate(value) {
@@ -69,7 +78,19 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
   const safe = fn => (req, res) => Promise.resolve().then(() => fn(req, res)).catch(error => res.status(error.status || 503).json({ error: errorText(error) }));
   app.get('/live/api/camera/config', (req, res) => res.json({ rootId: archive.folderId, year: new Date(Date.now() + 9 * 3600000).getUTCFullYear(),
     archiveEnabled: getConfig().archiveEnabled !== false, liveEnabled: getConfig().enabled, ready: archive.ready,
-    archiveError: archive.error ? errorText({ publicMessage: archive.error }) : '', sites: getSites(), maxBytes: MAX_BYTES, maxVideoBytes: MAX_VIDEO_BYTES, maxVideoSeconds: MAX_VIDEO_SECONDS, maxBatch: 30, cancelSec: getConfig().settings.cancelSec, mail: !!mail?.configured }));
+    archiveError: archive.error ? errorText({ publicMessage: archive.error }) : '', sites: getSites(), maxBytes: MAX_BYTES, maxVideoBytes: MAX_VIDEO_BYTES, maxVideoSeconds: MAX_VIDEO_SECONDS, maxBatch: 30, maxArchiveBatch: MAX_ARCHIVE_BATCH, cancelSec: getConfig().settings.cancelSec, mail: !!mail?.configured }));
+
+  // 교회폴더 저장은 사진마다 내용·설정으로 요청 ID를 만든다. 앱이 꺼진 뒤 같은 사진을 다시 골라도
+  // 이미 접수한 사진은 여기서 알려 주어 다시 올리지 않는다(본인 기기의 접수만 확인).
+  app.post('/live/api/camera/known', (req, res) => {
+    const known = {};
+    for (const requestId of (Array.isArray(req.body?.requestIds) ? req.body.requestIds : []).slice(0, MAX_ARCHIVE_BATCH + 100)) {
+      if (!/^[\w-]{16,80}$/.test(String(requestId))) continue;
+      const r = receipts.get('camera_' + crypto.createHash('sha256').update(req.cameraOwner + requestId).digest('hex'));
+      if (r && r.owner === req.cameraOwner) known[requestId] = { id: r.id, cancelled: !!r.cancelled, archive: row(r).archive };
+    }
+    res.json({ known });
+  });
 
   app.get('/live/api/camera/folders', safe(async (req, res) => {
     res.json(await folderCatalog.get(String(req.query.year || ''), String(req.query.yearId || ''), req.query.refresh === '1'));
@@ -193,7 +214,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
   }));
 
   const video = mountVideoUpload(app, { archive, getConfig, getSites, publish, receipts, inflight, save, row,
-    liveOriginals, staging, parsePhotoDate, videoJobs });
+    liveOriginals, staging, parsePhotoDate, videoJobs, requireArchiveSpace });
 
   require('./camera-fast-upload').mountFastUpload(app, { archive, getConfig, getSites, publish, cancel, mail,
     upload, receipts, inflight, save, row, safe, liveOriginals, parsePhotoDate, wakeArchive });
@@ -210,6 +231,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
         const renamed = source + '.' + kind.ext; fs.renameSync(source, renamed); source = renamed;
         const mode = String(req.body.mode || '');
         if (!['archive', 'live', 'both'].includes(mode)) throw fail('사용 목적을 선택해 주세요.');
+        if (mode !== 'live') requireArchiveSpace(archive.root);
         const target = mode === 'live' ? null : targetInput(JSON.parse(req.body.target || '{}'));
         const uploaderName = String(req.body.uploaderName || '').normalize('NFC').replace(/[\x00-\x1f\x7f]/g, '').trim();
         if (!uploaderName || [...uploaderName].length > 20) throw fail('업로더 이름을 1~20자로 입력해 주세요.');
@@ -278,9 +300,9 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
         } else if (mode !== 'archive' && String(req.body.email || '').trim() && !mail?.configured) receipt.mail = 'off';
         save(receipt); if (record) archive.cycle().catch(() => {});
         res.json({ success: true, upload: row(receipt) });
-      })().catch(error => res.status(error.status || 400).json({ error: error.publicMessage || '사진을 접수하지 못했습니다. 설정과 연결을 확인하고 다시 시도해 주세요.' }))
+      })().catch(error => res.status(error.status || 400).json({ error: error.publicMessage || '사진을 접수하지 못했습니다. 설정과 연결을 확인하고 다시 시도해 주세요.', ...(error.backlog ? { backlog: true } : {}) }))
         .finally(() => { if (locked) inflight.delete(id); for (const file of [source, mailSource]) if (file) try { fs.unlinkSync(file); } catch {} });
     });
   });
 }
-module.exports = { mountCameraService, parsePhotoDate };
+module.exports = { mountCameraService, parsePhotoDate, requireArchiveSpace };

@@ -5,7 +5,10 @@ const archiveLabels = { saved: 'Drive 보관 완료', awaiting_original: '원본
 const kst = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'medium' });
 let config, settings, mode = 'both', selected = [], events = [], foldersReady = false, busy = false, folderSequence = 0;
 let currentPage = 'purpose', navigation = { camera: true, page: 'purpose', depth: 0 }, siteSequence = 0, sitesReady = false;
-let draftDb;
+let draftDb, draftChain = Promise.resolve(), storedFiles = new Set();
+const DRAFT_BUDGET = 300 * 1024 * 1024;   // 교회폴더 저장 대기 사진을 기기에 복사해 두는 한도
+const REVIEW_PAGE = 40, ARCHIVE_PARALLEL = 3;
+let reviewShown = REVIEW_PAGE, wakeLock = null, wakeLockPending = false;
 let cameraStream;
 let shareBatch = null, shareUrls = [], sharing = false;
 let uploadStates = new Map(), batchCancelling = false;
@@ -102,7 +105,7 @@ async function api(route, options = {}) {
       const data = await res.json().catch(error => { if (controller.signal.aborted) throw error; return {}; });
       if (controller.signal.aborted) throw Object.assign(new Error('응답 시간이 초과되었습니다. 같은 요청으로 다시 시도해 주세요.'), { status: 504 });
       if (res.status === 401) { location.replace('/login?role=camera'); throw new Error('다시 로그인해 주세요.'); }
-      if (!res.ok) throw Object.assign(new Error(data.error || '연결을 확인하고 다시 시도해 주세요.'), { status: res.status });
+      if (!res.ok) throw Object.assign(new Error(data.error || '연결을 확인하고 다시 시도해 주세요.'), { status: res.status, backlog: !!data.backlog });
       return data;
     })(), deadline]);
   } catch (error) {
@@ -118,33 +121,68 @@ function destination(s) {
   if (s.mode !== 'archive') lines.push('표출: ' + s.siteName);
   return lines.join('\n');
 }
+// 대기 목록은 설정·순서(drafts)와 사진 파일(files)을 따로 둔다. 사진을 한 장 보낼 때마다
+// 남은 사진 전체를 다시 쓰지 않도록, 파일은 새로 생기거나 없어진 것만 넣고 뺀다.
 async function openDb() {
   if (draftDb) return draftDb;
   draftDb = await new Promise((resolve, reject) => {
-    const request = indexedDB.open('yebom-camera-drafts', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('drafts');
+    const request = indexedDB.open('yebom-camera-drafts', 2);
+    request.onupgradeneeded = () => {
+      for (const name of ['drafts', 'files']) if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name);
+    };
     request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
   });
   return draftDb;
 }
-async function persistDraft() {
+const settle = request => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+const isArchiveEntry = r => (r.submission?.mode || mode) === 'archive';
+// 여러 전송이 동시에 끝나도 저장은 한 번에 하나씩 순서대로 한다.
+function persistDraft() { const run = draftChain.then(writeDraft); draftChain = run; return run; }
+async function writeDraft() {
   try {
     const db = await openDb();
+    const files = new Map(), entries = [];
+    // 교회폴더 저장은 수백 장을 고를 수 있어 기기에 복사해 두는 양을 제한한다. 넘는 사진은 화면이
+    // 꺼지면 다시 골라야 하지만, 이미 접수한 사진은 서버가 알아보고 다시 올리지 않는다.
+    let archiveBytes = 0;
+    for (const r of selected) if (r.kind !== 'video' && isArchiveEntry(r) && storedFiles.has(r.key)) archiveBytes += r.file.size;
+    for (const r of selected) {
+      if (r.kind === 'video') continue;
+      const keep = storedFiles.has(r.key) || !isArchiveEntry(r) || archiveBytes + r.file.size <= DRAFT_BUDGET;
+      if (keep && isArchiveEntry(r) && !storedFiles.has(r.key)) archiveBytes += r.file.size;
+      if (keep) { files.set(r.key, r.file); if (r.previewFile) files.set(r.key + ':p', r.previewFile); }
+      const { url, file, previewFile, ...lean } = r; entries.push(lean);
+    }
+    for (const p of originals) files.set(p.key, p.file);
     await new Promise((resolve, reject) => {
-      const tx = db.transaction('drafts', 'readwrite');
-      tx.objectStore('drafts').put({ settings, entries: selected.filter(r => r.kind !== 'video').map(({ url, ...r }) => r), originals, message: el('message').value, keepMessage: el('keepMessage').checked, shareBatch }, 'current');
+      const tx = db.transaction(['drafts', 'files'], 'readwrite'), store = tx.objectStore('files');
+      for (const [key, blob] of files) if (!storedFiles.has(key)) store.put(blob, key);
+      for (const key of storedFiles) if (!files.has(key)) store.delete(key);
+      tx.objectStore('drafts').put({ version: 2, settings, entries, originals: originals.map(({ file, ...p }) => p), message: el('message').value, keepMessage: el('keepMessage').checked, shareBatch }, 'current');
       tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
     });
+    storedFiles = new Set(files.keys());
     return true;
   } catch { notice('이 기기에 사진 대기 목록을 저장하지 못했습니다. 전송을 마칠 때까지 화면을 닫지 마세요.', true); return false; }
 }
 async function readDraft() {
   try {
     const db = await openDb();
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction('drafts').objectStore('drafts').get('current');
-      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
-    });
+    const draft = await settle(db.transaction('drafts').objectStore('drafts').get('current'));
+    if (!draft) return null;
+    if (draft.version !== 2) {   // 이전 형식: 사진이 목록 안에 들어 있다. 다음 저장 때 새 형식으로 옮긴다.
+      for (const r of draft.entries || []) r.key = r.requestId;
+      for (const p of draft.originals || []) p.key = 'o:' + p.id;
+      return draft;
+    }
+    const store = db.transaction('files').objectStore('files');
+    storedFiles = new Set(await settle(store.getAllKeys()));
+    const total = draft.entries.length;
+    for (const r of draft.entries) if (storedFiles.has(r.key)) { r.file = await settle(store.get(r.key)); if (storedFiles.has(r.key + ':p')) r.previewFile = await settle(store.get(r.key + ':p')); }
+    for (const p of draft.originals) if (storedFiles.has(p.key)) p.file = await settle(store.get(p.key));
+    draft.entries = draft.entries.filter(r => r.file); draft.originals = draft.originals.filter(p => p.file);
+    draft.lost = total - draft.entries.length;
+    return draft;
   } catch { return null; }
 }
 function hasFrozen() { return selected.some(r => r.submission); }
@@ -507,7 +545,7 @@ function uploadVideo(form, onProgress) {
     xhr.onload = () => {
       let data = {}; try { data = JSON.parse(xhr.responseText); } catch {}
       if (xhr.status === 401) { location.replace('/login?role=camera'); return reject(new Error('다시 로그인해 주세요.')); }
-      if (xhr.status < 200 || xhr.status >= 300) return reject(Object.assign(new Error(data.error || '연결을 확인하고 다시 시도해 주세요.'), { status: xhr.status }));
+      if (xhr.status < 200 || xhr.status >= 300) return reject(Object.assign(new Error(data.error || '연결을 확인하고 다시 시도해 주세요.'), { status: xhr.status, backlog: !!data.backlog }));
       resolve(data);
     };
     xhr.onerror = () => reject(new Error('연결이 끊겼습니다. 같은 영상으로 다시 시도해 주세요.'));
@@ -517,8 +555,11 @@ function uploadVideo(form, onProgress) {
 }
 async function addFiles(files, captured = false) {
   storage.set('capturePending', false);
-  const slots = 30 - selected.length;
-  if (files.length > slots) notice('한 번에 30장까지 가능합니다. 초과 사진은 추가하지 않았습니다.', true);
+  // 모니터에 표출하는 목적은 30장, 교회폴더에 저장만 하는 목적은 한 번에 수백 장까지 받는다.
+  const limit = mode === 'archive' ? (config.maxArchiveBatch || 500) : (config.maxBatch || 30);
+  const slots = limit - selected.length;
+  if (files.length > slots) notice('한 번에 ' + limit + '장까지 가능합니다. 초과 사진은 추가하지 않았습니다.', true);
+  else if (files.length > REVIEW_PAGE) notice('사진 ' + files.length + '장을 확인하고 있습니다…');
   for (const file of [...files].slice(0, slots)) {
     if (!file.size) { notice(file.name + ': 사진 파일이 비어 있습니다. 저장을 마친 뒤 다시 선택해 주세요.', true); continue; }
     const isVideo = /^video\//.test(file.type) || /\.(mp4|mov|m4v|webm|mkv|3gp)$/i.test(file.name);
@@ -530,7 +571,8 @@ async function addFiles(files, captured = false) {
       const seconds = await videoSeconds(file);
       if (seconds > (config.maxVideoSeconds || 180) + 2) { notice(file.name + ': 영상은 3분까지 가능합니다. (' + Math.round(seconds) + '초)', true); continue; }
       date = localDate(file.lastModified || Date.now()); dateSource = captured ? 'capture' : 'fileModified';
-      selected.push({ file, kind: 'video', seconds, requestId: uuid(), date, dateSource, url: URL.createObjectURL(file), error: '' });
+      const requestId = uuid();
+      selected.push({ file, kind: 'video', seconds, requestId, key: requestId, date, dateSource, url: URL.createObjectURL(file), error: '' });
       continue;
     }
     try {
@@ -539,8 +581,10 @@ async function addFiles(files, captured = false) {
       if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(raw)) { date = raw; dateSource = 'exif'; }
     } catch {}
     if (!date && file.lastModified) { date = localDate(file.lastModified); dateSource = captured ? 'capture' : 'fileModified'; }
-    selected.push({ file, requestId: uuid(), date, dateSource, url: URL.createObjectURL(file), error: '' });
+    const requestId = uuid();
+    selected.push({ file, requestId, key: requestId, date, dateSource, url: URL.createObjectURL(file), error: '' });
   }
+  if (files.length > REVIEW_PAGE && files.length <= slots) notice('사진 ' + selected.length + '장을 선택했습니다.');
   await persistDraft(); renderReview();
   if (selected.length) el('review').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -554,8 +598,11 @@ function renderReview() {
   el('messageLabel').hidden = mode === 'archive'; el('keepMessageLabel').hidden = mode === 'archive';
   el('messageCount').textContent = el('message').value.length;
   renderEmail();
-  el('selectedPhotos').replaceChildren(...selected.map(r => {
+  // 수백 장을 한꺼번에 그리면 휴대폰 메모리가 부족해지므로 앞에서부터 일부만 그린다.
+  if (!selected.length) reviewShown = REVIEW_PAGE;
+  el('selectedPhotos').replaceChildren(...selected.slice(0, reviewShown).map(r => {
     const card = node('div', undefined, 'photoCard'); const img = node(r.kind === 'video' ? 'video' : 'img'); img.src = r.url; img.alt = r.file.name;
+    if (r.kind !== 'video') { img.loading = 'lazy'; img.decoding = 'async'; }
     if (r.kind === 'video') { img.muted = true; img.playsInline = true; img.preload = 'metadata'; img.controls = true; }
     const caption = node('p', r.file.name); const state = node('p', r.error || (r.kind === 'video' ? '영상 ' + (r.seconds ? Math.round(r.seconds) + '초 · ' : '') : '원본 ') + (r.file.size / 1024 / 1024).toFixed(1) + 'MB');
     img.onerror = () => { img.hidden = true; caption.textContent = r.file.name + ' · 미리보기 불가, 원본 보관 가능'; };
@@ -566,18 +613,124 @@ function renderReview() {
     remove.onclick = () => { if (r.submission && !confirm('서버에 접수되었을 수 있는 사진입니다. 대기 목록에서 제외해도 이미 접수된 사진은 취소되지 않습니다. 제외할까요?')) return; URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r); persistDraft(); renderReview(); };
     card.append(img, caption, state, label, dateInfo, remove); return card;
   }));
+  if (selected.length > reviewShown) {
+    const more = node('button', '나머지 ' + (selected.length - reviewShown) + '장 중 ' + Math.min(REVIEW_PAGE, selected.length - reviewShown) + '장 더 보기'); more.type = 'button'; more.id = 'moreReview'; more.disabled = busy;
+    more.onclick = () => { reviewShown += REVIEW_PAGE; renderReview(); };
+    el('selectedPhotos').append(node('p', '목록에는 ' + reviewShown + '장만 표시합니다. 표시하지 않은 사진도 함께 전송합니다.', 'hint'), more);
+  }
   el('send').textContent = countText + (mode === 'archive' ? ' Drive에 저장' : ' 모니터에 먼저 게시');
 }
 function setBusy(value) {
   busy = value;
   for (const id of ['home', 'shoot', 'shootVideo', 'choose', 'changePurpose', 'changeSettings', 'send', 'discard', 'message', 'keepMessage', 'email']) el(id).disabled = value;
   if (hasFrozen()) for (const id of ['message', 'keepMessage', 'email']) el(id).disabled = true;
-  renderReview(); renderShare();
+  renderReview(); renderShare(); syncWakeLock();
+}
+// 올리는 동안에는 화면이 자동으로 꺼지지 않게 한다. 화면이 꺼지면 브라우저가 전송을 멈춘다.
+async function syncWakeLock() {
+  if (wakeLockPending || !navigator.wakeLock) return;
+  const need = (busy || originalRunning) && !document.hidden;
+  wakeLockPending = true;
+  try {
+    if (need && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); }
+    else if (!need && wakeLock) { const lock = wakeLock; wakeLock = null; await lock.release(); }
+  } catch { wakeLock = null; }
+  finally { wakeLockPending = false; }
+  if (need !== ((busy || originalRunning) && !document.hidden)) syncWakeLock();
+}
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// 인터넷이 끊겼거나 화면이 가려진 동안 실패했다면, 다시 보이고 연결될 때까지 기다린다.
+function untilActive() {
+  const active = () => !document.hidden && navigator.onLine !== false;
+  if (active()) return Promise.resolve();
+  return new Promise(resolve => {
+    const check = () => { if (!active()) return; document.removeEventListener('visibilitychange', check); window.removeEventListener('online', check); resolve(); };
+    document.addEventListener('visibilitychange', check); window.addEventListener('online', check);
+  });
+}
+function submissionForm(r) {
+  const s = r.submission, form = new FormData();
+  for (const [key, value] of Object.entries({ mode: s.mode, target: JSON.stringify(s.target || {}), uploaderName: s.uploaderName,
+    requestId: r.requestId, siteId: s.siteId, message: s.message, email: s.email, batchTotal: s.batchTotal,
+    capturedAt: s.date, dateSource: s.dateSource, lastModified: r.file.lastModified || '' })) form.append(key, String(value ?? ''));
+  return form;
+}
+// 첫 사진이 폴더를 만들면 그 뒤로는 실제 폴더 ID를 따라간다.
+function followTarget(result, s) {
+  if (result.upload?.target?.eventId && settings.target && s.target?.year === settings.target.year && (s.target.eventId === settings.target.eventId || (!settings.target.eventId && s.target.folderName === settings.target.folderName))) {
+    settings.target = result.upload.target; rememberTarget(settings.target); storage.set('settings', settings);
+  }
+}
+// 교회폴더 저장의 요청 ID는 사진과 설정으로 정한다. 같은 사진을 같은 곳에 다시 보내면 서버가 같은 접수로 본다.
+async function archiveRequestId(r, s) {
+  if (!crypto.subtle) return r.requestId;
+  // 폴더는 연도와 이름으로만 본다. 첫 사진이 폴더를 만든 뒤 붙는 폴더 ID 때문에 ID가 달라지지 않게 한다.
+  const text = JSON.stringify([r.kind || 'photo', r.file.name, r.file.size, r.file.lastModified, s.target?.year, s.target?.folderName || s.target?.eventName, s.uploaderName, s.date]);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return 'a-' + [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 48);
+}
+// 교회폴더에 저장: 모니터 순서와 무관하므로 여러 장을 동시에 올리고, 끊기면 스스로 다시 시도한다.
+async function sendArchive(auto = false) {
+  setBusy(true); const total = selected.length; let accepted = 0, skipped = 0, waiting = '';
+  const batchKey = selected.find(r => r.submission)?.submission.batchKey || uuid();
+  const progress = () => { el('progress').textContent = (accepted + skipped) + ' / ' + total + ' 접수 완료 · ' + (waiting || '올리는 중… 화면을 켜 두면 끝까지 올라갑니다.'); };
+  const finish = async r => { URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r); progress(); await persistDraft(); };
+  try {
+    for (const r of selected) {
+      if (!auto) { r.error = ''; r.fatal = false; }
+      if (r.submission || auto) continue;
+      r.submission = { ...structuredClone(settings), fast: false, message: '', email: '', batchKey, batchTotal: total, date: r.date, dateSource: r.dateSource };
+      if (r.kind === 'video') r.submission.muted = true;
+      r.requestId = await archiveRequestId(r, r.submission);
+    }
+    await persistDraft(); progress();
+    // 이미 접수한 사진은 다시 올리지 않는다. 취소했거나 Drive에서 지운 사진은 새 접수로 다시 올린다.
+    try {
+      const { known } = await api('known', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestIds: selected.map(r => r.requestId) }) });
+      for (const r of [...selected]) {
+        const done = known[r.requestId]; if (!done) continue;
+        if (done.cancelled || ['deleted', 'deleting', 'missing'].includes(done.archive)) r.requestId = uuid();
+        else { skipped++; await finish(r); }
+      }
+    } catch {}
+    const sendOne = async r => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const s = r.submission, form = submissionForm(r);
+          let result;
+          if (r.kind === 'video') { form.append('muted', '1'); form.append('video', r.file, r.file.name); result = await uploadVideo(form, () => {}); }
+          else { form.append('originalName', r.file.name); form.append('photo', r.file, r.file.name); result = await api('photo', { method: 'POST', body: form }); }
+          waiting = ''; accepted++; followTarget(result, s); await finish(r); return;
+        } catch (e) {
+          if (e.backlog) { waiting = '서버가 Drive로 옮기는 중입니다. 잠시 후 이어서 올립니다.'; progress(); await sleep(20000); attempt--; continue; }
+          const transient = !e.status || e.status >= 500 || e.status === 409;
+          if (transient && (document.hidden || navigator.onLine === false)) { waiting = '연결을 기다리는 중입니다. 화면을 다시 열면 이어서 올립니다.'; progress(); await untilActive(); waiting = ''; progress(); attempt = -1; continue; }
+          if (transient && attempt < 3) { await sleep(2000 * (attempt + 1)); continue; }
+          r.error = e.message; r.fatal = !!e.status && e.status < 500; return;
+        }
+      }
+    };
+    const queue = selected.filter(r => r.submission && !(auto && r.fatal)), photos = queue.filter(r => r.kind !== 'video'), videos = queue.filter(r => r.kind === 'video');
+    let cursor = 0;
+    await Promise.all(Array.from({ length: ARCHIVE_PARALLEL }, async () => { while (cursor < photos.length) await sendOne(photos[cursor++]); }));
+    for (const r of videos) await sendOne(r);
+    el('progress').textContent = accepted + '장 서버 접수 완료' + (skipped ? ' · 이미 올린 사진 ' + skipped + '장은 건너뜀' : '') + (selected.length ? ' · ' + selected.length + '장은 올리지 못했습니다. 전송을 다시 눌러 주세요.' : ' · 같은 작업으로 계속 촬영하거나 사진을 선택하세요.');
+    if (selected.length) notice('올리지 못한 사진 ' + selected.length + '장을 대기 목록에 남겼습니다. 다시 전송해도 중복 접수하지 않습니다.', true);
+    else notice((accepted + skipped) + '장을 접수했습니다.' + (skipped ? ' 이미 올린 사진 ' + skipped + '장은 다시 올리지 않았습니다.' : '') + ' Drive 보관 상태는 내 업로드에서 확인하세요.');
+  } finally {
+    if (!selected.length) { el('shootInput').value = ''; el('videoInput').value = ''; el('galleryInput').value = ''; }
+    setBusy(false); await persistDraft(); renderOriginals(); runOriginals(); await loadHistory();
+  }
+}
+// 화면이 다시 보이거나 인터넷이 돌아오면, 접수하다 끊긴 교회폴더 저장을 버튼 없이 이어서 보낸다.
+function resumeArchive() {
+  if (mode === 'archive' && !busy && currentPage === 'work' && !document.hidden && navigator.onLine !== false && selected.some(r => r.submission && !r.fatal)) sendArchive(true);
 }
 async function sendPhotos() {
   if (busy || !selected.length) return;
   expireEmail();
   if (mode !== 'archive' && config.mail && el('email').value && !el('email').reportValidity()) return;
+  if (mode === 'archive') return sendArchive();
   setBusy(true); originalController?.abort(); let accepted = 0; const originalCount = selected.length;
   const batchKey = selected.find(r => r.submission)?.submission.batchKey || uuid();
   try {
@@ -586,10 +739,7 @@ async function sendPhotos() {
       r.submission.batchKey ||= batchKey;
       if (!await persistDraft()) { r.error = '사진 대기 목록을 기기에 저장하지 못했습니다. 저장 공간을 확인해 주세요.'; break; }
       el('progress').textContent = (accepted + 1) + ' / ' + originalCount + ' · ' + r.file.name + ' 접수하는 중…';
-      const s = r.submission, form = new FormData();
-      for (const [key, value] of Object.entries({ mode: s.mode, target: JSON.stringify(s.target || {}), uploaderName: s.uploaderName,
-        requestId: r.requestId, siteId: s.siteId, message: s.message, email: s.email, batchTotal: s.batchTotal,
-        capturedAt: s.date, dateSource: s.dateSource, lastModified: r.file.lastModified || '' })) form.append(key, String(value ?? ''));
+      const s = r.submission, form = submissionForm(r);
       try {
         if (r.kind === 'video') {
           // 영상은 한 번에 올리고, 서버가 모니터용으로 변환해 게시한다. 미리보기·원본 분리 전송과 공유 묶음은 쓰지 않는다.
@@ -608,7 +758,7 @@ async function sendPhotos() {
         const transfer = s.fast ? r.previewFile : r.file;
         form.append('originalName', r.file.name); form.append('photo', transfer, transfer.name);
         const result = await api(s.fast ? 'preview' : 'photo', { method: 'POST', body: form });
-        if (s.fast && s.mode === 'both' && !result.upload.cancelled && !originals.some(p => p.id === result.upload.id)) originals.push({ id: result.upload.id, file: r.file, target: result.upload.target || s.target, error: '' });
+        if (s.fast && s.mode === 'both' && !result.upload.cancelled && !originals.some(p => p.id === result.upload.id)) originals.push({ id: result.upload.id, key: r.key, file: r.file, target: result.upload.target || s.target, error: '' });
         accepted++; URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r);
         if (s.mode !== 'archive') {
           if (shareBatch?.key !== s.batchKey) shareBatch = { key: s.batchKey, mode: s.mode, ts: Date.now(), siteName: s.siteName, photos: [] };
@@ -617,9 +767,7 @@ async function sendPhotos() {
             shareBatch.photos.push({ id: result.upload.id, file });
           }
         }
-        if (result.upload?.target?.eventId && settings.target && s.target?.year === settings.target.year && (s.target.eventId === settings.target.eventId || (!settings.target.eventId && s.target.folderName === settings.target.folderName))) {
-          settings.target = result.upload.target; rememberTarget(settings.target); storage.set('settings', settings);
-        }
+        followTarget(result, s);
       } catch (e) { r.error = e.message; }
       await persistDraft();
     }
@@ -643,7 +791,7 @@ function renderOriginals() {
 }
 async function runOriginals() {
   if (originalRunning || busy || !originals.some(p => !p.error)) return;
-  originalRunning = true; renderOriginals();
+  originalRunning = true; renderOriginals(); syncWakeLock();
   try {
     while (!busy) {
       const entry = originals.find(p => !p.error); if (!entry) break;
@@ -661,7 +809,7 @@ async function runOriginals() {
       await persistDraft(); renderOriginals();
     }
   } finally {
-    originalController = null; originalRunning = false; await persistDraft(); renderOriginals(); loadHistory();
+    originalController = null; originalRunning = false; syncWakeLock(); await persistDraft(); renderOriginals(); loadHistory();
     if (!busy && originals.some(p => !p.error)) queueMicrotask(runOriginals);
   }
 }
@@ -842,9 +990,9 @@ el('refreshHistory').onclick = loadHistory;
 el('message').oninput = () => { el('messageCount').textContent = el('message').value.length; persistDraft(); }; el('keepMessage').onchange = () => persistDraft();
 el('email').oninput = () => rememberEmail(); el('clearEmail').onclick = clearEmail;
 setInterval(expireEmail, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) expireEmail(); });
+document.addEventListener('visibilitychange', () => { syncWakeLock(); if (!document.hidden) { expireEmail(); resumeArchive(); } });
 window.addEventListener('beforeunload', event => { if (busy || originals.length) { event.preventDefault(); event.returnValue = ''; } });
-window.addEventListener('online', () => { notice('인터넷에 다시 연결되었습니다. 대기 사진을 확인하고 전송해 주세요.'); originals.forEach(p => p.error = ''); runOriginals(); loadHistory(); });
+window.addEventListener('online', () => { notice('인터넷에 다시 연결되었습니다. 대기 사진을 확인하고 전송해 주세요.'); originals.forEach(p => p.error = ''); runOriginals(); loadHistory(); resumeArchive(); });
 window.addEventListener('offline', () => notice('인터넷 연결이 끊겼습니다. 선택한 사진은 대기 목록에 유지합니다.', true));
 async function init() {
   try {
@@ -863,7 +1011,8 @@ async function init() {
     if (draft?.entries?.length && settings) {
       selected = draft.entries.map(r => ({ ...r, url: URL.createObjectURL(r.file) }));
       el('message').value = draft.message || ''; el('keepMessage').checked = !!draft.keepMessage;
-      notice('전송 대기 사진 ' + selected.length + '장을 복원했습니다. 같은 작업으로 계속해 주세요.');
+      notice('전송 대기 사진 ' + selected.length + '장을 복원했습니다. 같은 작업으로 계속해 주세요.' + (draft.lost ? ' 나머지 ' + draft.lost + '장은 다시 선택해 주세요. 이미 올라간 사진은 다시 올리지 않습니다.' : ''), !!draft.lost);
+    } else if (draft?.lost) { notice('화면이 닫혀 올리던 사진 ' + draft.lost + '장이 대기 목록에서 빠졌습니다. 같은 사진을 다시 선택하면 이미 올라간 사진은 건너뛰고 나머지만 올립니다.', true);
     } else if (storage.get('capturePending')) { notice('촬영·사진 선택 중 화면이 다시 열렸습니다. 사진이 전달되지 않았다면 앨범에서 다시 선택해 주세요.', true); storage.set('capturePending', false); }
     if (settings?.target && !storage.get('lastTarget')) rememberTarget(settings.target);
     navigation = { camera: true, page: 'purpose', depth: 0 }; history.replaceState(navigation, ''); view('purpose', false);

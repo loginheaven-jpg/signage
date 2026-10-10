@@ -295,3 +295,24 @@ test('unresolved moved-folder uploads can be redirected by their owner before an
   assert.equal(record.status, 'saved'); assert.equal(record.target.eventName, '새 행사');
   assert.equal((await f.get('uploads/' + result.upload.id + '/target', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year: '2027', eventName: '다른 행사' }) })).status, 409, 'a possibly saved original cannot be silently moved');
 });
+
+test('bulk archive: known request IDs are reported per device and a full server disk defers new originals', async t => {
+  const f = await service(t);
+  const first = 'a-' + 'a'.repeat(48), second = 'a-' + 'b'.repeat(48);
+  const posted = (await f.upload({ requestId: first }).then(r => r.json())).upload;
+  const ask = (requestIds, headers = {}) => f.get('known', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ requestIds }) }).then(r => r.json());
+  assert.deepEqual(await ask([first, second, 'bad id']), { known: { [first]: { id: posted.id, cancelled: false, archive: 'pending' } } });
+  assert.deepEqual(await ask([first], { cookie: '' }), { known: {} }, 'another device never learns about this upload');
+  assert.equal((await f.get('uploads/' + posted.id, { method: 'DELETE' })).status, 200);
+  assert.equal((await ask([first])).known[first].cancelled, true, 'a cancelled photo is reported so the phone uploads it afresh');
+
+  // The phone waits and retries on this answer instead of marking the photo as failed.
+  process.env.CAMERA_MIN_FREE_BYTES = String(Number.MAX_SAFE_INTEGER);
+  t.after(() => { delete process.env.CAMERA_MIN_FREE_BYTES; });
+  const deferred = await f.upload({ requestId: second });
+  assert.equal(deferred.status, 503); assert.equal((await deferred.json()).backlog, true);
+  assert.equal((await f.upload({ mode: 'live', requestId: crypto.randomUUID() })).status, 200, 'display-only photos do not use the archive disk');
+  delete process.env.CAMERA_MIN_FREE_BYTES;
+  assert.equal((await f.upload({ requestId: second })).status, 200, 'the same request succeeds once space is available');
+  assert.equal((await f.get('config').then(r => r.json())).maxArchiveBatch, 500);
+});
