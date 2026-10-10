@@ -8,7 +8,8 @@ let currentPage = 'purpose', navigation = { camera: true, page: 'purpose', depth
 let draftDb, draftChain = Promise.resolve(), storedFiles = new Set();
 const DRAFT_BUDGET = 300 * 1024 * 1024;   // 교회폴더 저장 대기 사진을 기기에 복사해 두는 한도
 const REVIEW_PAGE = 40, ARCHIVE_PARALLEL = 3;
-let reviewShown = REVIEW_PAGE, wakeLock = null, wakeLockPending = false;
+const BACKGROUND_MIN = 10;   // 이보다 적은 사진은 화면에서 바로 올린다
+let reviewShown = REVIEW_PAGE, wakeLock = null, wakeLockPending = false, backgroundActive = false;
 let cameraStream;
 let shareBatch = null, shareUrls = [], sharing = false;
 let uploadStates = new Map(), batchCancelling = false;
@@ -629,14 +630,44 @@ function setBusy(value) {
 // 올리는 동안에는 화면이 자동으로 꺼지지 않게 한다. 화면이 꺼지면 브라우저가 전송을 멈춘다.
 async function syncWakeLock() {
   if (wakeLockPending || !navigator.wakeLock) return;
-  const need = (busy || originalRunning) && !document.hidden;
+  const need = wakeNeeded();
   wakeLockPending = true;
   try {
     if (need && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); }
     else if (!need && wakeLock) { const lock = wakeLock; wakeLock = null; await lock.release(); }
   } catch { wakeLock = null; }
   finally { wakeLockPending = false; }
-  if (need !== ((busy || originalRunning) && !document.hidden)) syncWakeLock();
+  if (need !== wakeNeeded()) syncWakeLock();
+}
+// 백그라운드 전송 중에는 브라우저가 화면과 무관하게 올리므로 화면을 켜 둘 필요가 없다.
+function wakeNeeded() { return ((busy && !backgroundActive) || originalRunning) && !document.hidden; }
+// 안드로이드 Chrome의 백그라운드 전송(Background Fetch). 브라우저가 사진을 넘겨받아 다른 앱을 쓰거나
+// 화면을 꺼도 계속 올리고, 알림에 진행률을 보여 준다. 지원하지 않는 기기(아이폰 등)는 null → 화면에서 올린다.
+// 응답은 읽지 않는다. 무엇이 접수됐는지는 서버(known)에 물어 확인하므로 실패해도 화면 전송으로 이어진다.
+async function backgroundTransfer(items) {
+  try {
+    if (!crypto.subtle || !('serviceWorker' in navigator) || !('BackgroundFetchManager' in window)) return null;
+    const worker = await Promise.race([navigator.serviceWorker.ready, sleep(3000)]);
+    if (!worker?.backgroundFetch) return null;
+    const saved = storage.get('bgFetch');
+    if (saved) {   // 앱을 닫았다 연 경우: 진행 중인 전송에 다시 붙는다.
+      const live = await worker.backgroundFetch.get(saved.id);
+      if (live && !live.result) return { worker, id: saved.id, registration: live };
+      storage.set('bgFetch', null);
+    }
+    if (items.length < BACKGROUND_MIN || (await navigator.permissions.query({ name: 'background-fetch' })).state !== 'granted') return null;
+    const legacyToken = new URLSearchParams(location.search).get('t') || storage.get('token');
+    const requests = items.map(r => {
+      const form = submissionForm(r);
+      if (r.kind === 'video') { form.append('muted', '1'); form.append('video', r.file, r.file.name); }
+      else { form.append('originalName', r.file.name); form.append('photo', r.file, r.file.name); }
+      return new Request('/live/api/camera/' + (r.kind === 'video' ? 'video' : 'photo'), { method: 'POST', body: form, headers: legacyToken ? { 'x-live-token': legacyToken } : {} });
+    });
+    const id = 'camera-archive-' + uuid();
+    const registration = await Promise.race([worker.backgroundFetch.fetch(id, requests, { title: '교회사진 ' + items.length + '장 올리는 중', icons: [{ src: '/camera-icon-192.png', sizes: '192x192', type: 'image/png' }] }), sleep(10000)]);
+    if (!registration) return null;
+    storage.set('bgFetch', { id }); return { worker, id, registration };
+  } catch { return null; }
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // 인터넷이 끊겼거나 화면이 가려진 동안 실패했다면, 다시 보이고 연결될 때까지 기다린다.
@@ -710,7 +741,29 @@ async function sendArchive(auto = false) {
         }
       }
     };
-    const queue = selected.filter(r => r.submission && !(auto && r.fatal)), photos = queue.filter(r => r.kind !== 'video'), videos = queue.filter(r => r.kind === 'video');
+    const pending = () => selected.filter(r => r.submission && !(auto && r.fatal));
+    let aborted = false;
+    const background = await backgroundTransfer(pending());
+    if (background) {
+      backgroundActive = true; syncWakeLock();
+      try {
+        for (;;) {
+          // 끝났는지를 먼저 읽고 서버에 확인한다. 순서가 반대면 마지막 사진을 놓칠 수 있다.
+          const live = await background.worker.backgroundFetch.get(background.id).catch(() => null);
+          const ended = !live || !!live.result || !!background.registration.result;
+          aborted = (live || background.registration).failureReason === 'aborted';
+          try {
+            const { known } = await api('known', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestIds: pending().map(r => r.requestId) }) });
+            for (const r of pending()) if (known[r.requestId] && !known[r.requestId].cancelled) { accepted++; await finish(r); }
+          } catch {}
+          if (ended || !pending().length) break;
+          waiting = '백그라운드로 올리는 중입니다. 다른 앱을 쓰거나 화면을 꺼도 계속 올라갑니다.'; progress();
+          await sleep(3000);
+        }
+      } finally { backgroundActive = false; waiting = ''; storage.set('bgFetch', null); syncWakeLock(); }
+    }
+    // 백그라운드 전송이 없거나 일부를 남기고 끝났으면 화면에서 이어서 올린다. 알림에서 직접 취소했으면 남겨 둔다.
+    const queue = aborted ? [] : pending(), photos = queue.filter(r => r.kind !== 'video'), videos = queue.filter(r => r.kind === 'video');
     let cursor = 0;
     await Promise.all(Array.from({ length: ARCHIVE_PARALLEL }, async () => { while (cursor < photos.length) await sendOne(photos[cursor++]); }));
     for (const r of videos) await sendOne(r);
@@ -945,7 +998,7 @@ el('chooseSite').onclick = async () => { await refreshSites(); if (currentPage =
 el('closeSites').onclick = () => closeDialog('siteDialog');
 el('eventName').oninput = () => { updateNewPath(); rememberNewTarget(); };
 el('eventDate').onchange = () => { updateNewPath(); rememberNewTarget(); };
-el('continueResume').onclick = () => { if (settings) showWork(); };
+el('continueResume').onclick = () => { if (settings) { showWork(); if (storage.get('bgFetch')) resumeArchive(); } };
 for (const [button, input] of [['shoot', 'shootInput'], ['shootVideo', 'videoInput'], ['choose', 'galleryInput']]) {
   el(button).onclick = async () => {
     if (busy) return;
@@ -991,7 +1044,7 @@ el('message').oninput = () => { el('messageCount').textContent = el('message').v
 el('email').oninput = () => rememberEmail(); el('clearEmail').onclick = clearEmail;
 setInterval(expireEmail, 30000);
 document.addEventListener('visibilitychange', () => { syncWakeLock(); if (!document.hidden) { expireEmail(); resumeArchive(); } });
-window.addEventListener('beforeunload', event => { if (busy || originals.length) { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('beforeunload', event => { if ((busy && !backgroundActive) || originals.length) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('online', () => { notice('인터넷에 다시 연결되었습니다. 대기 사진을 확인하고 전송해 주세요.'); originals.forEach(p => p.error = ''); runOriginals(); loadHistory(); resumeArchive(); });
 window.addEventListener('offline', () => notice('인터넷 연결이 끊겼습니다. 선택한 사진은 대기 목록에 유지합니다.', true));
 async function init() {
@@ -1019,6 +1072,13 @@ async function init() {
     if (!isMobile) el('choose').textContent = '🖼 사진·영상 파일 선택';
     if (!isMobile && !navigator.mediaDevices?.getUserMedia) { el('shoot').disabled = true; el('shoot').title = '카메라를 사용할 수 있는 기기에서 촬영해 주세요.'; }
     renderOriginals(); runOriginals();
+    // 앱을 닫은 사이에도 백그라운드 전송이 이어지고 있으면 알려 준다.
+    const saved = storage.get('bgFetch');
+    if (saved && 'serviceWorker' in navigator) Promise.race([navigator.serviceWorker.ready, sleep(3000)]).then(async worker => {
+      const live = await worker?.backgroundFetch?.get(saved.id);
+      if (live && !live.result) notice('백그라운드로 사진을 올리고 있습니다. 작업 이어가기에서 진행 상황을 볼 수 있습니다.');
+      else storage.set('bgFetch', null);
+    }).catch(() => {});
   } catch (e) { notice(e.message, true); }
 }
 init();
