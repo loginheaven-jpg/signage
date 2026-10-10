@@ -233,6 +233,9 @@ select.cue-pick { width: 74px; flex: none; padding: 3px 4px; font-size: 12px; co
 .cue-table.cards td.name { flex: 1 1 calc(100% - 40px); min-width: 0; width: auto; display: flex; align-items: center; gap: 6px; }
 .cue-table.cards td.name .cue-file { flex: 1; min-width: 0; }
 .cue-table.cards td[data-label]::before { content: attr(data-label); font-size: 11px; color: #888; margin-right: 6px; }
+/* 함께 넘기기: A·B 파일을 첫 줄에 나란히 놓는다 */
+.cue-table.cards.pair td.name { flex: 1 1 calc(50% - 40px); }
+.cue-table.cards td.name[data-label]::before { margin-right: 0; font-weight: 700; }
 @media (max-width: 640px) {
   .cue-table thead { display: none; }
   .cue-table tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 0; border-bottom: 1px solid #e2e5ea; }
@@ -240,6 +243,8 @@ select.cue-pick { width: 74px; flex: none; padding: 3px 4px; font-size: 12px; co
   .cue-table td.num { width: auto; font-weight: 600; }
   .cue-table td.name { flex: 1 1 calc(100% - 40px); min-width: 0; width: auto; display: flex; align-items: center; gap: 6px; }
   .cue-table td.name.second { flex-basis: 100%; }
+  .cue-table.cards.pair td.name { flex: 1 1 calc(100% - 40px); }
+  .cue-table.cards.pair td.name.second { flex-basis: 100%; }
   .cue-table td.name .cue-file { flex: 1; min-width: 0; }
   .cue-table td[data-label]::before { content: attr(data-label); font-size: 11px; color: #888; margin-right: 6px; }
   .cue-table td.name[data-label]::before { margin-right: 0; }
@@ -1296,7 +1301,7 @@ function renderSchedule(passive) {
     ${r.kind === 'date' && !r.from && !r.to ? '<span class="cue-hint">시간을 비우면 하루 종일</span>' : ''}
     <button type="button" class="cue-link" onclick="cueRuleDel(${i})">삭제</button></div>`).join('');
   const body = d.type === 'sync'
-    ? `<div class="cue-scroll"><table class="cue-table" id="cueRows"><thead><tr><th></th><th>A 모니터</th><th>B 모니터</th><th>시간(초)</th><th>소리</th><th>전환</th><th>기간</th><th>사용</th><th></th></tr></thead><tbody>${d.rows.map((row, i) => cueSyncRow(row, i, d.rows.length)).join('')}</tbody></table></div>
+    ? `<div class="cue-scroll"><table class="cue-table cards pair" id="cueRows"><thead><tr><th></th><th>A 모니터</th><th>B 모니터</th><th>시간(초)</th><th>소리</th><th>전환</th><th>기간</th><th>사용</th><th></th></tr></thead><tbody>${d.rows.map((row, i) => cueSyncRow(row, i, d.rows.length)).join('')}</tbody></table></div>
        <div class="cue-row cue-between"><button type="button" class="cue-link" id="cueAddRow" onclick="cueAdd('rows')">+ 줄 추가</button><p class="cue-hint">${dual ? '한 줄이 A·B에 동시에 나옵니다. B를 비운 줄에서는 B 화면이 검게 비워집니다.' : '모니터 1대에서는 한 줄의 A 다음에 B를 보여 줍니다.'} 시간 0은 그 줄의 영상이 끝날 때까지입니다.</p></div>`
     : dual
       ? `<div class="cue-ab">${cueListTable('a', 'A 모니터 목록', true)}${cueListTable('b', 'B 모니터 목록', true)}</div><p class="cue-hint">A와 B는 서로 기다리지 않고 각자 처음부터 끝까지 돈 뒤 반복합니다. 시간 0은 영상 길이만큼입니다.</p>`
