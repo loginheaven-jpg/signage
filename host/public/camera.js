@@ -73,13 +73,13 @@ window.addEventListener('popstate', event => {
   }
   const next = event.state?.camera ? event.state : { camera: true, page: 'purpose', depth: 0 };
   navigation = next;
-  for (const id of ['folderDialog', 'siteDialog', 'cameraDialog']) if (el(id).open && next.dialog !== id) el(id).close();
+  for (const id of ['folderDialog', 'siteDialog', 'cameraDialog', 'beautyDialog']) if (el(id).open && next.dialog !== id) el(id).close();
   if (next.page === 'work' && settings) showWork(false);
   else if (next.page === 'setup' && currentPage !== 'setup') openSetup(next.mode || mode, false);
   else view(next.page === 'work' ? 'purpose' : next.page, false);
   if (next.dialog && !el(next.dialog).open) el(next.dialog).showModal();
 });
-for (const id of ['folderDialog', 'siteDialog', 'cameraDialog']) {
+for (const id of ['folderDialog', 'siteDialog', 'cameraDialog', 'beautyDialog']) {
   el(id).addEventListener('cancel', event => { event.preventDefault(); closeDialog(id); });
 }
 function uuid() { return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + '-' + [...crypto.getRandomValues(new Uint8Array(16))].map(x => x.toString(16).padStart(2, '0')).join(''); }
@@ -146,18 +146,19 @@ async function writeDraft() {
     // 교회폴더 저장은 수백 장을 고를 수 있어 기기에 복사해 두는 양을 제한한다. 넘는 사진은 화면이
     // 꺼지면 다시 골라야 하지만, 이미 접수한 사진은 서버가 알아보고 다시 올리지 않는다.
     let archiveBytes = 0;
-    for (const r of selected) if (r.kind !== 'video' && isArchiveEntry(r) && storedFiles.has(r.key)) archiveBytes += r.file.size;
+    for (const r of selected) if (r.kind !== 'video' && isArchiveEntry(r) && storedFiles.has(r.key)) archiveBytes += r.file.size + (r.beautyFile?.size || 0);
     for (const r of selected) {
       if (r.kind === 'video') continue;
-      const keep = storedFiles.has(r.key) || !isArchiveEntry(r) || archiveBytes + r.file.size <= DRAFT_BUDGET;
-      if (keep && isArchiveEntry(r) && !storedFiles.has(r.key)) archiveBytes += r.file.size;
-      if (keep) { files.set(r.key, r.file); if (r.previewFile) files.set(r.key + ':p', r.previewFile); }
-      const { url, file, previewFile, ...lean } = r; entries.push(lean);
+      const entryBytes = r.file.size + (r.beautyFile?.size || 0);
+      const keep = storedFiles.has(r.key) || !isArchiveEntry(r) || archiveBytes + entryBytes <= DRAFT_BUDGET;
+      if (keep && isArchiveEntry(r) && !storedFiles.has(r.key)) archiveBytes += entryBytes;
+      if (keep) { files.set(r.key, r.file); if (r.previewFile) files.set(r.key + ':p', r.previewFile); if (r.beautyFile) files.set(r.key + ':b', r.beautyFile); }
+      const { url, file, previewFile, beautyFile, ...lean } = r; entries.push(lean);
     }
     for (const p of originals) files.set(p.key, p.file);
     await new Promise((resolve, reject) => {
       const tx = db.transaction(['drafts', 'files'], 'readwrite'), store = tx.objectStore('files');
-      for (const [key, blob] of files) if (!storedFiles.has(key)) store.put(blob, key);
+      for (const [key, blob] of files) if (!storedFiles.has(key) || key.endsWith(':b')) store.put(blob, key);
       for (const key of storedFiles) if (!files.has(key)) store.delete(key);
       tx.objectStore('drafts').put({ version: 2, settings, entries, originals: originals.map(({ file, ...p }) => p), message: el('message').value, keepMessage: el('keepMessage').checked, shareBatch }, 'current');
       tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
@@ -179,7 +180,7 @@ async function readDraft() {
     const store = db.transaction('files').objectStore('files');
     storedFiles = new Set(await settle(store.getAllKeys()));
     const total = draft.entries.length;
-    for (const r of draft.entries) if (storedFiles.has(r.key)) { r.file = await settle(store.get(r.key)); if (storedFiles.has(r.key + ':p')) r.previewFile = await settle(store.get(r.key + ':p')); }
+    for (const r of draft.entries) if (storedFiles.has(r.key)) { r.file = await settle(store.get(r.key)); if (storedFiles.has(r.key + ':p')) r.previewFile = await settle(store.get(r.key + ':p')); if (storedFiles.has(r.key + ':b')) r.beautyFile = await settle(store.get(r.key + ':b')); }
     for (const p of draft.originals) if (storedFiles.has(p.key)) p.file = await settle(store.get(p.key));
     draft.entries = draft.entries.filter(r => r.file); draft.originals = draft.originals.filter(p => p.file);
     draft.lost = total - draft.entries.length;
@@ -230,6 +231,75 @@ async function sharingFile(file, id, maxEdge = 3840, quality = 0.9) {
     return new File([blob], 'photo_' + id.slice(-12) + '.jpg', { type: 'image/jpeg' });
   } finally { image.close?.(); }
 }
+let beautyEntry = null, beautyPrepared = null, beautyLevel = 0, beautyEpoch = 0, beautyProcessing = false, beautyComparing = false;
+function renderBeauty() {
+  for (const button of document.querySelectorAll('[data-beauty-level]')) {
+    button.setAttribute('aria-pressed', String(Number(button.dataset.beautyLevel) === beautyLevel)); button.disabled = beautyProcessing;
+  }
+  el('applyBeauty').disabled = beautyProcessing || !beautyEntry;
+  el('compareBeauty').disabled = beautyProcessing || !beautyLevel;
+  el('compareBeauty').setAttribute('aria-pressed', String(beautyComparing));
+  el('compareBeauty').textContent = beautyComparing ? '보정본 보기' : '원본 비교';
+  const showCorrection = !!beautyPrepared && beautyLevel > 0 && !beautyComparing;
+  el('beautyOriginal').hidden = showCorrection; el('beautyCanvas').hidden = !showCorrection;
+  if (showCorrection) {
+    const canvas = window.CameraBeauty.paint(beautyPrepared, beautyLevel), preview = el('beautyCanvas');
+    preview.width = canvas.width; preview.height = canvas.height; preview.getContext('2d').drawImage(canvas, 0, 0);
+  }
+}
+function openBeauty(entry) {
+  if (busy || entry.submission || entry.kind === 'video') return;
+  beautyEpoch++; beautyEntry = entry; beautyPrepared = null; beautyLevel = 0; beautyProcessing = false; beautyComparing = false;
+  el('beautyOriginal').src = URL.createObjectURL(entry.file);
+  el('beautyState').textContent = '원하면 피부 보정을 선택하세요. 사진과 얼굴 분석은 이 기기에서만 처리합니다.';
+  el('beautyDestination').textContent = mode === 'both' ? '보정본을 모니터에 표출하고, 원본은 교회폴더에 보관합니다.' : mode === 'archive' ? '보정 적용 시 교회폴더에는 보정본이 저장됩니다. 원본으로 되돌릴 수도 있습니다.' : '보정본을 모니터에 표출합니다.';
+  renderBeauty(); openDialog('beautyDialog');
+  if (entry.beautyLevel) chooseBeauty(entry.beautyLevel);
+}
+async function chooseBeauty(level) {
+  if (!beautyEntry || beautyProcessing) return;
+  const epoch = beautyEpoch, entry = beautyEntry;
+  beautyComparing = false;
+  if (!level) { beautyLevel = 0; el('beautyState').textContent = '원본 사진으로 진행합니다.'; renderBeauty(); return; }
+  beautyProcessing = true; el('beautyState').textContent = beautyPrepared ? '피부 보정을 적용하고 있습니다…' : '얼굴과 피부를 확인하고 있습니다. 처음에는 보정 도구를 불러오는 데 시간이 걸릴 수 있습니다…'; renderBeauty();
+  try {
+    if (!beautyPrepared) {
+      let deadline;
+      let prepared;
+      try { prepared = await Promise.race([window.CameraBeauty.prepare(entry.file), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('beauty timeout')), 45000); })]); }
+      finally { clearTimeout(deadline); }
+      if (epoch !== beautyEpoch) return;
+      beautyPrepared = prepared;
+    }
+    beautyLevel = level;
+    el('beautyState').textContent = '얼굴 ' + beautyPrepared.faces + '명 · 피부를 부드럽게 보정했습니다. 눈·입술과 얼굴형은 유지합니다.';
+  } catch (error) {
+    if (epoch !== beautyEpoch) return;
+    beautyLevel = 0;
+    el('beautyState').textContent = error.message?.includes('얼굴을 찾지') ? error.message : '보정 도구를 불러오지 못했거나 이 사진을 처리할 수 없습니다. 원본으로 진행하거나 다시 시도해 주세요.';
+  } finally { if (epoch === beautyEpoch) { beautyProcessing = false; renderBeauty(); } }
+}
+for (const button of document.querySelectorAll('[data-beauty-level]')) button.onclick = () => chooseBeauty(Number(button.dataset.beautyLevel));
+el('closeBeauty').onclick = () => closeDialog('beautyDialog');
+el('compareBeauty').onclick = () => { beautyComparing = !beautyComparing; renderBeauty(); };
+el('beautyDialog').addEventListener('close', () => {
+  beautyEpoch++; beautyEntry = null; beautyPrepared = null; beautyProcessing = false;
+  URL.revokeObjectURL(el('beautyOriginal').src); el('beautyOriginal').removeAttribute('src');
+  el('beautyCanvas').width = el('beautyCanvas').height = 1;
+});
+el('applyBeauty').onclick = async () => {
+  if (!beautyEntry || beautyProcessing || busy || beautyEntry.submission) return;
+  const entry = beautyEntry, epoch = beautyEpoch, level = beautyLevel;
+  beautyProcessing = true; el('beautyState').textContent = '사진을 준비하고 있습니다…'; renderBeauty();
+  try {
+    const file = level ? await window.CameraBeauty.file(beautyPrepared, level, entry.file) : null;
+    if (epoch !== beautyEpoch || !selected.includes(entry)) return;
+    URL.revokeObjectURL(entry.url); entry.beautyFile = file; entry.beautyLevel = level; delete entry.previewFile;
+    entry.url = URL.createObjectURL(file || entry.file); entry.error = '';
+    await persistDraft(); renderReview(); closeDialog('beautyDialog');
+  } catch { if (epoch === beautyEpoch) el('beautyState').textContent = '보정 사진을 준비하지 못했습니다. 다시 시도하거나 원본을 선택해 주세요.'; }
+  finally { if (epoch === beautyEpoch) { beautyProcessing = false; renderBeauty(); } }
+};
 function renderShare() {
   shareUrls.forEach(url => URL.revokeObjectURL(url)); shareUrls = [];
   const photos = shareBatch?.photos || [];
@@ -561,6 +631,7 @@ async function addFiles(files, captured = false) {
   const slots = limit - selected.length;
   if (files.length > slots) notice('한 번에 ' + limit + '장까지 가능합니다. 초과 사진은 추가하지 않았습니다.', true);
   else if (files.length > REVIEW_PAGE) notice('사진 ' + files.length + '장을 확인하고 있습니다…');
+  const added = [];
   for (const file of [...files].slice(0, slots)) {
     if (!file.size) { notice(file.name + ': 사진 파일이 비어 있습니다. 저장을 마친 뒤 다시 선택해 주세요.', true); continue; }
     const isVideo = /^video\//.test(file.type) || /\.(mp4|mov|m4v|webm|mkv|3gp)$/i.test(file.name);
@@ -583,11 +654,13 @@ async function addFiles(files, captured = false) {
     } catch {}
     if (!date && file.lastModified) { date = localDate(file.lastModified); dateSource = captured ? 'capture' : 'fileModified'; }
     const requestId = uuid();
-    selected.push({ file, requestId, key: requestId, date, dateSource, url: URL.createObjectURL(file), error: '' });
+    const entry = { file, requestId, key: requestId, date, dateSource, url: URL.createObjectURL(file), error: '' };
+    selected.push(entry); added.push(entry);
   }
   if (files.length > REVIEW_PAGE && files.length <= slots) notice('사진 ' + selected.length + '장을 선택했습니다.');
   await persistDraft(); renderReview();
   if (selected.length) el('review').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (captured && added.length === 1) openBeauty(added[0]);
 }
 function renderReview() {
   el('review').hidden = !selected.length;
@@ -612,7 +685,13 @@ function renderReview() {
     const dateInfo = node('p', ({ exif: '사진 촬영정보', capture: '방금 촬영한 날짜', fileModified: '파일 수정일시 — 필요하면 수정하세요', user: '직접 지정', unknown: '날짜미상' })[r.dateSource]);
     const remove = node('button', '제외'); remove.disabled = busy;
     remove.onclick = () => { if (r.submission && !confirm('서버에 접수되었을 수 있는 사진입니다. 대기 목록에서 제외해도 이미 접수된 사진은 취소되지 않습니다. 제외할까요?')) return; URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r); persistDraft(); renderReview(); };
-    card.append(img, caption, state, label, dateInfo, remove); return card;
+    card.append(img, caption, state);
+    if (r.kind !== 'video') {
+      const edit = node('button', r.beautyLevel ? '피부 보정 변경' : '피부 보정', 'beautyEdit'); edit.type = 'button'; edit.disabled = busy || !!r.submission;
+      edit.onclick = () => openBeauty(r); card.append(edit);
+      if (r.beautyLevel) card.append(node('p', mode === 'both' ? '피부 보정 표출 · 원본 보관' : mode === 'archive' ? '피부 보정본 저장' : '피부 보정본 표출', 'beautyApplied'));
+    }
+    card.append(label, dateInfo, remove); return card;
   }));
   if (selected.length > reviewShown) {
     const more = node('button', '나머지 ' + (selected.length - reviewShown) + '장 중 ' + Math.min(REVIEW_PAGE, selected.length - reviewShown) + '장 더 보기'); more.type = 'button'; more.id = 'moreReview'; more.disabled = busy;
@@ -660,7 +739,7 @@ async function backgroundTransfer(items) {
     const requests = items.map(r => {
       const form = submissionForm(r);
       if (r.kind === 'video') { form.append('muted', '1'); form.append('video', r.file, r.file.name); }
-      else { form.append('originalName', r.file.name); form.append('photo', r.file, r.file.name); }
+      else { const file = r.beautyFile || r.file; form.append('originalName', file.name); form.append('photo', file, file.name); }
       return new Request('/live/api/camera/' + (r.kind === 'video' ? 'video' : 'photo'), { method: 'POST', body: form, headers: legacyToken ? { 'x-live-token': legacyToken } : {} });
     });
     const id = 'camera-archive-' + uuid();
@@ -696,7 +775,7 @@ function followTarget(result, s) {
 async function archiveRequestId(r, s) {
   if (!crypto.subtle) return r.requestId;
   // 폴더는 연도와 이름으로만 본다. 첫 사진이 폴더를 만든 뒤 붙는 폴더 ID 때문에 ID가 달라지지 않게 한다.
-  const text = JSON.stringify([r.kind || 'photo', r.file.name, r.file.size, r.file.lastModified, s.target?.year, s.target?.folderName || s.target?.eventName, s.uploaderName, s.date]);
+  const text = JSON.stringify([r.kind || 'photo', r.file.name, r.file.size, r.file.lastModified, ...(r.beautyFile ? [r.beautyLevel, r.beautyFile.size] : []), s.target?.year, s.target?.folderName || s.target?.eventName, s.uploaderName, s.date]);
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return 'a-' + [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 48);
 }
@@ -730,7 +809,7 @@ async function sendArchive(auto = false) {
           const s = r.submission, form = submissionForm(r);
           let result;
           if (r.kind === 'video') { form.append('muted', '1'); form.append('video', r.file, r.file.name); result = await uploadVideo(form, () => {}); }
-          else { form.append('originalName', r.file.name); form.append('photo', r.file, r.file.name); result = await api('photo', { method: 'POST', body: form }); }
+          else { const file = r.beautyFile || r.file; form.append('originalName', file.name); form.append('photo', file, file.name); result = await api('photo', { method: 'POST', body: form }); }
           waiting = ''; accepted++; followTarget(result, s); await finish(r); return;
         } catch (e) {
           if (e.backlog) { waiting = '서버가 Drive로 옮기는 중입니다. 잠시 후 이어서 올립니다.'; progress(); await sleep(20000); attempt--; continue; }
@@ -804,8 +883,8 @@ async function sendPhotos() {
           await persistDraft(); continue;
         }
         if (s.fast && !r.previewFile) {
-          try { r.previewFile = await sharingFile(r.file, r.requestId, 2048, 0.82); }
-          catch { r.previewFile = r.file; notice('이 사진 형식은 기기에서 축소할 수 없어 원본 전송 후 표출합니다.', true); }
+          try { r.previewFile = await sharingFile(r.beautyFile || r.file, r.requestId, 2048, 0.82); }
+          catch { r.previewFile = r.beautyFile || r.file; notice('이 사진 형식은 기기에서 축소할 수 없어 원본 전송 후 표출합니다.', true); }
           if (!await persistDraft()) throw new Error('전송 대기 사진을 저장하지 못했습니다.');
         }
         const transfer = s.fast ? r.previewFile : r.file;
@@ -1013,7 +1092,7 @@ for (const [button, input] of [['shoot', 'shootInput'], ['shootVideo', 'videoInp
     }
     storage.set('capturePending', true); el(input).value = ''; el(input).click();
   };
-  el(input).onchange = () => addFiles(el(input).files, input === 'videoInput');
+  el(input).onchange = () => addFiles(el(input).files, input === 'videoInput' || input === 'shootInput');
   el(input).addEventListener('cancel', () => storage.set('capturePending', false));
 }
 el('closeCamera').onclick = () => closeDialog('cameraDialog');
@@ -1028,7 +1107,8 @@ el('snap').onclick = async () => {
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
     if (!blob) throw new Error('capture');
     const file = new File([blob], '촬영_' + Date.now() + '.jpg', { type: 'image/jpeg', lastModified: Date.now() });
-    closeDialog('cameraDialog'); await addFiles([file], true);
+    const closed = new Promise(resolve => el('cameraDialog').addEventListener('close', resolve, { once: true }));
+    closeDialog('cameraDialog'); await closed; await addFiles([file], true);
   } catch { notice('사진을 만들지 못했습니다. 다시 촬영해 주세요.', true); }
   finally { el('snap').disabled = false; }
 };
@@ -1062,7 +1142,7 @@ async function init() {
     settings = draft?.entries?.length ? draft.settings : storage.get('settings');
     if (settings && (!labels[settings.mode] || !settings.uploaderName || (settings.mode === 'archive' && !settings.target))) settings = null;
     if (draft?.entries?.length && settings) {
-      selected = draft.entries.map(r => ({ ...r, url: URL.createObjectURL(r.file) }));
+      selected = draft.entries.map(r => ({ ...r, url: URL.createObjectURL(r.beautyFile || r.file) }));
       el('message').value = draft.message || ''; el('keepMessage').checked = !!draft.keepMessage;
       notice('전송 대기 사진 ' + selected.length + '장을 복원했습니다. 같은 작업으로 계속해 주세요.' + (draft.lost ? ' 나머지 ' + draft.lost + '장은 다시 선택해 주세요. 이미 올라간 사진은 다시 올리지 않습니다.' : ''), !!draft.lost);
     } else if (draft?.lost) { notice('화면이 닫혀 올리던 사진 ' + draft.lost + '장이 대기 목록에서 빠졌습니다. 같은 사진을 다시 선택하면 이미 올라간 사진은 건너뛰고 나머지만 올립니다.', true);

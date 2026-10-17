@@ -122,6 +122,8 @@ const { startPreview } = require('./camera-preview.cjs');
     await page.locator('#shoot').click(); await page.locator('#cameraDialog').waitFor({ state: 'visible' });
     await page.waitForFunction(() => document.querySelector('#cameraVideo').videoWidth > 0);
     await page.locator('#snap').click(); await page.locator('#review').waitFor({ state: 'visible' });
+    await page.locator('#beautyDialog').waitFor({ state: 'visible' });
+    await page.locator('#applyBeauty').click(); await page.locator('#beautyDialog').waitFor({ state: 'hidden' });
     await page.waitForFunction(() => document.querySelector('#cameraVideo').srcObject === null);
     assert.equal((await page.locator('#selectedPhotos').textContent()).includes('방금 촬영한 날짜'), true);
     await page.locator('#discard').click();
