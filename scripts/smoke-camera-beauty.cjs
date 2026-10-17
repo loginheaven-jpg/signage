@@ -22,16 +22,16 @@ const { startPreview } = require('./camera-preview.cjs');
   await page.locator('#beautyStrength').press('End');
   await page.waitForFunction(()=>!beautyProcessing && beautyPrepared,{timeout:60000});
   assert.equal(await page.locator('#beautyStrength').inputValue(),'100','slider can initialize the face analysis');
-  await page.locator('#toggleBeauty').click();await page.waitForFunction(()=>document.querySelector('#beautyStrength').value==='0');
-  assert.equal(await page.locator('#toggleBeauty').getAttribute('aria-pressed'),'false');
-  await page.locator('#toggleBeauty').click();await page.waitForFunction(()=>document.querySelector('#beautyStrength').value==='100');
+  await setStrength(0);await page.waitForFunction(()=>document.querySelector('#beautyStrengthValue').textContent==='0');
+  assert.equal(await page.locator('#compareBeauty').isDisabled(),true);
+  await setStrength(100);await page.waitForFunction(()=>document.querySelector('#beautyStrengthValue').textContent==='100');
   await page.evaluate(()=>{
    const paint=CameraBeauty.paint;window.beautyPaintCalls=0;
    CameraBeauty.paint=(...args)=>{window.beautyPaintCalls++;return paint(...args);};
    const slider=document.querySelector('#beautyStrength');
    for(let value=40;value<=61;value++){slider.value=value;slider.dispatchEvent(new Event('input',{bubbles:true}));}
   });
-  await page.waitForFunction(()=>document.querySelector('#beautyStrengthValue').textContent==='61');
+  await page.waitForFunction(()=>document.querySelector('#beautyStrengthValue').textContent==='60');
   assert.equal(await page.evaluate(()=>window.beautyPaintCalls),1,'rapid slider events render once per frame');
   await setStrength(35);await page.waitForFunction(()=>document.querySelector('#beautyStrength').value==='35');
   const pixels=await page.evaluate(()=>{
@@ -68,6 +68,16 @@ const { startPreview } = require('./camera-preview.cjs');
   assert.ok(pixels.edgeRamp>=10,'outer facial mask has a broad transition instead of a narrow gray ring');
   assert.ok(pixels.edgeMaxStep<=30,'outer transition avoids a sudden brightness step');
   assert.equal(await page.locator('#beautyStrength').inputValue(),'35');
+  const layout=await page.evaluate(()=>{
+   const photo=document.querySelector('.beautyPreview').getBoundingClientRect(),slider=document.querySelector('.beautySlider').getBoundingClientRect(),compare=document.querySelector('#compareBeauty').getBoundingClientRect();
+   return {photoHeight:photo.height,sliderRight:slider.right,compareLeft:compare.left,rowOffset:Math.abs((slider.top+slider.bottom-compare.top-compare.bottom)/2)};
+  });
+  assert.ok(layout.photoHeight>450,'phone preview is substantially larger than the old 304px image area');
+  assert.ok(layout.sliderRight<layout.compareLeft);assert.ok(layout.rowOffset<5,'slider and comparison share one row');
+  assert.equal(await page.locator('#toggleBeauty').count(),0,'duplicate on/off control removed');
+  await page.locator('#colorTab').click();await page.locator('[data-photo-color="warm"]').click();
+  await page.locator('#frameTab').click();await page.locator('[data-photo-frame="white"]').click();await page.locator('#skinTab').click();
+  await page.waitForFunction(()=>document.querySelector('#beautyCanvas').getContext('2d').getImageData(0,0,1,1).data[0]===255);
   await page.locator('#compareBeauty').click();assert.equal(await page.locator('#beautyOriginal').isVisible(),true);
   await page.locator('#compareBeauty').click();assert.equal(await page.locator('#beautyCanvas').isVisible(),true);
   assert.equal(await page.locator('#beautyStrength').inputValue(),'35','comparison preserves the selected strength');
@@ -78,22 +88,23 @@ const { startPreview } = require('./camera-preview.cjs');
   await page.reload();await page.locator('#continueResume').click();
   assert.equal(await page.evaluate(()=>selected[0].beautyFile.size),natural);
   assert.equal(await page.evaluate(()=>selected[0].beautyLevel),35);
+  assert.deepEqual(await page.evaluate(()=>selected[0].photoEffects),{color:'warm',frame:'white'});
   // 이전 버전의 강도 1/2를 35/70으로 해석하고 저장한 원본은 유지한다.
   await page.evaluate(()=>{selected[0].beautyLevel=1;delete selected[0].beautyScale;});
   // 기존 저장 키를 덮어써도 재접속 뒤 예전 보정으로 돌아가지 않는다.
   await page.locator('.beautyEdit').click();await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared,{timeout:60000});
   assert.equal(await page.locator('#beautyStrength').inputValue(),'35','legacy preset migrated when reopening');
   await setStrength(70);await page.waitForFunction(()=>document.querySelector('#beautyStrength').value==='70');
-  await page.locator('#beautyStrength').press('ArrowLeft');await page.waitForFunction(()=>document.querySelector('#beautyStrengthValue').textContent==='69');
-  assert.equal(await page.locator('#toggleBeauty').getAttribute('aria-pressed'),'true','custom strength keeps skin retouch enabled');
+  await page.locator('#beautyStrength').press('ArrowLeft');await page.waitForFunction(()=>document.querySelector('#beautyStrengthValue').textContent==='65');
+  assert.equal(await page.locator('#beautyStrength').getAttribute('step'),'5');
   await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
   const bright=await page.evaluate(()=>selected[0].beautyFile.size);assert.notEqual(bright,natural);
   await page.reload();await page.locator('#continueResume').click();assert.equal(await page.evaluate(()=>selected[0].beautyFile.size),bright);
-  assert.equal(await page.evaluate(()=>selected[0].beautyLevel),69);assert.equal(await page.evaluate(()=>selected[0].beautyScale),100);
+  assert.equal(await page.evaluate(()=>selected[0].beautyLevel),65);assert.equal(await page.evaluate(()=>selected[0].beautyScale),100);
   await page.locator('.beautyEdit').click();await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared);
-  assert.equal(await page.locator('#beautyStrength').inputValue(),'69');
+  assert.equal(await page.locator('#beautyStrength').inputValue(),'65');
   await page.locator('#beautyStrength').press('ArrowRight');await page.locator('#closeBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
-  assert.equal(await page.evaluate(()=>selected[0].beautyLevel),69,'closing discards unsaved slider changes');
+  assert.equal(await page.evaluate(()=>selected[0].beautyLevel),65,'closing discards unsaved slider changes');
   await page.locator('#send').click();await page.waitForFunction(()=>!busy&&selected.length===0);
   await page.waitForFunction(()=>originals.length===0);
   assert.equal(preview.published.length,1);
@@ -110,12 +121,12 @@ const { startPreview } = require('./camera-preview.cjs');
   // 보정을 원본으로 되돌리면 저장된 보정 파일도 제거한다.
   await page.locator('#discard').click();
   await page.locator('#galleryInput').setInputFiles({name:'restore.jpg',mimeType:'image/jpeg',buffer:face});
-  await page.locator('.beautyEdit').click();await page.locator('#toggleBeauty').click();await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared);
-  assert.equal(await page.locator('#beautyStrength').inputValue(),'50','new photo starts at 50 when enabled');
+  await page.locator('.beautyEdit').click();await setStrength(50);await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared);
+  assert.equal(await page.locator('#beautyStrength').inputValue(),'50','slider directly selects skin strength');
   await setStrength(35);
   await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
   await page.locator('.beautyEdit').click();await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared);
-  await page.locator('#toggleBeauty').click();await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
+  await setStrength(0);await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
   await page.reload();await page.locator('#continueResume').click();assert.equal(await page.evaluate(()=>!!selected[0].beautyFile),false);
   // 교회폴더 저장 전용에서도 보정본을 전송한다.
   await page.locator('#discard').click();await page.locator('#home').click();await page.locator('[data-mode="archive"]').click();
@@ -130,6 +141,44 @@ const { startPreview } = require('./camera-preview.cjs');
   const archived=[...preview.archive.records.values()].find(r=>r.id!==record.id);assert.ok(archived);
   const archivedBytes=archived.driveId?preview.remote.get(archived.driveId).bytes:fs.readFileSync(preview.archive.localPath(archived));
   assert.deepEqual(archivedBytes,Buffer.from(expected));
+  // 얼굴 없는 사진에도 색감과 프레임을 적용하고 저장·복원·전송한다.
+  await page.locator('#galleryInput').setInputFiles(preview.photo);await page.locator('.beautyEdit').click();
+  await page.evaluate(()=>{window.filterPrepareCalls=0;const prepare=CameraBeauty.prepare;CameraBeauty.prepare=(...args)=>{window.filterPrepareCalls++;return prepare(...args);};});
+  await page.locator('#colorTab').click();await page.locator('[data-photo-color="warm"]').click();await page.waitForFunction(()=>!beautyProcessing&&beautyBase);
+  for(const color of ['warm','pastel','film','mono']){
+   await page.locator('[data-photo-color="'+color+'"]').click();
+   await page.waitForFunction(color=>document.querySelector('[data-photo-color="'+color+'"]').getAttribute('aria-pressed')==='true',color);
+   const pixel=await page.evaluate(()=>Array.from(document.querySelector('#beautyCanvas').getContext('2d').getImageData(400,300,1,1).data));
+   assert.notDeepEqual(pixel.slice(0,3),[83,120,106]);
+   if(color==='mono')assert.ok(pixel[0]===pixel[1]&&pixel[1]===pixel[2],'monochrome is actually gray');
+  }
+  await page.locator('[data-photo-color="warm"]').click();await page.locator('#frameTab').click();await page.locator('[data-photo-frame="polaroid"]').click();
+  await page.waitForFunction(()=>document.querySelector('[data-photo-frame="polaroid"]').getAttribute('aria-pressed')==='true');
+  const composition=await page.evaluate(async()=>({width:renderedBeauty().width,height:renderedBeauty().height,corner:Array.from(renderedBeauty().getContext('2d').getImageData(0,0,1,1).data),bytes:Array.from(new Uint8Array(await (await CameraBeauty.exportPhoto(renderedBeauty(),beautyEntry.file)).arrayBuffer()))}));
+  assert.ok(composition.width>1200&&composition.height>900);assert.deepEqual(composition.corner,[255,248,236,255]);
+  assert.equal(await page.evaluate(()=>window.filterPrepareCalls),0,'color/frame do not require face detection');
+  await page.locator('#compareBeauty').click();assert.equal(await page.locator('#beautyOriginal').isVisible(),true);
+  assert.equal(await page.evaluate(()=>beautyEffects.color),'warm');await page.locator('#compareBeauty').click();
+  for(const size of [{width:320,height:568},{width:390,height:844}]){
+   await page.setViewportSize(size);
+   assert.equal(await page.locator('#beautyDialog').evaluate(d=>d.scrollWidth<=d.clientWidth),true);
+   assert.equal(await page.locator('#applyBeauty').evaluate(b=>b.getBoundingClientRect().bottom<=innerHeight+1),true);
+  }
+  await page.screenshot({path:require('node:path').join(__dirname,'../output/camera-filters-mobile.png')});
+  await page.locator('#frameTab').press('ArrowLeft');assert.equal(await page.locator('#colorTab').getAttribute('aria-selected'),'true');
+  await page.locator('#colorTab').press('Home');assert.equal(await page.locator('#skinTab').getAttribute('aria-selected'),'true');
+  await page.setViewportSize({width:844,height:390});await page.locator('#applyBeauty').scrollIntoViewIfNeeded();
+  assert.equal(await page.locator('#applyBeauty').evaluate(b=>b.getBoundingClientRect().bottom<=innerHeight+1),true,'landscape still permits access to continue');
+  await page.setViewportSize({width:390,height:844});
+  await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
+  await page.reload();await page.locator('#continueResume').click();
+  assert.deepEqual(await page.evaluate(()=>selected[0].photoEffects),{color:'warm',frame:'polaroid'});assert.equal(await page.evaluate(()=>selected[0].beautyLevel),0);
+  await page.locator('.beautyEdit').click();await page.waitForFunction(()=>!beautyProcessing&&beautyBase);
+  assert.equal(await page.locator('#compareBeauty').isEnabled(),true);
+  await page.locator('#closeBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
+  await page.locator('#send').click();await page.waitForFunction(()=>!busy&&selected.length===0);
+  const composedRecord=[...preview.archive.records.values()].find(r=>r.id!==record.id&&r.id!==archived.id);assert.ok(composedRecord);
+  const composedBytes=composedRecord.driveId?preview.remote.get(composedRecord.driveId).bytes:fs.readFileSync(preview.archive.localPath(composedRecord));assert.deepEqual(composedBytes,Buffer.from(composition.bytes));
   assert.deepEqual(external,[],'no external face analysis requests');assert.deepEqual(errors,[]);
   console.log(JSON.stringify({ok:true,pixels,natural,bright}));
  } finally {if(browser)await browser.close();await preview.close();}

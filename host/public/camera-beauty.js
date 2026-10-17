@@ -135,10 +135,40 @@ window.CameraBeauty = (() => {
     }
     canvas.getContext('2d').putImageData(pixels,0,0);return canvas;
   }
-  async function file(prepared, strength, original) {
-    const canvas=paint(prepared,strength), blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.94));
-    if(!blob)throw new Error('보정 사진을 만들지 못했습니다. 원본으로 진행하거나 다시 시도해 주세요.');
-    return new File([blob], original.name.replace(/\.[^.]+$/,'')+'_피부보정.jpg',{type:'image/jpeg',lastModified:original.lastModified});
+  function compose(base, effects = {}) {
+    const canvas=document.createElement('canvas');canvas.width=base.width;canvas.height=base.height;
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(base,0,0);
+    if(['warm','pastel','film','mono'].includes(effects.color)){
+      const pixels=ctx.getImageData(0,0,canvas.width,canvas.height), data=pixels.data;
+      for(let i=0;i<data.length;i+=4){
+        const r=data[i],g=data[i+1],b=data[i+2];
+        if(effects.color==='warm'){data[i]=r*1.055+4;data[i+1]=g*1.015+1;data[i+2]=b*0.93;}
+        if(effects.color==='pastel'){data[i]=(r-128)*0.86+144;data[i+1]=(g-128)*0.86+142;data[i+2]=(b-128)*0.86+145;}
+        if(effects.color==='film'){
+          data[i]=((r*0.85+g*0.12+b*0.03)-128)*1.06+136;
+          data[i+1]=((r*0.06+g*0.90+b*0.04)-128)*1.02+130;
+          data[i+2]=((r*0.06+g*0.14+b*0.80)-128)*0.96+125;
+        }
+        if(effects.color==='mono'){const gray=0.2126*r+0.7152*g+0.0722*b;data[i]=data[i+1]=data[i+2]=gray;}
+      }
+      ctx.putImageData(pixels,0,0);
+    }
+    if(['white','polaroid'].includes(effects.frame)){
+      const border=Math.max(8,Math.round(Math.min(canvas.width,canvas.height)*0.045));
+      const footer=effects.frame==='polaroid'?border*3:0;
+      const framed=document.createElement('canvas');framed.width=canvas.width+border*2;framed.height=canvas.height+border*2+footer;
+      const f=framed.getContext('2d');f.fillStyle=effects.frame==='polaroid'?'#fff8ec':'#ffffff';f.fillRect(0,0,framed.width,framed.height);f.drawImage(canvas,border,border);
+      if(footer){f.fillStyle='#244b3c';f.textAlign='center';f.textBaseline='middle';f.font='500 '+Math.round(border*0.7)+'px system-ui,sans-serif';f.fillText('오늘의 한 컷 · YEBOM',framed.width/2,border+canvas.height+footer*0.55,canvas.width);}
+      const scale=Math.min(1,2048/Math.max(framed.width,framed.height));canvas.width=Math.round(framed.width*scale);canvas.height=Math.round(framed.height*scale);
+      ctx.drawImage(framed,0,0,canvas.width,canvas.height);
+    }
+    return canvas;
   }
-  return { decode,prepare,paint,file };
+  async function exportPhoto(canvas, original) {
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.94));
+    if(!blob)throw new Error('보정 사진을 만들지 못했습니다. 원본으로 진행하거나 다시 시도해 주세요.');
+    return new File([blob], original.name.replace(/\.[^.]+$/,'')+'_꾸미기.jpg',{type:'image/jpeg',lastModified:original.lastModified});
+  }
+  async function file(prepared, strength, original, effects) { return exportPhoto(compose(paint(prepared,strength),effects),original); }
+  return { decode,prepare,paint,compose,exportPhoto,file };
 })();

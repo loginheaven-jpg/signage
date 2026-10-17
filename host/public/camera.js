@@ -232,50 +232,78 @@ async function sharingFile(file, id, maxEdge = 3840, quality = 0.9) {
   } finally { image.close?.(); }
 }
 let beautyEntry = null, beautyPrepared = null, beautyLevel = 0, beautyEpoch = 0, beautyProcessing = false, beautyComparing = false;
-let beautyRenderFrame = 0, beautyLastLevel = 50;
+let beautyRenderFrame = 0, beautyBase = null, beautyTab = 'skin', beautyEffects = { color: 'none', frame: 'none' };
+function hasPhotoEffects() { return beautyLevel > 0 || beautyEffects.color !== 'none' || beautyEffects.frame !== 'none'; }
+function renderedBeauty() {
+  const base = beautyPrepared ? window.CameraBeauty.paint(beautyPrepared, beautyLevel) : beautyBase;
+  return base && window.CameraBeauty.compose(base, beautyEffects);
+}
 function savedBeautyStrength(entry) { return entry.beautyScale === 100 ? entry.beautyLevel : ({ 1: 35, 2: 70 }[entry.beautyLevel] || 0); }
 function scheduleBeautyRender() {
   if (!beautyRenderFrame) beautyRenderFrame = requestAnimationFrame(renderBeauty);
 }
 function renderBeauty() {
   cancelAnimationFrame(beautyRenderFrame); beautyRenderFrame = 0;
-  el('toggleBeauty').setAttribute('aria-pressed', String(beautyLevel > 0));
-  el('toggleBeauty').disabled = beautyProcessing || !beautyEntry;
-  el('beautyToggleState').textContent = beautyLevel ? '켜짐' : '꺼짐';
-  el('applyBeauty').disabled = beautyProcessing || !beautyEntry;
+  for (const tab of document.querySelectorAll('[data-photo-tab]')) {
+    const active = tab.dataset.photoTab === beautyTab;
+    tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1;
+    el(tab.getAttribute('aria-controls')).hidden = !active;
+  }
+  for (const key of ['color', 'frame']) for (const button of document.querySelectorAll('[data-photo-' + key + ']')) {
+    button.setAttribute('aria-pressed', String(button.dataset[key === 'color' ? 'photoColor' : 'photoFrame'] === beautyEffects[key])); button.disabled = beautyProcessing;
+  }
+  el('applyBeauty').disabled = beautyProcessing || !beautyEntry || (hasPhotoEffects() && !beautyPrepared && !beautyBase);
   el('beautyStrength').disabled = beautyProcessing || !beautyEntry;
   el('beautyStrength').value = beautyLevel;
-  el('beautyStrength').setAttribute('aria-valuetext', beautyLevel ? '피부 보정 ' + beautyLevel + '%' : '원본');
+  el('beautyStrength').setAttribute('aria-valuetext', beautyLevel ? '피부 보정 ' + beautyLevel + '%' : '피부 보정 없음');
   el('beautyStrengthValue').textContent = beautyLevel;
-  el('compareBeauty').disabled = beautyProcessing || !beautyLevel;
+  el('compareBeauty').disabled = beautyProcessing || !hasPhotoEffects();
   el('compareBeauty').setAttribute('aria-pressed', String(beautyComparing));
-  el('compareBeauty').textContent = beautyComparing ? '보정본 보기' : '원본 비교';
-  const showCorrection = !!beautyPrepared && beautyLevel > 0 && !beautyComparing;
+  el('compareBeauty').textContent = beautyComparing ? '효과 보기' : '원본 비교';
+  const showCorrection = !!(beautyPrepared || beautyBase) && hasPhotoEffects() && !beautyComparing;
   el('beautyOriginal').hidden = showCorrection; el('beautyCanvas').hidden = !showCorrection;
   if (showCorrection) {
-    const canvas = window.CameraBeauty.paint(beautyPrepared, beautyLevel), preview = el('beautyCanvas');
+    const canvas = renderedBeauty(), preview = el('beautyCanvas');
     preview.width = canvas.width; preview.height = canvas.height; preview.getContext('2d').drawImage(canvas, 0, 0);
   }
 }
 function openBeauty(entry) {
   if (busy || entry.submission || entry.kind === 'video') return;
   beautyEpoch++; beautyEntry = entry; beautyPrepared = null; beautyLevel = 0; beautyProcessing = false; beautyComparing = false;
-  beautyLastLevel = savedBeautyStrength(entry) || 50;
+  beautyBase = null; beautyTab = 'skin';
+  beautyEffects = {
+    color: ['warm', 'pastel', 'film', 'mono'].includes(entry.photoEffects?.color) ? entry.photoEffects.color : 'none',
+    frame: ['white', 'polaroid'].includes(entry.photoEffects?.frame) ? entry.photoEffects.frame : 'none'
+  };
   el('beautyOriginal').src = URL.createObjectURL(entry.file);
-  el('beautyState').textContent = '원하면 피부 보정을 선택하세요. 사진과 얼굴 분석은 이 기기에서만 처리합니다.';
-  el('beautyDestination').textContent = mode === 'both' ? '보정본을 모니터에 표출하고, 원본은 교회폴더에 보관합니다.' : mode === 'archive' ? '보정 적용 시 교회폴더에는 보정본이 저장됩니다. 원본으로 되돌릴 수도 있습니다.' : '보정본을 모니터에 표출합니다.';
+  el('beautyState').textContent = '강도 0은 피부 보정 없음 · 색감과 프레임을 함께 적용할 수 있습니다.';
+  el('beautyDestination').textContent = mode === 'both' ? '꾸민 사진을 모니터에 표출하고, 원본은 교회폴더에 보관합니다.' : mode === 'archive' ? '효과를 적용하면 꾸민 사진을 교회폴더에 저장합니다.' : '꾸민 사진을 모니터에 표출합니다.';
   renderBeauty(); openDialog('beautyDialog');
   if (entry.beautyLevel) chooseBeauty(savedBeautyStrength(entry));
+  else if (hasPhotoEffects()) loadBeautyBase();
+}
+async function loadBeautyBase() {
+  if (beautyProcessing || !beautyEntry || beautyPrepared || beautyBase) return;
+  const epoch = beautyEpoch, file = beautyEntry.file;
+  beautyProcessing = true; el('beautyState').textContent = '사진을 준비하고 있습니다…'; renderBeauty();
+  try {
+    const canvas = await window.CameraBeauty.decode(file);
+    if (epoch !== beautyEpoch) return;
+    beautyBase = canvas; el('beautyState').textContent = '효과를 함께 고른 뒤 원본과 비교해 보세요.';
+  } catch {
+    if (epoch !== beautyEpoch) return;
+    beautyEffects = { color: 'none', frame: 'none' };
+    el('beautyState').textContent = '이 사진은 꾸미기를 지원하지 않습니다. 원본으로 진행해 주세요.';
+  } finally { if (epoch === beautyEpoch) { beautyProcessing = false; renderBeauty(); } }
 }
 async function chooseBeauty(level) {
   if (!beautyEntry || beautyProcessing) return;
-  level = Math.max(0, Math.min(100, Math.round(Number(level) || 0)));
+  level = Math.max(0, Math.min(100, Math.round((Number(level) || 0) / 5) * 5));
   const epoch = beautyEpoch, entry = beautyEntry;
   beautyComparing = false;
   if (!level || beautyPrepared) {
     beautyLevel = level;
-    if (level) beautyLastLevel = level;
-    el('beautyState').textContent = level ? '얼굴 ' + beautyPrepared.faces + '명 · 피부 보정 ' + level + ' · 눈·입술과 얼굴형은 유지합니다.' : '원본 사진으로 진행합니다.';
+    el('beautyState').textContent = level ? '얼굴 ' + beautyPrepared.faces + '명 · 피부 보정 ' + level : '피부 보정 없음 · 색감과 프레임은 유지됩니다.';
     scheduleBeautyRender(); return;
   }
   beautyProcessing = true; el('beautyState').textContent = beautyPrepared ? '피부 보정을 적용하고 있습니다…' : '얼굴과 피부를 확인하고 있습니다. 처음에는 보정 도구를 불러오는 데 시간이 걸릴 수 있습니다…'; renderBeauty();
@@ -289,21 +317,32 @@ async function chooseBeauty(level) {
       beautyPrepared = prepared;
     }
     beautyLevel = level;
-    beautyLastLevel = level;
-    el('beautyState').textContent = '얼굴 ' + beautyPrepared.faces + '명 · 피부 보정 ' + level + ' · 눈·입술과 얼굴형은 유지합니다.';
+    el('beautyState').textContent = '얼굴 ' + beautyPrepared.faces + '명 · 피부 보정 ' + level;
   } catch (error) {
     if (epoch !== beautyEpoch) return;
     beautyLevel = 0;
     el('beautyState').textContent = error.message?.includes('얼굴을 찾지') ? error.message : '보정 도구를 불러오지 못했거나 이 사진을 처리할 수 없습니다. 원본으로 진행하거나 다시 시도해 주세요.';
-  } finally { if (epoch === beautyEpoch) { beautyProcessing = false; renderBeauty(); } }
+  } finally { if (epoch === beautyEpoch) { beautyProcessing = false; renderBeauty(); if (hasPhotoEffects()) loadBeautyBase(); } }
 }
-el('toggleBeauty').onclick = () => chooseBeauty(beautyLevel ? 0 : beautyLastLevel);
+for (const tab of document.querySelectorAll('[data-photo-tab]')) {
+  tab.onclick = () => { beautyTab = tab.dataset.photoTab; renderBeauty(); };
+  tab.onkeydown = event => {
+    const tabs = [...document.querySelectorAll('[data-photo-tab]')], index = tabs.indexOf(tab);
+    const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+    if (next < 0) return; event.preventDefault(); tabs[next].click(); tabs[next].focus();
+  };
+}
+for (const key of ['color', 'frame']) for (const button of document.querySelectorAll('[data-photo-' + key + ']')) button.onclick = async () => {
+  if (beautyProcessing) return;
+  beautyEffects[key] = button.dataset[key === 'color' ? 'photoColor' : 'photoFrame']; beautyComparing = false;
+  await loadBeautyBase(); scheduleBeautyRender();
+};
 el('beautyStrength').oninput = () => chooseBeauty(Number(el('beautyStrength').value));
 el('closeBeauty').onclick = () => closeDialog('beautyDialog');
 el('compareBeauty').onclick = () => { beautyComparing = !beautyComparing; renderBeauty(); };
 el('beautyDialog').addEventListener('close', () => {
   cancelAnimationFrame(beautyRenderFrame); beautyRenderFrame = 0;
-  beautyEpoch++; beautyEntry = null; beautyPrepared = null; beautyProcessing = false;
+  beautyEpoch++; beautyEntry = null; beautyPrepared = null; beautyBase = null; beautyProcessing = false;
   URL.revokeObjectURL(el('beautyOriginal').src); el('beautyOriginal').removeAttribute('src');
   el('beautyCanvas').width = el('beautyCanvas').height = 1;
 });
@@ -312,9 +351,10 @@ el('applyBeauty').onclick = async () => {
   const entry = beautyEntry, epoch = beautyEpoch, level = beautyLevel;
   beautyProcessing = true; el('beautyState').textContent = '사진을 준비하고 있습니다…'; renderBeauty();
   try {
-    const file = level ? await window.CameraBeauty.file(beautyPrepared, level, entry.file) : null;
+    const effects = { ...beautyEffects };
+    const file = hasPhotoEffects() ? await window.CameraBeauty.exportPhoto(renderedBeauty(), entry.file) : null;
     if (epoch !== beautyEpoch || !selected.includes(entry)) return;
-    URL.revokeObjectURL(entry.url); entry.beautyFile = file; entry.beautyLevel = level; entry.beautyScale = 100; delete entry.previewFile;
+    URL.revokeObjectURL(entry.url); entry.beautyFile = file; entry.beautyLevel = level; entry.beautyScale = 100; entry.photoEffects = effects; delete entry.previewFile;
     entry.url = URL.createObjectURL(file || entry.file); entry.error = '';
     await persistDraft(); renderReview(); closeDialog('beautyDialog');
   } catch { if (epoch === beautyEpoch) el('beautyState').textContent = '보정 사진을 준비하지 못했습니다. 다시 시도하거나 원본을 선택해 주세요.'; }
@@ -707,9 +747,9 @@ function renderReview() {
     remove.onclick = () => { if (r.submission && !confirm('서버에 접수되었을 수 있는 사진입니다. 대기 목록에서 제외해도 이미 접수된 사진은 취소되지 않습니다. 제외할까요?')) return; URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r); persistDraft(); renderReview(); };
     card.append(img, caption, state);
     if (r.kind !== 'video') {
-      const edit = node('button', r.beautyLevel ? '피부 보정 변경' : '피부 보정', 'beautyEdit'); edit.type = 'button'; edit.disabled = busy || !!r.submission;
+      const edit = node('button', '사진 꾸미기', 'beautyEdit'); edit.type = 'button'; edit.disabled = busy || !!r.submission;
       edit.onclick = () => openBeauty(r); card.append(edit);
-      if (r.beautyLevel) card.append(node('p', mode === 'both' ? '피부 보정 표출 · 원본 보관' : mode === 'archive' ? '피부 보정본 저장' : '피부 보정본 표출', 'beautyApplied'));
+      if (r.beautyFile) card.append(node('p', mode === 'both' ? '꾸민 사진 표출 · 원본 보관' : mode === 'archive' ? '꾸민 사진 저장' : '꾸민 사진 표출', 'beautyApplied'));
     }
     card.append(label, dateInfo, remove); return card;
   }));
@@ -795,7 +835,7 @@ function followTarget(result, s) {
 async function archiveRequestId(r, s) {
   if (!crypto.subtle) return r.requestId;
   // 폴더는 연도와 이름으로만 본다. 첫 사진이 폴더를 만든 뒤 붙는 폴더 ID 때문에 ID가 달라지지 않게 한다.
-  const text = JSON.stringify([r.kind || 'photo', r.file.name, r.file.size, r.file.lastModified, ...(r.beautyFile ? [r.beautyLevel, r.beautyFile.size] : []), s.target?.year, s.target?.folderName || s.target?.eventName, s.uploaderName, s.date]);
+  const text = JSON.stringify([r.kind || 'photo', r.file.name, r.file.size, r.file.lastModified, ...(r.beautyFile ? [r.beautyLevel, r.beautyFile.size, ...(r.photoEffects ? [r.photoEffects] : [])] : []), s.target?.year, s.target?.folderName || s.target?.eventName, s.uploaderName, s.date]);
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return 'a-' + [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 48);
 }
