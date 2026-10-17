@@ -155,15 +155,58 @@ window.CameraBeauty = (() => {
   }
   function paint(prepared, strength) {
     const {canvas,source,retouched,alpha}=prepared;
-    const pixels=prepared.pixels||(prepared.pixels=new ImageData(new Uint8ClampedArray(source.data),canvas.width,canvas.height));
     const amount=Math.max(0,Math.min(100,Number(strength)||0))/100;
+    if(prepared.paintStrength===amount)return canvas;
+    const pixels=prepared.pixels||(prepared.pixels=new ImageData(new Uint8ClampedArray(source.data),canvas.width,canvas.height));
     if(!amount)pixels.data.set(source.data);
     else for(let i=0;i<pixels.data.length;i+=4){
       if(!alpha[i+3])continue;
       const a=alpha[i+3]/255*amount;
       for(let c=0;c<3;c++)pixels.data[i+c]=source.data[i+c]+a*(retouched[i+c]-source.data[i+c]);
     }
-    canvas.getContext('2d').putImageData(pixels,0,0);return canvas;
+    canvas.getContext('2d').putImageData(pixels,0,0);prepared.paintStrength=amount;return canvas;
+  }
+  function normalizeEffects(value = {}) {
+    const effects={color:['warm','pastel','film','mono'].includes(value?.color)?value.color:'none',frame:['white','polaroid','confetti','film','event'].includes(value?.frame)?value.frame:'none'};
+    if(effects.frame==='event')effects.event={title:Array.from(String(value.event?.title??'함께한 오늘')).slice(0,32).join(''),date:/^\d{4}-\d{2}-\d{2}$/.test(value.event?.date)?value.event.date:''};
+    const decorations=(Array.isArray(value?.decorations)?value.decorations:[]).slice(0,8).filter(item=>item&&['heart','star','speech','text'].includes(item.type)).map((item,index)=>({
+      id:String(item.id||'item-'+index).slice(0,80),type:item.type,text:Array.from(String(item.text||'')).slice(0,24).join(''),
+      x:Math.max(0.04,Math.min(0.96,Number.isFinite(item.x)?item.x:0.5)),y:Math.max(0.04,Math.min(0.96,Number.isFinite(item.y)?item.y:0.75)),
+      size:Math.max(0.05,Math.min(0.24,Number(item.size)||0.12)),rotation:Math.max(-360,Math.min(360,Number(item.rotation)||0)),
+      color:['#cf5270','#d1a535','#245344','#ffffff'].includes(item.color)?item.color:'#cf5270'
+    })).filter(item=>item.type!=='text'||item.text.trim());
+    if(decorations.length)effects.decorations=decorations;
+    return effects;
+  }
+  // 미리보기에서는 화면 크기의 투명 레이어에, 저장 시에는 최종 사진에 같은 도형을 그린다.
+  function drawDecorations(ctx, items, bounds) {
+    const boxes=[];
+    for(const item of items||[]){
+      if(item.type==='text'&&!String(item.text||'').trim())continue;
+      const size=Math.min(bounds.width,bounds.height)*item.size,x=bounds.x+item.x*bounds.width,y=bounds.y+item.y*bounds.height,rotation=item.rotation*Math.PI/180;
+      let width=size,height=size;
+      ctx.save();ctx.translate(x,y);ctx.rotate(rotation);ctx.fillStyle=item.color;ctx.textAlign='center';ctx.textBaseline='middle';
+      if(item.type==='heart'){
+        ctx.scale(size,size);ctx.beginPath();ctx.moveTo(0,0.42);ctx.bezierCurveTo(-0.9,-0.12,-0.36,-0.73,0,-0.26);ctx.bezierCurveTo(0.36,-0.73,0.9,-0.12,0,0.42);ctx.fill();
+      }else if(item.type==='star'){
+        ctx.beginPath();for(let i=0;i<10;i++){const a=-Math.PI/2+i*Math.PI/5,r=size*(i%2?0.23:0.5);ctx[i?'lineTo':'moveTo'](Math.cos(a)*r,Math.sin(a)*r);}ctx.closePath();ctx.fill();
+      }else{
+        const text=String(item.text||'');
+        let fontSize=size*(item.type==='speech'?0.45:0.7);ctx.font='600 '+fontSize+'px system-ui,sans-serif';
+        const maxWidth=bounds.width*0.82,padding=item.type==='speech'?size*0.55:size*0.16;
+        const natural=ctx.measureText(text).width;
+        if(natural+padding>maxWidth){fontSize*=Math.max(0.1,(maxWidth-padding)/natural);ctx.font='600 '+fontSize+'px system-ui,sans-serif';}
+        width=ctx.measureText(text).width+padding;height=fontSize*(item.type==='speech'?2.0:1.5);
+        if(item.type==='speech'){
+          const l=-width/2,t=-height/2,r=height*0.2;ctx.fillStyle='#ffffff';ctx.strokeStyle=item.color;ctx.lineWidth=Math.max(1,size*0.035);
+          ctx.beginPath();ctx.moveTo(l+r,t);ctx.arcTo(l+width,t,l+width,t+height,r);ctx.arcTo(l+width,t+height,l,t+height,r);ctx.lineTo(-width*0.12,t+height);ctx.lineTo(-width*0.25,t+height+size*0.2);ctx.lineTo(-width*0.22,t+height);ctx.arcTo(l,t+height,l,t,r);ctx.arcTo(l,t,l+width,t,r);ctx.closePath();ctx.fill();ctx.stroke();
+          height+=size*0.2;
+        }else{ctx.strokeStyle=item.color==='#ffffff'?'#245344':'#ffffff';ctx.lineWidth=Math.max(2,fontSize*0.13);ctx.lineJoin='round';ctx.strokeText(text,0,0);}
+        ctx.fillStyle=item.color;ctx.fillText(text,0,0);
+      }
+      ctx.restore();boxes.push({id:item.id,x,y,width:Math.max(width,24),height:Math.max(height,24),rotation});
+    }
+    return boxes;
   }
   function compose(base, effects = {}) {
     const canvas=document.createElement('canvas');canvas.width=base.width;canvas.height=base.height;
@@ -183,11 +226,11 @@ window.CameraBeauty = (() => {
       }
       ctx.putImageData(pixels,0,0);
     }
-    if(['white','polaroid','confetti','film'].includes(effects.frame)){
+    if(['white','polaroid','confetti','film','event'].includes(effects.frame)){
       const border=Math.max(8,Math.round(Math.min(canvas.width,canvas.height)*(effects.frame==='confetti'?0.07:0.045)));
-      const footer=effects.frame==='polaroid'?border*3:0;
+      const footer=effects.frame==='polaroid'?border*3:effects.frame==='event'?Math.round(border*4.5):0;
       const framed=document.createElement('canvas');framed.width=canvas.width+border*2;framed.height=canvas.height+border*2+footer;
-      const f=framed.getContext('2d');f.fillStyle=effects.frame==='polaroid'?'#fff8ec':effects.frame==='confetti'?'#fff4e8':effects.frame==='film'?'#25322d':'#ffffff';f.fillRect(0,0,framed.width,framed.height);f.drawImage(canvas,border,border);
+      const f=framed.getContext('2d');f.fillStyle=effects.frame==='polaroid'?'#fff8ec':effects.frame==='event'?'#f0f5ec':effects.frame==='confetti'?'#fff4e8':effects.frame==='film'?'#25322d':'#ffffff';f.fillRect(0,0,framed.width,framed.height);f.drawImage(canvas,border,border);
       if(effects.frame==='confetti'){
         const colors=['#d87579','#dda84c','#71a69b','#9b8abd'];
         for(let i=0;i<24;i++){
@@ -202,11 +245,16 @@ window.CameraBeauty = (() => {
         f.fillStyle='#f1e7cd';
         for(let y=border*0.4;y<framed.height-border*0.2;y+=border*1.1)for(const x of [border*0.22,framed.width-border*0.78])f.fillRect(x,y,border*0.56,border*0.6);
       }
-      if(footer){f.fillStyle='#244b3c';f.textAlign='center';f.textBaseline='middle';f.font='500 '+Math.round(border*0.7)+'px system-ui,sans-serif';f.fillText('오늘의 한 컷 · YEBOM',framed.width/2,border+canvas.height+footer*0.55,canvas.width);}
+      if(effects.frame==='event'){
+        const event=normalizeEffects(effects).event;
+        f.fillStyle='#244b3c';f.textAlign='center';f.textBaseline='middle';f.font='600 '+Math.round(border*1.35)+'px system-ui,sans-serif';f.fillText(event.title,framed.width/2,border+canvas.height+footer*0.38,canvas.width*0.92);
+        f.font='500 '+Math.round(border)+'px system-ui,sans-serif';f.fillText((event.date?event.date.replaceAll('-','.')+' · ':'')+'YEBOM',framed.width/2,border+canvas.height+footer*0.72,canvas.width*0.92);
+      }else if(footer){f.fillStyle='#244b3c';f.textAlign='center';f.textBaseline='middle';f.font='500 '+Math.round(border*0.7)+'px system-ui,sans-serif';f.fillText('오늘의 한 컷 · YEBOM',framed.width/2,border+canvas.height+footer*0.55,canvas.width);}
       const scale=Math.min(1,2048/Math.max(framed.width,framed.height));canvas.width=Math.round(framed.width*scale);canvas.height=Math.round(framed.height*scale);
       ctx.drawImage(framed,0,0,canvas.width,canvas.height);
       framed.width=framed.height=1;
     }
+    drawDecorations(ctx,normalizeEffects(effects).decorations,{x:0,y:0,width:canvas.width,height:canvas.height});
     return canvas;
   }
   async function exportPhoto(canvas, original) {
@@ -222,5 +270,5 @@ window.CameraBeauty = (() => {
     const pending=detector;detector=null;
     if(pending)try{(await pending).close();}catch{}
   }
-  return { decode,prepare,paint,compose,exportPhoto,file,releaseDetector };
+  return { decode,prepare,paint,compose,exportPhoto,file,releaseDetector,normalizeEffects,drawDecorations };
 })();

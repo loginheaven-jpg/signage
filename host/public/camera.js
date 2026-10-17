@@ -234,19 +234,32 @@ async function sharingFile(file, id, maxEdge = 3840, quality = 0.9) {
 let beautyEntry = null, beautyPrepared = null, beautyLevel = 0, beautyEpoch = 0, beautyProcessing = false, beautyComparing = false;
 let beautyRenderFrame = 0, beautyBase = null, beautyTab = 'skin', beautyEffects = { color: 'none', frame: 'none' };
 let beautyComposition = null, beautyCompositionKey = '', beautyAbort = null;
+let beautyFrameRenderTimer = null;
+const decorationEditor = new window.CameraDecorationEditor({
+  canvas:el('decorationOverlay'),
+  onChange(items,baseNeeded){beautyEffects.decorations=items;beautyComparing=false;if(baseNeeded)scheduleBeautyRender();},
+  onMessage(text){el('beautyState').textContent=text;}
+});
 function releaseBeautyComposition() {
   if(beautyComposition)beautyComposition.width=beautyComposition.height=1;
   beautyComposition=null;beautyCompositionKey='';
 }
-function hasPhotoEffects() { return beautyLevel > 0 || beautyEffects.color !== 'none' || beautyEffects.frame !== 'none'; }
+function hasPhotoEffects() { return beautyLevel > 0 || beautyEffects.color !== 'none' || beautyEffects.frame !== 'none' || !!beautyEffects.decorations?.length; }
 function renderedBeauty() {
-  const key=JSON.stringify([beautyLevel,beautyEffects.color,beautyEffects.frame]);
+  const key=JSON.stringify([beautyLevel,beautyEffects.color,beautyEffects.frame,beautyEffects.frame==='event'?beautyEffects.event:null]);
   if(beautyComposition&&beautyCompositionKey===key)return beautyComposition;
   releaseBeautyComposition();
   const base = beautyPrepared ? window.CameraBeauty.paint(beautyPrepared, beautyLevel) : beautyBase;
   if(!base)return null;
-  beautyComposition=window.CameraBeauty.compose(base,beautyEffects);beautyCompositionKey=key;
+  beautyComposition=window.CameraBeauty.compose(base,{...beautyEffects,decorations:[]});beautyCompositionKey=key;
   return beautyComposition;
+}
+async function exportEditorPhoto() {
+  const canvas=renderedBeauty();
+  const items=window.CameraBeauty.normalizeEffects(beautyEffects).decorations;
+  if(items?.length)window.CameraBeauty.drawDecorations(canvas.getContext('2d'),items,{x:0,y:0,width:canvas.width,height:canvas.height});
+  try{return await window.CameraBeauty.exportPhoto(canvas,beautyEntry.file);}
+  finally{if(items?.length)releaseBeautyComposition();}
 }
 function savedBeautyStrength(entry) { return entry.beautyScale === 100 ? entry.beautyLevel : ({ 1: 35, 2: 70 }[entry.beautyLevel] || 0); }
 function scheduleBeautyRender() {
@@ -261,6 +274,11 @@ function renderBeauty() {
   }
   for (const key of ['color', 'frame']) for (const button of document.querySelectorAll('[data-photo-' + key + ']')) {
     button.setAttribute('aria-pressed', String(button.dataset[key === 'color' ? 'photoColor' : 'photoFrame'] === beautyEffects[key])); button.disabled = beautyProcessing;
+  }
+  el('eventFrameFields').hidden=beautyEffects.frame!=='event';
+  for(const [id,key] of [['frameEventTitle','title'],['frameEventDate','date']]){
+    el(id).disabled=beautyProcessing;
+    if(document.activeElement!==el(id))el(id).value=beautyEffects.event?.[key]||'';
   }
   el('applyBeauty').disabled = beautyProcessing || !beautyEntry || (hasPhotoEffects() && !beautyPrepared && !beautyBase);
   el('beautyStrength').disabled = beautyProcessing || !beautyEntry;
@@ -278,16 +296,16 @@ function renderBeauty() {
     if(preview.height!==canvas.height)preview.height=canvas.height;
     preview.getContext('2d').clearRect(0,0,preview.width,preview.height);preview.getContext('2d').drawImage(canvas, 0, 0);
   }
+  decorationEditor.refresh({visible:!!beautyEffects.decorations?.length&&!beautyComparing&&showCorrection,active:beautyTab==='decorate'&&!beautyProcessing&&!beautyComparing&&!!beautyBase,image:beautyComposition||beautyBase});
 }
 function openBeauty(entry) {
   if (busy || entry.submission || entry.kind === 'video') return;
   beautyEpoch++; beautyEntry = entry; beautyPrepared = null; beautyLevel = 0; beautyProcessing = false; beautyComparing = false;
   releaseBeautyComposition();const epoch=beautyEpoch;
   beautyBase = null; beautyTab = 'skin';
-  beautyEffects = {
-    color: ['warm', 'pastel', 'film', 'mono'].includes(entry.photoEffects?.color) ? entry.photoEffects.color : 'none',
-    frame: ['white', 'polaroid', 'confetti', 'film'].includes(entry.photoEffects?.frame) ? entry.photoEffects.frame : 'none'
-  };
+  const effects=window.CameraBeauty.normalizeEffects(entry.photoEffects);
+  beautyEffects={...effects,event:effects.event||{title:(settings?.target?.eventName||settings?.target?.folderName||'').replace(/^\d{4}[-.]?\d{2}[-.]?\d{2}[\s_-]*/,'').slice(0,32)||'함께한 오늘',date:/^\d{4}-\d{2}-\d{2}/.test(entry.date||'')?entry.date.slice(0,10):localDate(Date.now()).slice(0,10)}};
+  beautyEffects.decorations=decorationEditor.reset(effects.decorations);
   el('beautyState').textContent = '강도 0은 뽀샤시 없음 · 색감과 프레임을 함께 적용할 수 있습니다.';
   el('beautyDestination').textContent = mode === 'both' ? '꾸민 사진을 모니터에 표출하고, 원본은 교회폴더에 보관합니다.' : mode === 'archive' ? '효과를 적용하면 꾸민 사진을 교회폴더에 저장합니다.' : '꾸민 사진을 모니터에 표출합니다.';
   renderBeauty(); openDialog('beautyDialog');
@@ -319,7 +337,7 @@ async function chooseBeauty(level) {
     el('beautyState').textContent = level ? '얼굴 ' + beautyPrepared.faces + '명 · 뽀샤시 ' + level : '뽀샤시 없음 · 색감과 프레임은 유지됩니다.';
     scheduleBeautyRender(); return;
   }
-  beautyProcessing = true; el('beautyState').textContent = beautyPrepared ? '뽀샤시을 적용하고 있습니다…' : '얼굴과 피부를 확인하고 있습니다. 처음에는 보정 도구를 불러오는 데 시간이 걸릴 수 있습니다…'; renderBeauty();
+  beautyProcessing = true; el('beautyState').textContent = beautyPrepared ? '뽀샤시를 적용하고 있습니다…' : '얼굴과 피부를 확인하고 있습니다. 처음에는 보정 도구를 불러오는 데 시간이 걸릴 수 있습니다…'; renderBeauty();
   try {
     if (!beautyPrepared) {
       let deadline;
@@ -351,11 +369,17 @@ for (const key of ['color', 'frame']) for (const button of document.querySelecto
   beautyEffects[key] = button.dataset[key === 'color' ? 'photoColor' : 'photoFrame']; beautyComparing = false;
   await loadBeautyBase(); scheduleBeautyRender();
 };
+for(const [id,key] of [['frameEventTitle','title'],['frameEventDate','date']])el(id).oninput=()=>{
+  if(beautyProcessing)return;
+  beautyEffects.event[key]=el(id).value;beautyComparing=false;
+  clearTimeout(beautyFrameRenderTimer);beautyFrameRenderTimer=setTimeout(scheduleBeautyRender,150);
+};
 el('beautyStrength').oninput = () => chooseBeauty(Number(el('beautyStrength').value));
 el('closeBeauty').onclick = () => closeDialog('beautyDialog');
 el('compareBeauty').onclick = () => { beautyComparing = !beautyComparing; renderBeauty(); };
 el('beautyDialog').addEventListener('close', () => {
   cancelAnimationFrame(beautyRenderFrame); beautyRenderFrame = 0;
+  clearTimeout(beautyFrameRenderTimer);decorationEditor.close();
   beautyAbort?.abort();beautyAbort=null;releaseBeautyComposition();
   if(beautyBase)beautyBase.width=beautyBase.height=1;
   beautyEpoch++; beautyEntry = null; beautyPrepared = null; beautyBase = null; beautyProcessing = false;
@@ -367,8 +391,9 @@ el('applyBeauty').onclick = async () => {
   const entry = beautyEntry, epoch = beautyEpoch, level = beautyLevel;
   beautyProcessing = true; el('beautyState').textContent = '사진을 준비하고 있습니다…'; renderBeauty();
   try {
-    const effects = { ...beautyEffects };
-    const file = hasPhotoEffects() ? await window.CameraBeauty.exportPhoto(renderedBeauty(), entry.file) : null;
+    const effects = window.CameraBeauty.normalizeEffects(beautyEffects);
+    const edited=level>0||effects.color!=='none'||effects.frame!=='none'||!!effects.decorations?.length;
+    const file = edited ? await exportEditorPhoto() : null;
     if (epoch !== beautyEpoch || !selected.includes(entry)) return;
     URL.revokeObjectURL(entry.url); entry.beautyFile = file; entry.beautyLevel = level; entry.beautyScale = 100; entry.photoEffects = effects; delete entry.previewFile;
     entry.url = URL.createObjectURL(file || entry.file); entry.error = '';
@@ -851,8 +876,10 @@ function followTarget(result, s) {
 async function archiveRequestId(r, s) {
   if (!crypto.subtle) return r.requestId;
   // 폴더는 연도와 이름으로만 본다. 첫 사진이 폴더를 만든 뒤 붙는 폴더 ID 때문에 ID가 달라지지 않게 한다.
-  const hasExtraEffects = r.photoEffects && (r.photoEffects.color !== 'none' || r.photoEffects.frame !== 'none');
-  const text = JSON.stringify([r.kind || 'photo', r.file.name, r.file.size, r.file.lastModified, ...(r.beautyFile ? [r.beautyLevel, r.beautyFile.size, ...(hasExtraEffects ? [r.photoEffects] : [])] : []), s.target?.year, s.target?.folderName || s.target?.eventName, s.uploaderName, s.date]);
+  const effects=window.CameraBeauty.normalizeEffects(r.photoEffects);
+  const hasExtraEffects=effects.color!=='none'||effects.frame!=='none'||!!effects.decorations?.length;
+  const recipe=effects.decorations?{...effects,decorations:effects.decorations.map(({id,...visual})=>visual)}:effects;
+  const text = JSON.stringify([r.kind || 'photo', r.file.name, r.file.size, r.file.lastModified, ...(r.beautyFile ? [r.beautyLevel, r.beautyFile.size, ...(hasExtraEffects ? [recipe] : [])] : []), s.target?.year, s.target?.folderName || s.target?.eventName, s.uploaderName, s.date]);
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return 'a-' + [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 48);
 }
