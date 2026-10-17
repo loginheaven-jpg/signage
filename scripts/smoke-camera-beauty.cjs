@@ -17,33 +17,66 @@ const { startPreview } = require('./camera-preview.cjs');
   await page.locator('#shootInput').setInputFiles({name:'portrait.jpg',mimeType:'image/jpeg',buffer:face});
   await page.locator('#beautyDialog').waitFor();
   assert.equal(await page.evaluate(()=>selected.length),1);
-  await page.locator('[data-beauty-level="1"]').click();
+  await page.evaluate(()=>{const prepare=CameraBeauty.prepare;window.beautyPrepareCalls=0;CameraBeauty.prepare=(...args)=>{window.beautyPrepareCalls++;return prepare(...args);};});
+  await page.locator('#beautyStrength').press('End');
   await page.waitForFunction(()=>!beautyProcessing && beautyPrepared,{timeout:60000});
+  assert.equal(await page.locator('#beautyStrength').inputValue(),'100','slider can initialize the face analysis');
+  await page.evaluate(()=>{
+   const paint=CameraBeauty.paint;window.beautyPaintCalls=0;
+   CameraBeauty.paint=(...args)=>{window.beautyPaintCalls++;return paint(...args);};
+   const slider=document.querySelector('#beautyStrength');
+   for(let value=40;value<=61;value++){slider.value=value;slider.dispatchEvent(new Event('input',{bubbles:true}));}
+  });
+  await page.waitForFunction(()=>document.querySelector('#beautyStrengthValue').textContent==='61');
+  assert.equal(await page.evaluate(()=>window.beautyPaintCalls),1,'rapid slider events render once per frame');
+  await page.locator('[data-beauty-level="35"]').click();await page.waitForFunction(()=>document.querySelector('#beautyStrength').value==='35');
   const pixels=await page.evaluate(()=>{
    const {source,smooth,alpha}=beautyPrepared;
-   const output=CameraBeauty.paint(beautyPrepared,1).getContext('2d').getImageData(0,0,source.width,source.height).data;
+   const output=CameraBeauty.paint(beautyPrepared,35).getContext('2d').getImageData(0,0,source.width,source.height).data;
    let changed=0,outside=0,smoothed=0;
    for(let i=0;i<output.length;i+=4){
     const different=output[i]!==source.data[i]||output[i+1]!==source.data[i+1]||output[i+2]!==source.data[i+2];
     if(different){changed++;if(!alpha[i+3])outside++;}
     if(alpha[i+3]&&(smooth[i]!==source.data[i]||smooth[i+1]!==source.data[i+1]))smoothed++;
    }
-   return {changed,outside,smoothed,faces:beautyPrepared.faces};
+   const strengths=[0,35,70,100].map(strength=>{
+    const image=CameraBeauty.paint(beautyPrepared,strength).getContext('2d').getImageData(0,0,source.width,source.height).data;
+    let sum=0,count=0;
+    for(let i=0;i<image.length;i+=4)if(alpha[i+3]>250)for(let c=0;c<3;c++){sum+=Math.abs(image[i+c]-source.data[i+c]);count++;}
+    return sum/count;
+   });
+   return {changed,outside,smoothed,faces:beautyPrepared.faces,strengths};
   });
   assert.ok(pixels.faces>=1);assert.ok(pixels.changed>1000);assert.ok(pixels.smoothed>1000);assert.equal(pixels.outside,0,'background and excluded features remain unchanged');
+  assert.equal(pixels.strengths[0],0);assert.ok(pixels.strengths[1]>4,'natural preset visibly exceeds previous 1.3-level mean change');
+  assert.ok(pixels.strengths[2]>pixels.strengths[1]*1.7);assert.ok(pixels.strengths[3]>pixels.strengths[2]);
+  assert.equal(await page.locator('#beautyStrength').inputValue(),'35');
   await page.locator('#compareBeauty').click();assert.equal(await page.locator('#beautyOriginal').isVisible(),true);
   await page.locator('#compareBeauty').click();assert.equal(await page.locator('#beautyCanvas').isVisible(),true);
+  assert.equal(await page.locator('#beautyStrength').inputValue(),'35','comparison preserves the selected strength');
+  assert.equal(await page.evaluate(()=>window.beautyPrepareCalls),1,'comparison does not rerun detection');
   await page.screenshot({path:require('node:path').join(__dirname,'../output/camera-beauty-mobile.png')});
   await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
   let natural=await page.evaluate(()=>selected[0].beautyFile.size);assert.ok(natural>1000);
   await page.reload();await page.locator('#continueResume').click();
   assert.equal(await page.evaluate(()=>selected[0].beautyFile.size),natural);
-  assert.equal(await page.evaluate(()=>selected[0].beautyLevel),1);
+  assert.equal(await page.evaluate(()=>selected[0].beautyLevel),35);
+  // 이전 버전의 강도 1/2를 35/70으로 해석하고 저장한 원본은 유지한다.
+  await page.evaluate(()=>{selected[0].beautyLevel=1;delete selected[0].beautyScale;});
   // 기존 저장 키를 덮어써도 재접속 뒤 예전 보정으로 돌아가지 않는다.
   await page.locator('.beautyEdit').click();await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared,{timeout:60000});
-  await page.locator('[data-beauty-level="2"]').click();await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#beautyStrength').inputValue(),'35','legacy preset migrated when reopening');
+  await page.locator('[data-beauty-level="70"]').click();await page.waitForFunction(()=>document.querySelector('#beautyStrength').value==='70');
+  await page.locator('#beautyStrength').press('ArrowLeft');await page.waitForFunction(()=>document.querySelector('#beautyStrengthValue').textContent==='69');
+  assert.equal(await page.locator('[data-beauty-level][aria-pressed="true"]').count(),0,'custom strength clears preset selection');
+  await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
   const bright=await page.evaluate(()=>selected[0].beautyFile.size);assert.notEqual(bright,natural);
   await page.reload();await page.locator('#continueResume').click();assert.equal(await page.evaluate(()=>selected[0].beautyFile.size),bright);
+  assert.equal(await page.evaluate(()=>selected[0].beautyLevel),69);assert.equal(await page.evaluate(()=>selected[0].beautyScale),100);
+  await page.locator('.beautyEdit').click();await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared);
+  assert.equal(await page.locator('#beautyStrength').inputValue(),'69');
+  await page.locator('#beautyStrength').press('ArrowRight');await page.locator('#closeBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(()=>selected[0].beautyLevel),69,'closing discards unsaved slider changes');
   await page.locator('#send').click();await page.waitForFunction(()=>!busy&&selected.length===0);
   await page.waitForFunction(()=>originals.length===0);
   assert.equal(preview.published.length,1);
@@ -52,7 +85,7 @@ const { startPreview } = require('./camera-preview.cjs');
   assert.deepEqual(fs.readFileSync(preview.archive.localPath(record)),face);
   // 얼굴이 없는 사진에서는 보정으로 위장하지 않고 원본으로 진행한다.
   await page.locator('#galleryInput').setInputFiles(preview.photo);await page.locator('.beautyEdit').click();
-  await page.locator('[data-beauty-level="1"]').click();await page.waitForFunction(()=>!beautyProcessing);
+  await page.locator('[data-beauty-level="35"]').click();await page.waitForFunction(()=>!beautyProcessing);
   assert.ok((await page.locator('#beautyState').textContent()).includes('얼굴을 찾지 못했습니다'));
   assert.equal(await page.locator('#applyBeauty').isEnabled(),true);
   await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
@@ -60,7 +93,7 @@ const { startPreview } = require('./camera-preview.cjs');
   // 보정을 원본으로 되돌리면 저장된 보정 파일도 제거한다.
   await page.locator('#discard').click();
   await page.locator('#galleryInput').setInputFiles({name:'restore.jpg',mimeType:'image/jpeg',buffer:face});
-  await page.locator('.beautyEdit').click();await page.locator('[data-beauty-level="1"]').click();await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared);
+  await page.locator('.beautyEdit').click();await page.locator('[data-beauty-level="35"]').click();await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared);
   await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
   await page.locator('.beautyEdit').click();await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared);
   await page.locator('[data-beauty-level="0"]').click();await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
@@ -69,8 +102,8 @@ const { startPreview } = require('./camera-preview.cjs');
   await page.locator('#discard').click();await page.locator('#home').click();await page.locator('[data-mode="archive"]').click();
   await page.locator('#chooseFolder').click();await page.locator('[data-folder-id="event-2026"]').click();await page.locator('#folderDialog').waitFor({state:'hidden'});await page.locator('#useSettings').click();
   await page.locator('#galleryInput').setInputFiles({name:'archive.jpg',mimeType:'image/jpeg',buffer:face});await page.locator('.beautyEdit').click();
-  await page.locator('[data-beauty-level="1"]').click();await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared);
-  const expected=await page.evaluate(async()=>{const file=await CameraBeauty.file(beautyPrepared,1,beautyEntry.file);return Array.from(new Uint8Array(await file.arrayBuffer()));});
+  await page.locator('[data-beauty-level="35"]').click();await page.waitForFunction(()=>!beautyProcessing&&beautyPrepared);
+  const expected=await page.evaluate(async()=>{const file=await CameraBeauty.file(beautyPrepared,35,beautyEntry.file);return Array.from(new Uint8Array(await file.arrayBuffer()));});
   await page.setViewportSize({width:320,height:740});
   assert.equal(await page.locator('#beautyDialog').evaluate(d=>d.scrollWidth<=d.clientWidth),true);
   await page.locator('#applyBeauty').click();await page.locator('#beautyDialog').waitFor({state:'hidden'});
