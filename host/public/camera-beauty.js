@@ -43,18 +43,8 @@ window.CameraBeauty = (() => {
     const cx = p.reduce((a,v) => a + v[0], 0) / p.length, cy = p.reduce((a,v) => a + v[1], 0) / p.length;
     ctx.beginPath(); p.forEach(([x,y], i) => ctx[i ? 'lineTo' : 'moveTo'](cx+(x-cx)*expand, cy+(y-cy)*expand)); ctx.closePath(); ctx.fill();
   }
-  async function prepare(file) {
-    const canvas = await decode(file), faces = await landmarks(canvas);
-    if (!faces.length) throw new Error('얼굴을 찾지 못했습니다. 정면에 가까운 사진을 사용하거나 원본으로 진행해 주세요.');
-    const w = canvas.width, h = canvas.height, ctx = canvas.getContext('2d', { willReadFrequently: true });
-    const mask = document.createElement('canvas'); mask.width=w; mask.height=h;
-    const m = mask.getContext('2d', { willReadFrequently: true }); m.fillStyle='#fff';
-    for (const face of faces) polygon(m,face,oval,w,h,0.94);
-    m.globalCompositeOperation='destination-out';
-    for (const face of faces) for (const f of features) polygon(m,face,f,w,h,1.35);
-    const alpha=m.getImageData(0,0,w,h).data;
-    // 보정 영역 안쪽으로만 경계를 부드럽게 한다. 배경·눈·입술로 효과가 번지지 않는다.
-    const feather=Math.max(3,Math.round(Math.max(w,h)/240)), distance=new Uint16Array(w*h);
+  function featherInside(alpha, w, h, feather) {
+    const distance=new Uint16Array(w*h);
     for(let y=0;y<h;y++)for(let x=0;x<w;x++){
       const p=y*w+x;
       if(alpha[p*4+3])distance[p]=Math.min(feather,x?distance[p-1]+1:1,y?distance[p-w]+1:1);
@@ -66,6 +56,40 @@ window.CameraBeauty = (() => {
         const t=distance[p]/feather;alpha[p*4+3]*=t*t*(3-2*t);
       }
     }
+  }
+  function skinMask(faces,w,h) {
+    const alpha=new Uint8ClampedArray(w*h*4);
+    for(const face of faces){
+      const xs=oval.map(i=>face[i].x*w), ys=oval.map(i=>face[i].y*h);
+      const faceWidth=Math.max(...xs)-Math.min(...xs);
+      const left=Math.max(0,Math.floor(Math.min(...xs))-2), top=Math.max(0,Math.floor(Math.min(...ys))-2);
+      const right=Math.min(w,Math.ceil(Math.max(...xs))+2), bottom=Math.min(h,Math.ceil(Math.max(...ys))+2);
+      const width=right-left, height=bottom-top;
+      if(width<=0||height<=0)continue;
+      const mask=document.createElement('canvas');mask.width=width;mask.height=height;
+      const m=mask.getContext('2d',{willReadFrequently:true});m.fillStyle='#fff';
+      m.translate(-left,-top);polygon(m,face,oval,w,h);
+      const outer=m.getImageData(0,0,width,height).data;
+      // 얼굴 전체 윤곽을 사용한다. 안쪽의 좁은 띠 대신 얼굴 너비 10%에 걸쳐 완만하게 섞는다.
+      featherInside(outer,width,height,Math.max(8,Math.round(faceWidth*0.10)));
+      m.resetTransform();m.clearRect(0,0,width,height);m.fillRect(0,0,width,height);
+      m.translate(-left,-top);m.globalCompositeOperation='destination-out';
+      for(const f of features)polygon(m,face,f,w,h,1.12);
+      const detail=m.getImageData(0,0,width,height).data;
+      // 눈·입 주변은 별도의 짧은 완충 폭으로 섞어 윤곽선과 피부 사이의 띠를 줄인다.
+      featherInside(detail,width,height,Math.max(3,Math.round(faceWidth*0.025)));
+      for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+        const local=(y*width+x)*4+3,global=((y+top)*w+x+left)*4+3;
+        alpha[global]=Math.max(alpha[global],Math.round(outer[local]*detail[local]/255));
+      }
+    }
+    return alpha;
+  }
+  async function prepare(file) {
+    const canvas = await decode(file), faces = await landmarks(canvas);
+    if (!faces.length) throw new Error('얼굴을 찾지 못했습니다. 정면에 가까운 사진을 사용하거나 원본으로 진행해 주세요.');
+    const w = canvas.width, h = canvas.height, ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const alpha=skinMask(faces,w,h);
     const source=ctx.getImageData(0,0,w,h), smooth=new Uint8ClampedArray(source.data);
     // 색 차이가 큰 경계는 섞지 않는 양방향 필터. 눈·입·눈썹은 마스크에서 제외한다.
     const data=source.data, range=new Float32Array(766);

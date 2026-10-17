@@ -232,16 +232,16 @@ async function sharingFile(file, id, maxEdge = 3840, quality = 0.9) {
   } finally { image.close?.(); }
 }
 let beautyEntry = null, beautyPrepared = null, beautyLevel = 0, beautyEpoch = 0, beautyProcessing = false, beautyComparing = false;
-let beautyRenderFrame = 0;
+let beautyRenderFrame = 0, beautyLastLevel = 50;
 function savedBeautyStrength(entry) { return entry.beautyScale === 100 ? entry.beautyLevel : ({ 1: 35, 2: 70 }[entry.beautyLevel] || 0); }
 function scheduleBeautyRender() {
   if (!beautyRenderFrame) beautyRenderFrame = requestAnimationFrame(renderBeauty);
 }
 function renderBeauty() {
   cancelAnimationFrame(beautyRenderFrame); beautyRenderFrame = 0;
-  for (const button of document.querySelectorAll('[data-beauty-level]')) {
-    button.setAttribute('aria-pressed', String(Number(button.dataset.beautyLevel) === beautyLevel)); button.disabled = beautyProcessing;
-  }
+  el('toggleBeauty').setAttribute('aria-pressed', String(beautyLevel > 0));
+  el('toggleBeauty').disabled = beautyProcessing || !beautyEntry;
+  el('beautyToggleState').textContent = beautyLevel ? '켜짐' : '꺼짐';
   el('applyBeauty').disabled = beautyProcessing || !beautyEntry;
   el('beautyStrength').disabled = beautyProcessing || !beautyEntry;
   el('beautyStrength').value = beautyLevel;
@@ -260,6 +260,7 @@ function renderBeauty() {
 function openBeauty(entry) {
   if (busy || entry.submission || entry.kind === 'video') return;
   beautyEpoch++; beautyEntry = entry; beautyPrepared = null; beautyLevel = 0; beautyProcessing = false; beautyComparing = false;
+  beautyLastLevel = savedBeautyStrength(entry) || 50;
   el('beautyOriginal').src = URL.createObjectURL(entry.file);
   el('beautyState').textContent = '원하면 피부 보정을 선택하세요. 사진과 얼굴 분석은 이 기기에서만 처리합니다.';
   el('beautyDestination').textContent = mode === 'both' ? '보정본을 모니터에 표출하고, 원본은 교회폴더에 보관합니다.' : mode === 'archive' ? '보정 적용 시 교회폴더에는 보정본이 저장됩니다. 원본으로 되돌릴 수도 있습니다.' : '보정본을 모니터에 표출합니다.';
@@ -273,6 +274,7 @@ async function chooseBeauty(level) {
   beautyComparing = false;
   if (!level || beautyPrepared) {
     beautyLevel = level;
+    if (level) beautyLastLevel = level;
     el('beautyState').textContent = level ? '얼굴 ' + beautyPrepared.faces + '명 · 피부 보정 ' + level + ' · 눈·입술과 얼굴형은 유지합니다.' : '원본 사진으로 진행합니다.';
     scheduleBeautyRender(); return;
   }
@@ -287,6 +289,7 @@ async function chooseBeauty(level) {
       beautyPrepared = prepared;
     }
     beautyLevel = level;
+    beautyLastLevel = level;
     el('beautyState').textContent = '얼굴 ' + beautyPrepared.faces + '명 · 피부 보정 ' + level + ' · 눈·입술과 얼굴형은 유지합니다.';
   } catch (error) {
     if (epoch !== beautyEpoch) return;
@@ -294,7 +297,7 @@ async function chooseBeauty(level) {
     el('beautyState').textContent = error.message?.includes('얼굴을 찾지') ? error.message : '보정 도구를 불러오지 못했거나 이 사진을 처리할 수 없습니다. 원본으로 진행하거나 다시 시도해 주세요.';
   } finally { if (epoch === beautyEpoch) { beautyProcessing = false; renderBeauty(); } }
 }
-for (const button of document.querySelectorAll('[data-beauty-level]')) button.onclick = () => chooseBeauty(Number(button.dataset.beautyLevel));
+el('toggleBeauty').onclick = () => chooseBeauty(beautyLevel ? 0 : beautyLastLevel);
 el('beautyStrength').oninput = () => chooseBeauty(Number(el('beautyStrength').value));
 el('closeBeauty').onclick = () => closeDialog('beautyDialog');
 el('compareBeauty').onclick = () => { beautyComparing = !beautyComparing; renderBeauty(); };
