@@ -18,6 +18,14 @@ const { startPreview } = require('./camera-preview.cjs');
   await page.locator('#shootInput').setInputFiles({name:'portrait.jpg',mimeType:'image/jpeg',buffer:face});
   await page.locator('#beautyDialog').waitFor();
   assert.equal(await page.evaluate(()=>selected.length),1);
+  const dedup=await page.evaluate(async()=>{
+   const r={file:{name:'same.jpg',size:100,lastModified:1},beautyLevel:35,beautyFile:{size:80}};
+   const s={target:{year:2026,folderName:'행사'},uploaderName:'검증',date:'2026-10-17T10:00'};
+   const legacy=await archiveRequestId(r,s);r.photoEffects={color:'none',frame:'none'};const unchanged=await archiveRequestId(r,s);
+   r.photoEffects.color='warm';const warm=await archiveRequestId(r,s);r.photoEffects.color='mono';const mono=await archiveRequestId(r,s);
+   return {legacy,unchanged,warm,mono};
+  });
+  assert.equal(dedup.legacy,dedup.unchanged,'adding default effect metadata preserves archive deduplication');assert.notEqual(dedup.warm,dedup.mono,'different effects remain distinct even at equal file sizes');
   await page.evaluate(()=>{const prepare=CameraBeauty.prepare;window.beautyPrepareCalls=0;CameraBeauty.prepare=(...args)=>{window.beautyPrepareCalls++;return prepare(...args);};});
   await page.locator('#beautyStrength').press('End');
   await page.waitForFunction(()=>!beautyProcessing && beautyPrepared,{timeout:60000});

@@ -835,7 +835,8 @@ function followTarget(result, s) {
 async function archiveRequestId(r, s) {
   if (!crypto.subtle) return r.requestId;
   // 폴더는 연도와 이름으로만 본다. 첫 사진이 폴더를 만든 뒤 붙는 폴더 ID 때문에 ID가 달라지지 않게 한다.
-  const text = JSON.stringify([r.kind || 'photo', r.file.name, r.file.size, r.file.lastModified, ...(r.beautyFile ? [r.beautyLevel, r.beautyFile.size, ...(r.photoEffects ? [r.photoEffects] : [])] : []), s.target?.year, s.target?.folderName || s.target?.eventName, s.uploaderName, s.date]);
+  const hasExtraEffects = r.photoEffects && (r.photoEffects.color !== 'none' || r.photoEffects.frame !== 'none');
+  const text = JSON.stringify([r.kind || 'photo', r.file.name, r.file.size, r.file.lastModified, ...(r.beautyFile ? [r.beautyLevel, r.beautyFile.size, ...(hasExtraEffects ? [r.photoEffects] : [])] : []), s.target?.year, s.target?.folderName || s.target?.eventName, s.uploaderName, s.date]);
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return 'a-' + [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 48);
 }
