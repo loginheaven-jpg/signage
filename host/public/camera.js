@@ -233,10 +233,20 @@ async function sharingFile(file, id, maxEdge = 3840, quality = 0.9) {
 }
 let beautyEntry = null, beautyPrepared = null, beautyLevel = 0, beautyEpoch = 0, beautyProcessing = false, beautyComparing = false;
 let beautyRenderFrame = 0, beautyBase = null, beautyTab = 'skin', beautyEffects = { color: 'none', frame: 'none' };
+let beautyComposition = null, beautyCompositionKey = '', beautyAbort = null;
+function releaseBeautyComposition() {
+  if(beautyComposition)beautyComposition.width=beautyComposition.height=1;
+  beautyComposition=null;beautyCompositionKey='';
+}
 function hasPhotoEffects() { return beautyLevel > 0 || beautyEffects.color !== 'none' || beautyEffects.frame !== 'none'; }
 function renderedBeauty() {
+  const key=JSON.stringify([beautyLevel,beautyEffects.color,beautyEffects.frame]);
+  if(beautyComposition&&beautyCompositionKey===key)return beautyComposition;
+  releaseBeautyComposition();
   const base = beautyPrepared ? window.CameraBeauty.paint(beautyPrepared, beautyLevel) : beautyBase;
-  return base && window.CameraBeauty.compose(base, beautyEffects);
+  if(!base)return null;
+  beautyComposition=window.CameraBeauty.compose(base,beautyEffects);beautyCompositionKey=key;
+  return beautyComposition;
 }
 function savedBeautyStrength(entry) { return entry.beautyScale === 100 ? entry.beautyLevel : ({ 1: 35, 2: 70 }[entry.beautyLevel] || 0); }
 function scheduleBeautyRender() {
@@ -255,7 +265,7 @@ function renderBeauty() {
   el('applyBeauty').disabled = beautyProcessing || !beautyEntry || (hasPhotoEffects() && !beautyPrepared && !beautyBase);
   el('beautyStrength').disabled = beautyProcessing || !beautyEntry;
   el('beautyStrength').value = beautyLevel;
-  el('beautyStrength').setAttribute('aria-valuetext', beautyLevel ? '피부 보정 ' + beautyLevel + '%' : '피부 보정 없음');
+  el('beautyStrength').setAttribute('aria-valuetext', beautyLevel ? '뽀샤시 ' + beautyLevel + '%' : '뽀샤시 없음');
   el('beautyStrengthValue').textContent = beautyLevel;
   el('compareBeauty').disabled = beautyProcessing || !hasPhotoEffects();
   el('compareBeauty').setAttribute('aria-pressed', String(beautyComparing));
@@ -264,23 +274,24 @@ function renderBeauty() {
   el('beautyOriginal').hidden = showCorrection; el('beautyCanvas').hidden = !showCorrection;
   if (showCorrection) {
     const canvas = renderedBeauty(), preview = el('beautyCanvas');
-    preview.width = canvas.width; preview.height = canvas.height; preview.getContext('2d').drawImage(canvas, 0, 0);
+    if(preview.width!==canvas.width)preview.width=canvas.width;
+    if(preview.height!==canvas.height)preview.height=canvas.height;
+    preview.getContext('2d').clearRect(0,0,preview.width,preview.height);preview.getContext('2d').drawImage(canvas, 0, 0);
   }
 }
 function openBeauty(entry) {
   if (busy || entry.submission || entry.kind === 'video') return;
   beautyEpoch++; beautyEntry = entry; beautyPrepared = null; beautyLevel = 0; beautyProcessing = false; beautyComparing = false;
+  releaseBeautyComposition();const epoch=beautyEpoch;
   beautyBase = null; beautyTab = 'skin';
   beautyEffects = {
     color: ['warm', 'pastel', 'film', 'mono'].includes(entry.photoEffects?.color) ? entry.photoEffects.color : 'none',
-    frame: ['white', 'polaroid'].includes(entry.photoEffects?.frame) ? entry.photoEffects.frame : 'none'
+    frame: ['white', 'polaroid', 'confetti', 'film'].includes(entry.photoEffects?.frame) ? entry.photoEffects.frame : 'none'
   };
-  el('beautyOriginal').src = URL.createObjectURL(entry.file);
-  el('beautyState').textContent = '강도 0은 피부 보정 없음 · 색감과 프레임을 함께 적용할 수 있습니다.';
+  el('beautyState').textContent = '강도 0은 뽀샤시 없음 · 색감과 프레임을 함께 적용할 수 있습니다.';
   el('beautyDestination').textContent = mode === 'both' ? '꾸민 사진을 모니터에 표출하고, 원본은 교회폴더에 보관합니다.' : mode === 'archive' ? '효과를 적용하면 꾸민 사진을 교회폴더에 저장합니다.' : '꾸민 사진을 모니터에 표출합니다.';
   renderBeauty(); openDialog('beautyDialog');
-  if (entry.beautyLevel) chooseBeauty(savedBeautyStrength(entry));
-  else if (hasPhotoEffects()) loadBeautyBase();
+  loadBeautyBase().then(()=>{if(epoch===beautyEpoch&&entry.beautyLevel&&beautyBase)chooseBeauty(savedBeautyStrength(entry));});
 }
 async function loadBeautyBase() {
   if (beautyProcessing || !beautyEntry || beautyPrepared || beautyBase) return;
@@ -288,8 +299,10 @@ async function loadBeautyBase() {
   beautyProcessing = true; el('beautyState').textContent = '사진을 준비하고 있습니다…'; renderBeauty();
   try {
     const canvas = await window.CameraBeauty.decode(file);
-    if (epoch !== beautyEpoch) return;
-    beautyBase = canvas; el('beautyState').textContent = '효과를 함께 고른 뒤 원본과 비교해 보세요.';
+    if (epoch !== beautyEpoch){canvas.width=canvas.height=1;return;}
+    beautyBase = canvas;
+    const original=el('beautyOriginal');original.width=canvas.width;original.height=canvas.height;original.getContext('2d').drawImage(canvas,0,0);
+    el('beautyState').textContent = '효과를 함께 고른 뒤 원본과 비교해 보세요.';
   } catch {
     if (epoch !== beautyEpoch) return;
     beautyEffects = { color: 'none', frame: 'none' };
@@ -303,21 +316,22 @@ async function chooseBeauty(level) {
   beautyComparing = false;
   if (!level || beautyPrepared) {
     beautyLevel = level;
-    el('beautyState').textContent = level ? '얼굴 ' + beautyPrepared.faces + '명 · 피부 보정 ' + level : '피부 보정 없음 · 색감과 프레임은 유지됩니다.';
+    el('beautyState').textContent = level ? '얼굴 ' + beautyPrepared.faces + '명 · 뽀샤시 ' + level : '뽀샤시 없음 · 색감과 프레임은 유지됩니다.';
     scheduleBeautyRender(); return;
   }
-  beautyProcessing = true; el('beautyState').textContent = beautyPrepared ? '피부 보정을 적용하고 있습니다…' : '얼굴과 피부를 확인하고 있습니다. 처음에는 보정 도구를 불러오는 데 시간이 걸릴 수 있습니다…'; renderBeauty();
+  beautyProcessing = true; el('beautyState').textContent = beautyPrepared ? '뽀샤시을 적용하고 있습니다…' : '얼굴과 피부를 확인하고 있습니다. 처음에는 보정 도구를 불러오는 데 시간이 걸릴 수 있습니다…'; renderBeauty();
   try {
     if (!beautyPrepared) {
       let deadline;
       let prepared;
-      try { prepared = await Promise.race([window.CameraBeauty.prepare(entry.file), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('beauty timeout')), 45000); })]); }
+      const controller=new AbortController();beautyAbort=controller;
+      try { prepared = await Promise.race([window.CameraBeauty.prepare(entry.file,{canvas:beautyBase,signal:controller.signal}), new Promise((_, reject) => { deadline = setTimeout(() => {controller.abort();reject(new Error('beauty timeout'));}, 45000); })]); }
       finally { clearTimeout(deadline); }
       if (epoch !== beautyEpoch) return;
       beautyPrepared = prepared;
     }
     beautyLevel = level;
-    el('beautyState').textContent = '얼굴 ' + beautyPrepared.faces + '명 · 피부 보정 ' + level;
+    el('beautyState').textContent = '얼굴 ' + beautyPrepared.faces + '명 · 뽀샤시 ' + level;
   } catch (error) {
     if (epoch !== beautyEpoch) return;
     beautyLevel = 0;
@@ -342,8 +356,10 @@ el('closeBeauty').onclick = () => closeDialog('beautyDialog');
 el('compareBeauty').onclick = () => { beautyComparing = !beautyComparing; renderBeauty(); };
 el('beautyDialog').addEventListener('close', () => {
   cancelAnimationFrame(beautyRenderFrame); beautyRenderFrame = 0;
+  beautyAbort?.abort();beautyAbort=null;releaseBeautyComposition();
+  if(beautyBase)beautyBase.width=beautyBase.height=1;
   beautyEpoch++; beautyEntry = null; beautyPrepared = null; beautyBase = null; beautyProcessing = false;
-  URL.revokeObjectURL(el('beautyOriginal').src); el('beautyOriginal').removeAttribute('src');
+  window.CameraBeauty.releaseDetector();el('beautyOriginal').width=el('beautyOriginal').height=1;
   el('beautyCanvas').width = el('beautyCanvas').height = 1;
 });
 el('applyBeauty').onclick = async () => {

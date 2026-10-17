@@ -42,15 +42,15 @@
 <dialog id="cameraDialog"><h2>사진 촬영</h2><video id="cameraVideo" autoplay muted playsinline></video><p class="hint">촬영한 사진은 확인 후 전송합니다.</p><div class="actions"><button id="snap" class="primary">촬영</button><button id="closeCamera">닫기</button></div></dialog>
 <dialog id="beautyDialog" aria-labelledby="beautyTitle">
 <div class="beautyHeading"><h2 id="beautyTitle">사진 꾸미기</h2><button id="closeBeauty" type="button" aria-label="사진 꾸미기 닫기">닫기</button></div>
-<div class="beautyPreview"><img id="beautyOriginal" alt="꾸미기 전 원본"><canvas id="beautyCanvas" aria-label="꾸민 사진 미리보기" hidden></canvas></div>
+<div class="beautyPreview"><canvas id="beautyOriginal" role="img" aria-label="꾸미기 전 원본"></canvas><canvas id="beautyCanvas" aria-label="꾸민 사진 미리보기" hidden></canvas></div>
 <div class="beautyTabs" role="tablist" aria-label="사진 효과">
-<button id="skinTab" type="button" role="tab" aria-selected="true" aria-controls="skinPanel" data-photo-tab="skin">피부 보정</button>
+<button id="skinTab" type="button" role="tab" aria-selected="true" aria-controls="skinPanel" data-photo-tab="skin">뽀샤시</button>
 <button id="colorTab" type="button" role="tab" aria-selected="false" aria-controls="colorPanel" data-photo-tab="color" tabindex="-1">색감</button>
 <button id="frameTab" type="button" role="tab" aria-selected="false" aria-controls="framePanel" data-photo-tab="frame" tabindex="-1">프레임</button></div>
 <div id="skinPanel" role="tabpanel" aria-labelledby="skinTab"></div>
 <div id="colorPanel" class="photoChoices" role="tabpanel" aria-labelledby="colorTab" hidden><button data-photo-color="none" aria-pressed="true" type="button">없음</button><button data-photo-color="warm" aria-pressed="false" type="button">따뜻함</button><button data-photo-color="pastel" aria-pressed="false" type="button">파스텔</button><button data-photo-color="film" aria-pressed="false" type="button">필름</button><button data-photo-color="mono" aria-pressed="false" type="button">흑백</button></div>
-<div id="framePanel" class="photoChoices frames" role="tabpanel" aria-labelledby="frameTab" hidden><button data-photo-frame="none" aria-pressed="true" type="button">없음</button><button data-photo-frame="white" aria-pressed="false" type="button">화이트</button><button data-photo-frame="polaroid" aria-pressed="false" type="button">폴라로이드</button></div>
-<div class="beautyControls"><div class="beautySlider"><label for="beautyStrength">피부 보정 <output id="beautyStrengthValue" for="beautyStrength">0</output></label><input id="beautyStrength" type="range" min="0" max="100" step="5" value="0" aria-valuetext="피부 보정 없음"></div><button id="compareBeauty" type="button" aria-pressed="false">원본 비교</button></div>
-<p id="beautyState" class="hint" role="status" aria-live="polite">강도 0은 피부 보정 없음 · 색감과 프레임을 함께 적용할 수 있습니다.</p>
+<div id="framePanel" class="photoChoices frames" role="tabpanel" aria-labelledby="frameTab" hidden><button data-photo-frame="none" aria-pressed="true" type="button">없음</button><button data-photo-frame="white" aria-pressed="false" type="button">화이트</button><button data-photo-frame="polaroid" aria-pressed="false" type="button">폴라로이드</button><button data-photo-frame="confetti" aria-pressed="false" type="button">축하</button><button data-photo-frame="film" aria-pressed="false" type="button">필름컷</button></div>
+<div class="beautyControls"><div class="beautySlider"><label for="beautyStrength">뽀샤시 <output id="beautyStrengthValue" for="beautyStrength">0</output></label><input id="beautyStrength" type="range" min="0" max="100" step="5" value="0" aria-valuetext="뽀샤시 없음"></div><button id="compareBeauty" type="button" aria-pressed="false">원본 비교</button></div>
+<p id="beautyState" class="hint" role="status" aria-live="polite">강도 0은 뽀샤시 없음 · 색감과 프레임을 함께 적용할 수 있습니다.</p>
 <details class="beautyInfo"><summary>저장·표출 안내</summary><p id="beautyDestination" class="hint"></p></details>
 <div class="beautyActions"><button id="applyBeauty" type="button" class="primary">이 사진으로 계속</button></div></dialog></body></html>

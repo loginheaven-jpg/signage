@@ -3,22 +3,47 @@
 window.CameraBeauty = (() => {
   let detector;
   async function landmarks(canvas) {
-    if (!detector) detector = (async () => {
-      const { FaceLandmarker, FilesetResolver } = await import('/vendor/mediapipe/vision_bundle.mjs');
-      return FaceLandmarker.createFromOptions(await FilesetResolver.forVisionTasks('/vendor/mediapipe/wasm'), {
-        baseOptions: { modelAssetPath: '/vendor/mediapipe/face_landmarker.task', delegate: 'CPU' },
-        runningMode: 'IMAGE', numFaces: 8, minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5
-      });
-    })().catch(error => { detector = null; throw error; });
+    if (!detector) {
+      const pending = (async () => {
+        const { FaceLandmarker, FilesetResolver } = await import('/vendor/mediapipe/vision_bundle.mjs');
+        return FaceLandmarker.createFromOptions(await FilesetResolver.forVisionTasks('/vendor/mediapipe/wasm'), {
+          baseOptions: { modelAssetPath: '/vendor/mediapipe/face_landmarker.task', delegate: 'CPU' },
+          runningMode: 'IMAGE', numFaces: 8, minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5
+        });
+      })().catch(error => { if(detector===pending)detector=null; throw error; });
+      detector=pending;
+    }
     const model = await detector;
     const small = document.createElement('canvas'), scale = Math.min(1, 768 / Math.max(canvas.width, canvas.height));
     small.width = Math.round(canvas.width * scale); small.height = Math.round(canvas.height * scale);
     small.getContext('2d').drawImage(canvas, 0, 0, small.width, small.height);
-    return model.detect(small).faceLandmarks;
+    try { return model.detect(small).faceLandmarks; }
+    finally { small.width=small.height=1; }
+  }
+  async function bitmapOptions(file) {
+    const bytes=new DataView(await file.slice(0,512*1024).arrayBuffer());let width=0,height=0;
+    if(bytes.byteLength>=24&&bytes.getUint32(0)===0x89504e47){width=bytes.getUint32(16);height=bytes.getUint32(20);}
+    else if(bytes.byteLength>=4&&bytes.getUint16(0)===0xffd8){
+      let offset=2;
+      while(offset+9<bytes.byteLength){
+        if(bytes.getUint8(offset)!==0xff)break;
+        const marker=bytes.getUint8(offset+1),length=bytes.getUint16(offset+2);
+        if([0xc0,0xc1,0xc2,0xc3,0xc5,0xc6,0xc7,0xc9,0xca,0xcb,0xcd,0xce,0xcf].includes(marker)){height=bytes.getUint16(offset+5);width=bytes.getUint16(offset+7);break;}
+        if(length<2)break;offset+=length+2;
+      }
+    }
+    const options={imageOrientation:'from-image'};
+    if(width&&height&&Math.max(width,height)>2048){
+      let orientation=1;try{orientation=await window.exifr?.orientation(file)||1;}catch{}
+      if(orientation>=5)[width,height]=[height,width];
+      const scale=2048/Math.max(width,height);
+      Object.assign(options,{resizeWidth:Math.max(1,Math.round(width*scale)),resizeHeight:Math.max(1,Math.round(height*scale)),resizeQuality:'high'});
+    }
+    return options;
   }
   async function decode(file) {
     let image;
-    try { image = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+    try { image = await createImageBitmap(file, await bitmapOptions(file)); }
     catch {
       const url = URL.createObjectURL(file);
       try { image = await new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = url; }); }
@@ -30,7 +55,7 @@ window.CameraBeauty = (() => {
       canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale));
       canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
       return canvas;
-    } finally { image.close?.(); }
+    } finally { image.close?.(); if(image instanceof HTMLImageElement)image.removeAttribute('src'); }
   }
   const oval = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
   const features = [
@@ -85,8 +110,11 @@ window.CameraBeauty = (() => {
     }
     return alpha;
   }
-  async function prepare(file) {
-    const canvas = await decode(file), faces = await landmarks(canvas);
+  async function prepare(file, options = {}) {
+    const checkCancelled=()=>{if(options.signal?.aborted)throw new DOMException('편집 취소','AbortError');};
+    checkCancelled();
+    const canvas = options.canvas || await decode(file), faces = await landmarks(canvas);
+    checkCancelled();
     if (!faces.length) throw new Error('얼굴을 찾지 못했습니다. 정면에 가까운 사진을 사용하거나 원본으로 진행해 주세요.');
     const w = canvas.width, h = canvas.height, ctx = canvas.getContext('2d', { willReadFrequently: true });
     const alpha=skinMask(faces,w,h);
@@ -111,11 +139,11 @@ window.CameraBeauty = (() => {
           }
           output[i]=r/weight;output[i+1]=g/weight;output[i+2]=b/weight;
         }
-        if(y%80===0)await new Promise(resolve=>setTimeout(resolve,0));
+        if(y%80===0){await new Promise(resolve=>setTimeout(resolve,0));checkCancelled();}
       }
       input=output;
     }
-    const retouched=new Uint8ClampedArray(data);
+    const retouched=input;
     for(let i=0;i<data.length;i+=4){
       if(!alpha[i+3])continue;
       const luminance=(0.2126*input[i]+0.7152*input[i+1]+0.0722*input[i+2])/255;
@@ -123,12 +151,14 @@ window.CameraBeauty = (() => {
       const lift=32*4*luminance*(1-luminance)*(1.15-0.45*luminance);
       for(let c=0;c<3;c++)retouched[i+c]=data[i+c]+0.96*(input[i+c]-data[i+c])+lift;
     }
-    return {canvas,source,smooth:input,retouched,alpha,faces:faces.length};
+    return {canvas,source,retouched,alpha,faces:faces.length};
   }
   function paint(prepared, strength) {
-    const {canvas,source,retouched,alpha}=prepared, pixels=new ImageData(new Uint8ClampedArray(source.data),canvas.width,canvas.height);
+    const {canvas,source,retouched,alpha}=prepared;
+    const pixels=prepared.pixels||(prepared.pixels=new ImageData(new Uint8ClampedArray(source.data),canvas.width,canvas.height));
     const amount=Math.max(0,Math.min(100,Number(strength)||0))/100;
-    if(amount)for(let i=0;i<pixels.data.length;i+=4){
+    if(!amount)pixels.data.set(source.data);
+    else for(let i=0;i<pixels.data.length;i+=4){
       if(!alpha[i+3])continue;
       const a=alpha[i+3]/255*amount;
       for(let c=0;c<3;c++)pixels.data[i+c]=source.data[i+c]+a*(retouched[i+c]-source.data[i+c]);
@@ -153,14 +183,29 @@ window.CameraBeauty = (() => {
       }
       ctx.putImageData(pixels,0,0);
     }
-    if(['white','polaroid'].includes(effects.frame)){
-      const border=Math.max(8,Math.round(Math.min(canvas.width,canvas.height)*0.045));
+    if(['white','polaroid','confetti','film'].includes(effects.frame)){
+      const border=Math.max(8,Math.round(Math.min(canvas.width,canvas.height)*(effects.frame==='confetti'?0.07:0.045)));
       const footer=effects.frame==='polaroid'?border*3:0;
       const framed=document.createElement('canvas');framed.width=canvas.width+border*2;framed.height=canvas.height+border*2+footer;
-      const f=framed.getContext('2d');f.fillStyle=effects.frame==='polaroid'?'#fff8ec':'#ffffff';f.fillRect(0,0,framed.width,framed.height);f.drawImage(canvas,border,border);
+      const f=framed.getContext('2d');f.fillStyle=effects.frame==='polaroid'?'#fff8ec':effects.frame==='confetti'?'#fff4e8':effects.frame==='film'?'#25322d':'#ffffff';f.fillRect(0,0,framed.width,framed.height);f.drawImage(canvas,border,border);
+      if(effects.frame==='confetti'){
+        const colors=['#d87579','#dda84c','#71a69b','#9b8abd'];
+        for(let i=0;i<24;i++){
+          f.fillStyle=colors[i%colors.length];const x=border+(canvas.width*(i+0.5)/24), y=i%2?border*0.35:framed.height-border*0.35;
+          f.save();f.translate(x,y);f.rotate(i*0.8);f.fillRect(-border*0.06,-border*0.15,border*0.12,border*0.3);f.restore();
+        }
+        for(let i=0;i<12;i++)for(const x of [border*0.4,framed.width-border*0.4]){
+          f.fillStyle=colors[(i+1)%colors.length];f.beginPath();f.arc(x,border+canvas.height*(i+0.5)/12,border*0.09,0,Math.PI*2);f.fill();
+        }
+      }
+      if(effects.frame==='film'){
+        f.fillStyle='#f1e7cd';
+        for(let y=border*0.4;y<framed.height-border*0.2;y+=border*1.1)for(const x of [border*0.22,framed.width-border*0.78])f.fillRect(x,y,border*0.56,border*0.6);
+      }
       if(footer){f.fillStyle='#244b3c';f.textAlign='center';f.textBaseline='middle';f.font='500 '+Math.round(border*0.7)+'px system-ui,sans-serif';f.fillText('오늘의 한 컷 · YEBOM',framed.width/2,border+canvas.height+footer*0.55,canvas.width);}
       const scale=Math.min(1,2048/Math.max(framed.width,framed.height));canvas.width=Math.round(framed.width*scale);canvas.height=Math.round(framed.height*scale);
       ctx.drawImage(framed,0,0,canvas.width,canvas.height);
+      framed.width=framed.height=1;
     }
     return canvas;
   }
@@ -169,6 +214,13 @@ window.CameraBeauty = (() => {
     if(!blob)throw new Error('보정 사진을 만들지 못했습니다. 원본으로 진행하거나 다시 시도해 주세요.');
     return new File([blob], original.name.replace(/\.[^.]+$/,'')+'_꾸미기.jpg',{type:'image/jpeg',lastModified:original.lastModified});
   }
-  async function file(prepared, strength, original, effects) { return exportPhoto(compose(paint(prepared,strength),effects),original); }
-  return { decode,prepare,paint,compose,exportPhoto,file };
+  async function file(prepared, strength, original, effects) {
+    const canvas=compose(paint(prepared,strength),effects);
+    try{return await exportPhoto(canvas,original);}finally{canvas.width=canvas.height=1;}
+  }
+  async function releaseDetector() {
+    const pending=detector;detector=null;
+    if(pending)try{(await pending).close();}catch{}
+  }
+  return { decode,prepare,paint,compose,exportPhoto,file,releaseDetector };
 })();
