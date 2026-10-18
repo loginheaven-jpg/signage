@@ -1,3 +1,4 @@
+const cameraUI=require('./helpers/camera-ui.cjs');
 // Camera page: pick a video, choose sound, send it, and watch it reach the monitor and the archive.
 // Only local fixtures; no real monitors, Google, mail or Kakao messages.
 const { chromium } = require('../host/node_modules/@playwright/test');
@@ -20,9 +21,9 @@ const { startPreview } = require('./camera-preview.cjs');
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     page.on('dialog', dialog => dialog.accept());
     await page.goto(preview.url + '/camera');
-    await page.locator('[data-mode=both]').click(); await page.locator('#uploader').fill('김예봄');
-    await page.locator('#chooseSite').click(); await page.locator('[data-site-id=screen]').click();
-    await page.locator('#siteDialog').waitFor({ state: 'hidden' }); await page.locator('#useSettings').click();
+    await cameraUI.click(page,'[data-mode=both]'); await cameraUI.fill(page,'#uploader','김예봄');
+    await cameraUI.click(page,'#chooseSite'); await cameraUI.click(page,'[data-site-id=screen]');
+    await page.locator('#siteDialog').waitFor({ state: 'hidden' }); await cameraUI.click(page,'#useSettings');
     await page.locator('#work').waitFor();
     assert.equal(await page.locator('#shootVideo').isVisible(), true);
     assert.equal(await page.locator('#muteLabel').isVisible(), false, 'the sound choice appears only with a video');
@@ -33,8 +34,8 @@ const { startPreview } = require('./camera-preview.cjs');
     assert.match(await page.locator('#selectedPhotos').textContent(), /영상 2초/);
     assert.equal(await page.locator('#muteVideo').isChecked(), true, 'silent is the default');
     await page.locator('#muteVideo').uncheck();
-    await page.locator('#message').fill('환영합니다');
-    await page.locator('#send').click();
+    await cameraUI.fill(page,'#message','환영합니다');
+    await cameraUI.click(page,'#send');
     await page.waitForFunction(() => !busy && document.querySelector('#review').hidden, null, { timeout: 60000 });
 
     for (let i = 0; i < 300 && preview.published.length < 2; i++) await new Promise(r => setTimeout(r, 100));
@@ -47,7 +48,7 @@ const { startPreview } = require('./camera-preview.cjs');
     assert.ok(record, 'the original video is kept for the church folder');
     assert.equal(record.status, 'awaiting_target', 'the folder can be chosen afterwards, like photos');
     assert.equal(fs.statSync(preview.archive.localPath(record)).size, fs.statSync(clip).size);
-    await page.locator('#refreshHistory').click();
+    await cameraUI.click(page,'#refreshHistory');
     await page.waitForFunction(() => /모니터 표시 확인/.test(document.querySelector('#history').textContent));
     assert.equal(await page.evaluate(() => selected.length), 0);
     assert.deepEqual(errors, []);

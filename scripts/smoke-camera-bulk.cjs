@@ -1,3 +1,4 @@
+const cameraUI=require('./helpers/camera-ui.cjs');
 // Archive-only bulk upload: more than 30 photos, parallel transfer, automatic retry,
 // re-selecting already uploaded photos, and restoring an interrupted batch.
 // Only local fixtures; no real monitors, Google, mail or Kakao messages.
@@ -33,26 +34,26 @@ const { startPreview } = require('./camera-preview.cjs');
       try { await route.continue(); } catch {} finally { inflight--; }
     });
     const openArchive = async () => {
-      await page.locator('[data-mode=archive]').click(); await page.locator('#uploader').fill('김예봄');
+      await cameraUI.click(page,'[data-mode=archive]'); await cameraUI.fill(page,'#uploader','김예봄');
       await page.waitForFunction(() => foldersReady);
-      await page.locator('#chooseFolder').click(); await page.locator('[data-folder-id=event-2026]').click();
-      await page.locator('#folderDialog').waitFor({ state: 'hidden' }); await page.locator('#useSettings').click(); await page.locator('#work').waitFor();
+      await cameraUI.click(page,'#chooseFolder'); await cameraUI.click(page,'[data-folder-id=event-2026]');
+      await page.locator('#folderDialog').waitFor({ state: 'hidden' }); await cameraUI.click(page,'#useSettings'); await page.locator('#work').waitFor();
     };
-    const sendAll = async () => { await page.locator('#send').click(); await page.waitForFunction(() => !busy, null, { timeout: 60000 }); };
+    const sendAll = async () => { await cameraUI.click(page,'#send'); await page.waitForFunction(() => !busy, null, { timeout: 60000 }); };
     await page.goto(preview.url + '/camera'); await openArchive();
 
     // 45 photos in one selection: no 30-photo limit, only the first 40 are drawn.
     await page.locator('#galleryInput').setInputFiles(files.slice(0, 45));
     await page.waitForFunction(() => selected.length === 45);
     assert.equal(await page.locator('#selectedPhotos .photoCard').count(), 40);
-    await page.locator('#moreReview').click();
+    await cameraUI.click(page,'#moreReview');
     assert.equal(await page.locator('#selectedPhotos .photoCard').count(), 45);
     assert.equal(await page.locator('#reviewTitle').textContent(), '사진 45장');
     await sendAll();
     assert.equal(await page.evaluate(() => selected.length), 0);
     assert.equal(preview.archive.records.size, 45);
     assert.equal(posts, 45); assert.ok(peak >= 2 && peak <= 3, 'photos are sent a few at a time, not one by one: ' + peak);
-    assert.match(await page.locator('#notice').textContent(), /45장을 접수했습니다/);
+    assert.match(await page.locator('#completeState').textContent(), /45개/);
 
     // Selecting the same photos again (for example after the app was closed) uploads only the new ones.
     posts = 0;
@@ -61,7 +62,7 @@ const { startPreview } = require('./camera-preview.cjs');
     await sendAll();
     assert.equal(posts, 3, 'five already accepted photos are not sent again');
     assert.equal(preview.archive.records.size, 48);
-    assert.match(await page.locator('#notice').textContent(), /이미 올린 사진 5장/);
+    assert.match(await page.locator('#notice').textContent(), /이미 보관한 사진 5장/);
 
     // A dropped connection is retried without the user pressing anything.
     posts = 0; failNext = 2;
@@ -75,10 +76,10 @@ const { startPreview } = require('./camera-preview.cjs');
     hold = true; posts = 0;
     await page.locator('#galleryInput').setInputFiles(files.slice(50, 52));
     await page.waitForFunction(() => selected.length === 2);
-    await page.locator('#send').click(); await page.waitForFunction(() => busy);
+    await cameraUI.click(page,'#send'); await page.waitForFunction(() => busy);
     while (posts < 2) await new Promise(resolve => setTimeout(resolve, 20));
     await page.reload(); hold = false; release();
-    await page.locator('#continueResume').click(); await page.locator('#work').waitFor();
+    await cameraUI.click(page,'#continueResume'); await page.locator('#work').waitFor();
     assert.equal(await page.evaluate(() => selected.length), 2);
     assert.ok(await page.evaluate(() => selected.every(r => r.submission && r.requestId.startsWith('a-'))));
     await sendAll();
@@ -88,9 +89,9 @@ const { startPreview } = require('./camera-preview.cjs');
     assert.equal(await page.evaluate(async () => (await settle((await openDb()).transaction('files').objectStore('files').getAllKeys())).length), 0);
 
     // Monitor display keeps its 30-photo limit.
-    await page.locator('#changePurpose').click(); await page.locator('[data-mode=live]').click();
-    await page.locator('#chooseSite').click(); await page.locator('[data-site-id=screen]').click();
-    await page.locator('#siteDialog').waitFor({ state: 'hidden' }); await page.locator('#useSettings').click(); await page.locator('#work').waitFor();
+    await cameraUI.click(page,'#changePurpose'); await cameraUI.click(page,'[data-mode=live]');
+    await cameraUI.click(page,'#chooseSite'); await cameraUI.click(page,'[data-site-id=screen]');
+    await page.locator('#siteDialog').waitFor({ state: 'hidden' }); await cameraUI.click(page,'#useSettings'); await page.locator('#work').waitFor();
     await page.locator('#galleryInput').setInputFiles(files.slice(0, 31));
     await page.waitForFunction(() => selected.length === 30);
     assert.match(await page.locator('#notice').textContent(), /한 번에 30장까지/);

@@ -1,3 +1,4 @@
+const cameraUI=require('./helpers/camera-ui.cjs');
 // Chromium + real camera API + local Drive/mail fixtures. Never sends real mail
 // or launches a real Kakao/share app; only the native share boundary is stubbed.
 const { chromium } = require('../host/node_modules/@playwright/test');
@@ -24,29 +25,29 @@ const { startPreview } = require('./camera-preview.cjs');
       } });
     });
     const enter = async mode => {
-      await page.locator('#home').click(); await page.locator('#purpose').waitFor();
-      await page.locator('[data-mode=' + mode + ']').click();
-      await page.locator('#uploader').fill('김예봄');
+      await cameraUI.click(page,'#home'); await page.locator('#captureHome').waitFor();
+      await cameraUI.click(page,'[data-mode=' + mode + ']');
+      await cameraUI.fill(page,'#uploader','김예봄');
       if (mode === 'archive') {
-        await page.locator('#chooseFolder').click(); await page.locator('[data-folder-id=event-2026]').click();
+        await cameraUI.click(page,'#chooseFolder'); await cameraUI.click(page,'[data-folder-id=event-2026]');
         await page.locator('#folderDialog').waitFor({ state: 'hidden' });
       }
       if (mode !== 'archive') {
-        await page.locator('#chooseSite').click(); await page.locator('#siteDialog').waitFor();
-        await page.locator('[data-site-id=screen]').click(); await page.locator('#siteDialog').waitFor({ state: 'hidden' });
+        await cameraUI.click(page,'#chooseSite'); await page.locator('#siteDialog').waitFor();
+        await cameraUI.click(page,'[data-site-id=screen]'); await page.locator('#siteDialog').waitFor({ state: 'hidden' });
       }
-      await page.locator('#useSettings').click(); await page.locator('#work').waitFor();
+      await cameraUI.click(page,'#useSettings'); await page.locator('#work').waitFor();
       if (mode === 'both') {
-        await page.locator('#chooseFolder').click(); await page.locator('[data-folder-id=event-2026]').click();
-        await page.locator('#folderDialog').waitFor({ state: 'hidden' }); await page.locator('#saveLocation').click();
+        await cameraUI.click(page,'#chooseFolder'); await cameraUI.click(page,'[data-folder-id=event-2026]');
+        await page.locator('#folderDialog').waitFor({ state: 'hidden' }); await cameraUI.click(page,'#saveLocation');
       }
     };
     const send = async (files = preview.photo) => {
       await page.locator('#galleryInput').setInputFiles(files);
-      await page.locator('#send').click();
+      await cameraUI.click(page,'#send');
       await page.waitForFunction(() => !document.querySelector('#home').disabled && document.querySelector('#progress').textContent.includes('서버 접수 완료'));
       await page.waitForFunction(() => originals.length === 0);
-      await page.locator('#refreshHistory').click();
+      await cameraUI.click(page,'#refreshHistory');
     };
 
     await page.goto(preview.url + '/camera');
@@ -56,20 +57,21 @@ const { startPreview } = require('./camera-preview.cjs');
     assert.equal(await page.locator('#shareResult').isVisible(), false);
 
     await enter('live');
-    assert.equal(await page.locator('#communication').isVisible(), true, 'email available before selecting a photo');
-    await page.locator('#email').fill('guest@gmial.com');
-    await page.locator('#emailSuggestion button').click();
+    assert.equal(await page.locator('#communication').isVisible(), false,'optional email stays out of the primary capture flow');await cameraUI.options(page);
+    assert.equal(await page.locator('#communication').isVisible(), true, 'email is available through extra options');
+    await cameraUI.fill(page,'#email','guest@gmial.com');
+    await cameraUI.click(page,'#emailSuggestion button');
     assert.equal(await page.locator('#email').inputValue(), 'guest@gmail.com');
     await send();
     assert.equal(preview.mail.jobs.size, 1); assert.equal(preview.sent.length, 0);
-    assert.equal(await page.locator('#emailKeep').isVisible(), true);
+    await cameraUI.options(page);assert.equal(await page.locator('#emailKeep').isVisible(), true);
     assert.equal(await page.locator('#email').inputValue(), 'guest@gmail.com');
-    await page.locator('#sharePhotos').click();
+    await cameraUI.click(page,'#sharePhotos');
     await page.waitForFunction(() => window.shareCalls.length === 1 && !document.querySelector('#sharePhotos').disabled);
     assert.deepEqual(await page.evaluate(() => window.shareCalls), [[['image/jpeg', 1200, 900]]]);
     await page.evaluate(() => { window.shareAbort = true; });
     const previousNotice = await page.locator('#notice').textContent();
-    await page.locator('#sharePhotos').click();
+    await cameraUI.click(page,'#sharePhotos');
     await page.waitForFunction(() => !document.querySelector('#sharePhotos').disabled);
     assert.equal(await page.locator('#notice').textContent(), previousNotice, 'closing the share sheet is not an error or a claimed delivery');
     await page.evaluate(() => { window.shareAbort = false; window.shareSupported = false; renderShare(); });
@@ -79,43 +81,44 @@ const { startPreview } = require('./camera-preview.cjs');
     await page.evaluate(() => { window.shareSupported = true; renderShare(); });
 
     const published = preview.published.length;
-    await page.locator('[data-mail-cancel]').click();
+    await cameraUI.click(page,'[data-mail-cancel]');
     await page.waitForFunction(() => document.querySelector('#history').textContent.includes('이메일: 취소됨'));
     assert.equal(preview.mail.jobs.size, 0); assert.equal(preview.published.length, published);
     assert.equal(await page.locator('#email').inputValue(), '');
-    assert.equal(await page.locator('#shareResult').isVisible(), true, 'mail-only cancel retains share photos');
+    await cameraUI.share(page);assert.equal(await page.locator('#shareResult').isVisible(), true, 'mail-only cancel retains share photos');
 
-    await enter('both'); await page.locator('#email').fill('next@example.com'); await send();
+    await enter('both'); await cameraUI.fill(page,'#email','next@example.com'); await send();
     await preview.archive.cycle(true);
     assert.equal(preview.archive.records.size, 2, 'archive-only and both retain originals');
     assert.equal(preview.mail.jobs.size, 1);
-    await page.reload(); await page.locator('#continueResume').click();
+    await page.reload(); await cameraUI.click(page,'#continueResume');
+    await cameraUI.share(page);
     await page.locator('#shareResult').waitFor();
     assert.equal(await page.locator('#email').inputValue(), 'next@example.com');
-    await page.locator('#sharePhotos').click();
+    await cameraUI.click(page,'#sharePhotos');
     await page.waitForFunction(() => window.shareCalls.length === 1 && !document.querySelector('#sharePhotos').disabled);
     assert.deepEqual(await page.evaluate(() => window.shareCalls), [[['image/jpeg', 1200, 900]]], 'File objects survive IndexedDB restart');
     const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('camera.email')));
-    await page.locator('#home').click(); await page.locator('#continueResume').click();
+    await cameraUI.click(page,'#home'); await cameraUI.click(page,'#continueResume');
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('camera.email')).at), saved.at, 'navigation does not extend recipient retention');
     await page.clock.fastForward(10 * 60000 + 31000);
     assert.equal(await page.locator('#email').inputValue(), '');
     assert.equal(await page.evaluate(() => localStorage.getItem('camera.email')), 'null');
     // The mock mailer advances only explicitly, not with the browser clock.
     preview.clock.now += 63000; await preview.mail.cycle();
-    assert.equal(preview.sent.length, 1); await page.locator('#refreshHistory').click();
+    assert.equal(preview.sent.length, 1); await cameraUI.click(page,'#refreshHistory');
     await page.waitForFunction(() => document.querySelector('#history').textContent.includes('이메일: 발송 완료'));
     assert.equal(await page.locator('[data-mail-cancel]').count(), 0);
     await page.clock.resume();
 
-    await enter('live'); await page.locator('#email').fill('batch@example.com');
+    await enter('live'); await cameraUI.fill(page,'#email','batch@example.com');
     const beforeBatch = preview.published.length, bytes = fs.readFileSync(preview.photo);
     await send(['first.png', 'second.png'].map(name => ({ name, mimeType: 'image/png', buffer: bytes })));
-    await page.locator('#cancelBatchMail').click();
+    await cameraUI.click(page,'#cancelBatchMail');
     await page.waitForFunction(() => document.querySelector('#cancelBatchMail').hidden);
     assert.equal(preview.mail.jobs.size, 0); assert.equal(preview.published.length, beforeBatch + 2);
     page.once('dialog', dialog => dialog.accept());
-    await page.locator('#cancelBatch').click(); await page.locator('#shareResult').waitFor({ state: 'hidden' });
+    await cameraUI.click(page,'#cancelBatch'); await page.locator('#shareResult').waitFor({ state: 'hidden' });
     assert.equal(preview.published.length, beforeBatch);
     assert.equal(preview.archive.records.size, 2);
 
@@ -141,13 +144,13 @@ const { startPreview } = require('./camera-preview.cjs');
         localStorage.setItem('live.mailAt', String(Date.now())); localStorage.setItem('live.mailKept', '1'); localStorage.setItem('seeded', '1');
       }
     });
-    await legacy.goto(preview.url + '/camera'); await legacy.locator('[data-mode=live]').click();
+    await legacy.goto(preview.url + '/camera'); await cameraUI.click(legacy,'[data-mode=live]');
     assert.equal(await legacy.locator('#uploader').inputValue(), '이전촬영자');
     assert.equal(await legacy.locator('#site').inputValue(), 'screen');
-    await legacy.waitForFunction(() => sitesReady); await legacy.locator('#useSettings').click();
+    await legacy.waitForFunction(() => sitesReady); await cameraUI.click(legacy,'#useSettings');
     assert.equal(await legacy.locator('#email').inputValue(), 'legacy@example.com');
     assert.equal(await legacy.evaluate(() => localStorage.getItem('live.draftMail')), null);
-    await legacy.locator('#clearEmail').click(); await legacy.reload(); await legacy.locator('#continueResume').click();
+    await cameraUI.click(legacy,'#clearEmail'); await legacy.reload(); await cameraUI.click(legacy,'#continueResume');
     assert.equal(await legacy.locator('#email').inputValue(), '', 'cleared legacy addresses never reappear');
     await legacy.locator('#galleryInput').setInputFiles({ name: 'empty.png', mimeType: 'image/png', buffer: Buffer.alloc(0) });
     await legacy.waitForFunction(() => document.querySelector('#notice').textContent.includes('비어 있습니다'));

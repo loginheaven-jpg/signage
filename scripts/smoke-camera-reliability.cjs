@@ -1,3 +1,4 @@
+const cameraUI=require('./helpers/camera-ui.cjs');
 // Real Chromium, local Drive fixture and the production web-player rendering.
 // No real monitors, Google requests or messages are used.
 const { chromium } = require('../host/node_modules/@playwright/test');
@@ -17,26 +18,26 @@ const { startPreview } = require('./camera-preview.cjs');
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     let folderCalls = 0; page.on('request', request => { if (request.url().includes('/camera/folders?')) folderCalls++; });
     await page.goto(preview.url + '/camera');
-    await page.waitForFunction(() => document.querySelector('#purpose').hidden === false);
-    // Purpose selection is not required to start loading Drive.
+    await page.locator('#captureHome').waitFor();
+    // 첫 촬영 화면에서 Drive 조회를 미리 시작하며 촬영을 막지 않는다.
     while (!started) await new Promise(resolve => setTimeout(resolve, 10));
-    await page.locator('[data-mode=archive]').click();
+    await cameraUI.click(page,'[data-mode=archive]');
     assert.equal(await page.locator('#chooseFolder').isDisabled(), true);
     await page.waitForFunction(() => document.querySelector('#folderState').textContent.includes('초 (최대'));
     // A 16-second first read used to be aborted at 15 seconds, then retried.
     await new Promise(resolve => setTimeout(resolve, Math.max(0, 16000 - (Date.now() - started)))); release();
     await page.waitForFunction(() => !document.querySelector('#chooseFolder').disabled);
     assert.equal(folderCalls, 1, 'setup joins the background request');
-    await page.locator('#chooseFolder').click();
+    await cameraUI.click(page,'#chooseFolder');
     assert.equal(await page.locator('#folderList button').count(), 5);
     await page.goBack();
     await page.route('**/live/api/camera/folders?**', route => route.fulfill({ status: 504, json: { error: '폴더 조회 시간이 초과되었습니다.' } }));
-    await page.locator('#reloadFolders').click();
+    await cameraUI.click(page,'#reloadFolders');
     await page.waitForFunction(() => document.querySelector('#folderState').textContent.includes('시간이 초과'));
     assert.equal(await page.locator('#reloadFolders').isDisabled(), false);
     assert.equal(await page.locator('#chooseFolder').isDisabled(), true);
     await page.unroute('**/live/api/camera/folders?**');
-    await page.locator('#reloadFolders').click();
+    await cameraUI.click(page,'#reloadFolders');
     await page.waitForFunction(() => !document.querySelector('#chooseFolder').disabled);
 
     // A transport/body reader that ignores AbortSignal used to leave the UI
@@ -55,11 +56,11 @@ const { startPreview } = require('./camera-preview.cjs');
       };
     });
     await stalled.goto(preview.url + '/camera');
-    await stalled.locator('[data-mode=both]').click();
-    await stalled.locator('#uploader').fill('폴더점검');
-    await stalled.locator('#chooseSite').click();
-    await stalled.locator('[data-site-id=screen]').click();
-    await stalled.locator('#useSettings').click();
+    await cameraUI.click(stalled,'[data-mode=both]');
+    await cameraUI.fill(stalled,'#uploader','폴더점검');
+    await cameraUI.click(stalled,'#chooseSite');
+    await cameraUI.click(stalled,'[data-site-id=screen]');
+    await cameraUI.click(stalled,'#useSettings');
     await stalled.waitForFunction(() => document.querySelector('#folderState').textContent.includes('시간이 초과')).catch(async error => {
       console.error(errors, await stalled.evaluate(() => ({ page: currentPage, folderState: el('folderState').textContent, notice: el('notice').textContent, folderSequence, foldersReady, settings, formValid: el('setupForm').checkValidity(), sitesReady, calls: window.stalledFolderCalls, requests: [...folderRequests].map(([key, value]) => ({ key, pending: value.pending })) })));
       throw error;
@@ -68,7 +69,7 @@ const { startPreview } = require('./camera-preview.cjs');
     assert.equal(await stalled.locator('#shoot').isEnabled(), true, 'folder failure cannot block camera work');
     assert.equal(await stalled.evaluate(() => folderRequests.size), 0, 'stalled prefetch cannot pin future requests');
     await stalled.evaluate(() => { window.folderRecovered = true; });
-    await stalled.locator('#reloadFolders').click();
+    await cameraUI.click(stalled,'#reloadFolders');
     await stalled.waitForFunction(() => !document.querySelector('#chooseFolder').disabled);
     await stalled.evaluate(() => window.releaseStalledFolder({ years: [], events: [], yearId: '', exists: false, ambiguous: false }));
     await stalled.waitForTimeout(50);
@@ -80,13 +81,13 @@ const { startPreview } = require('./camera-preview.cjs');
     denied.on('pageerror', error => errors.push(error.message));
     await denied.route('**/live/api/camera/folders?**', route => route.fulfill({ status: 403, json: { error: '교회 보관함 연결에 문제가 있습니다. 관리자 확인이 필요합니다. 촬영자는 Google 계정을 연결할 필요가 없습니다. [FOLDERS_ROOT_403]' } }));
     await denied.goto(preview.url + '/camera');
-    await denied.locator('[data-mode=archive]').click();
+    await cameraUI.click(denied,'[data-mode=archive]');
     await denied.waitForFunction(() => document.querySelector('#folderState').textContent.includes('FOLDERS_ROOT_403'));
     assert.equal(await denied.locator('#chooseFolder').isDisabled(), true);
     assert.equal(await denied.locator('#reloadFolders').isDisabled(), false);
     assert.equal(await denied.locator('#useSettings').isDisabled(), true);
     await denied.unroute('**/live/api/camera/folders?**');
-    await denied.locator('#reloadFolders').click();
+    await cameraUI.click(denied,'#reloadFolders');
     await denied.waitForFunction(() => !document.querySelector('#chooseFolder').disabled);
     assert.equal(await denied.evaluate(() => events.length), 5);
     await denied.close();

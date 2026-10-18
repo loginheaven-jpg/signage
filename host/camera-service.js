@@ -29,7 +29,7 @@ function parsePhotoDate(value) {
   return ts;
 }
 
-function mountCameraService(app, { archive, auth, getConfig, getSites, publish, delivery, cancel, mail, ai = {} }) {
+function mountCameraService(app, { archive, auth, getConfig, getSites, publish, delivery, cancel, mail, ai = {}, getCurrentEvent = () => null }) {
   const folderCatalog = new CameraFolderCatalog(archive);
   const staging = path.join(archive.root, 'camera-staging');
   const receiptsDir = path.join(archive.root, 'camera-receipts');
@@ -78,6 +78,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
   require('./camera-ai').mountCameraAI(app, { root: archive.root, ...ai });
   const safe = fn => (req, res) => Promise.resolve().then(() => fn(req, res)).catch(error => res.status(error.status || 503).json({ error: errorText(error) }));
   app.get('/live/api/camera/config', (req, res) => res.json({ rootId: archive.folderId, year: new Date(Date.now() + 9 * 3600000).getUTCFullYear(),
+    currentEvent: getCurrentEvent(),
     archiveEnabled: getConfig().archiveEnabled !== false, liveEnabled: getConfig().enabled, ready: archive.ready,
     archiveError: archive.error ? errorText({ publicMessage: archive.error }) : '', sites: getSites(), maxBytes: MAX_BYTES, maxVideoBytes: MAX_VIDEO_BYTES, maxVideoSeconds: MAX_VIDEO_SECONDS, maxBatch: 30, maxArchiveBatch: MAX_ARCHIVE_BATCH, cancelSec: getConfig().settings.cancelSec, mail: !!mail?.configured }));
 

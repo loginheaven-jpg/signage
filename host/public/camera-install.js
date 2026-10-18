@@ -1,8 +1,8 @@
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/camera-sw.js').catch(() => {});
 const bar = document.createElement('div');
-bar.style.cssText = 'padding:16px;text-align:center;font:14px system-ui';
+bar.style.cssText = 'padding-top:12px;font:13px system-ui;border-top:1px solid #dce3dc';
 bar.innerHTML = '<button type="button" id="cameraInstall" style="padding:10px">홈 화면에 설치</button> <button type="button" id="cameraLogout" style="padding:10px">로그아웃</button><p id="cameraInstallHelp" style="margin-top:8px"></p>';
-document.body.append(bar);
+(document.getElementById('moreDialog') || document.body).append(bar);
 let installPrompt;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
 document.getElementById('cameraInstall').onclick = async () => {

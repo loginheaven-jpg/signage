@@ -1,0 +1,32 @@
+'use strict';
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const {fixture}=require('./helpers/camera-fixture');
+const {CameraDefaultEvent}=require('../host/camera-default-event');
+const express=require('../host/node_modules/express');
+const createAuth=require('../host/browser-auth');
+test('common camera event persists, only accepts an existing writable child, and never creates folders',async t=>{
+ const f=fixture(t);f.folder('year-2026','2026','root');f.folder('event-a','가을예배','year-2026');f.folder('other','외부','root');
+ const store=new CameraDefaultEvent(f.archive);assert.equal(store.get(),null);
+ await assert.rejects(store.set({year:'2026',eventName:'새 행사'}));assert.equal(f.calls.creates.length,0);
+ await store.set({year:'2026',yearId:'year-2026',eventId:'event-a',eventName:'잘못된 표시 이름'});
+ assert.equal(store.get().folderName,'가을예배');assert.equal(new CameraDefaultEvent(f.archive).get().eventId,'event-a');
+ await assert.rejects(store.set({year:'2026',yearId:'year-2026',eventId:'other'}));assert.equal(store.get().eventId,'event-a');
+ f.remote.get('event-a').capabilities.canAddChildren=false;
+ await assert.rejects(store.set({year:'2026',yearId:'year-2026',eventId:'event-a'}));assert.equal(store.get().eventId,'event-a');
+ assert.equal(f.calls.creates.length,0);
+ await store.set(null);assert.equal(new CameraDefaultEvent(f.archive).get(),null);
+});
+test('only an administrator can configure the common event; camera users can read it without receiving admin credentials',async t=>{
+ const f=fixture(t),app=express();app.use(express.json());
+ const auth=createAuth(app,f.root,{ADMIN_PASSWORD:'admin-test',CAMERA_PASSWORD:'camera-test',NODE_ENV:'production'});
+ app.use('/api',auth.guard('admin'));const store=new CameraDefaultEvent(f.archive);store.mount(app);
+ app.get('/live/api/camera/config',auth.guard('camera'),(req,res)=>res.json({currentEvent:store.get()}));
+ const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>new Promise(r=>server.close(r)));
+ const base='http://127.0.0.1:'+server.address().port;
+ const login=async(role,password)=>(await fetch(base+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role,password})})).headers.get('set-cookie').split(';')[0];
+ const admin=await login('admin','admin-test'),camera=await login('camera','camera-test');
+ const write=(cookie,origin)=>fetch(base+'/api/camera/default-event',{method:'PUT',headers:{'Content-Type':'application/json',cookie,...(origin?{origin}:{})},body:JSON.stringify({target:null})});
+ assert.equal((await fetch(base+'/api/camera/default-event')).status,401);assert.equal((await write(camera)).status,401);assert.equal((await write(admin,'https://other.example')).status,403);assert.equal((await write(admin)).status,200);
+ const config=await(await fetch(base+'/live/api/camera/config',{headers:{cookie:camera}})).json();assert.deepEqual(config,{currentEvent:null});assert.equal((await fetch(base+'/live/api/camera/config')).status,401);
+});

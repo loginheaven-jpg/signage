@@ -1,3 +1,4 @@
+const cameraUI=require('./helpers/camera-ui.cjs');
 // Background Fetch for bulk archive: the browser keeps uploading after the camera page is closed.
 // Needs a visible browser window: headless Chromium never grants the background-fetch permission,
 // so this is not part of `npm run test:camera-ui`. Run with `npm run test:camera-background`.
@@ -32,15 +33,15 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
       return worker?.backgroundFetch ? (await navigator.permissions.query({ name: 'background-fetch' })).state : 'unsupported';
     });
     if (permission !== 'granted') { console.log('Background Fetch is not available in this browser (' + permission + '); skipped.'); return; }
-    await page.locator('[data-mode=archive]').click(); await page.locator('#uploader').fill('김예봄');
+    await cameraUI.click(page,'[data-mode=archive]'); await cameraUI.fill(page,'#uploader','김예봄');
     await page.waitForFunction(() => foldersReady);
-    await page.locator('#chooseFolder').click(); await page.locator('[data-folder-id=event-2026]').click();
-    await page.locator('#folderDialog').waitFor({ state: 'hidden' }); await page.locator('#useSettings').click(); await page.locator('#work').waitFor();
+    await cameraUI.click(page,'#chooseFolder'); await cameraUI.click(page,'[data-folder-id=event-2026]');
+    await page.locator('#folderDialog').waitFor({ state: 'hidden' }); await cameraUI.click(page,'#useSettings'); await page.locator('#work').waitFor();
 
     // 1. A large batch is handed to the browser, and closing the camera page does not stop it.
     await page.locator('#galleryInput').setInputFiles(files.slice(0, 20));
     await page.waitForFunction(() => selected.length === 20);
-    await page.locator('#send').click();
+    await cameraUI.click(page,'#send');
     await page.waitForFunction(() => backgroundActive, null, { timeout: 15000 });
     assert.match(await page.locator('#progress').textContent(), /접수 완료/);
     const atClose = preview.archive.records.size;
@@ -52,9 +53,9 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     // 2. Reopening the app finds nothing left to send and creates no duplicates.
     page = await context.newPage(); watch(page);
     await page.goto(preview.url + '/camera');
-    await page.locator('#continueResume').click(); await page.locator('#work').waitFor();
+    await cameraUI.click(page,'#continueResume'); await page.locator('#work').waitFor();
     if (await page.evaluate(() => selected.length)) {
-      if (!await page.evaluate(() => busy)) await page.locator('#send').click();
+      if (!await page.evaluate(() => busy)) await cameraUI.click(page,'#send');
       await page.waitForFunction(() => !busy && !selected.length, null, { timeout: 60000 });
     }
     assert.equal(preview.archive.records.size, 20);
@@ -63,7 +64,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     // 3. One unusable file does not stop the others; it is reported after the rest are accepted.
     await page.locator('#galleryInput').setInputFiles([...files.slice(20, 26), broken, ...files.slice(0, 5)]);
     await page.waitForFunction(() => selected.length === 12);
-    await page.locator('#send').click();
+    await cameraUI.click(page,'#send');
     await page.waitForFunction(() => !busy, null, { timeout: 90000 });
     assert.equal(preview.archive.records.size, 26, 'six new photos saved, five already uploaded photos skipped');
     assert.deepEqual(await page.evaluate(() => selected.map(r => r.file.name)), ['not-a-photo.png']);

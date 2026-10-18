@@ -753,6 +753,8 @@ const liveUploadLog = [];
 const { PhotoArchive } = require('./photo-archive');
 const { mountPhotoRoutes } = require('./photo-routes');
 const photoArchive = new PhotoArchive({ dataDir: DATA_DIR });
+const cameraDefaultEvent = new (require('./camera-default-event').CameraDefaultEvent)(photoArchive);
+cameraDefaultEvent.mount(app);
 photoArchive.start();
 // 찍힌 분에게 사진을 메일로 보내는 대기열 — SMTP_USER/SMTP_PASS 가 없으면 꺼져 있다.
 const { PhotoMail, normalizeEmail } = require('./photo-mail');
@@ -898,6 +900,7 @@ require('./camera-service').mountCameraService(app, {
   archive: photoArchive,
   auth: { check: checkLiveToken, sameOrigin: browserAuth.sameOrigin },
   getConfig: () => liveConfig,
+  getCurrentEvent: () => cameraDefaultEvent.get(),
   getSites: () => sites.map(s => ({ id: s.id, name: s.name, icon: s.icon || '📺',
     online: Array.from(clients.values()).some(c => c.approved && c.siteId === s.id && c.ws.readyState === WebSocket.OPEN) })),
   publish: (photo, media, site) => {
