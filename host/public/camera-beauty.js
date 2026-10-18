@@ -168,7 +168,7 @@ window.CameraBeauty = (() => {
   }
   function normalizeEffects(value = {}) {
     const effects={color:['warm','pastel','film','mono'].includes(value?.color)?value.color:'none',frame:['white','polaroid','confetti','film','event'].includes(value?.frame)?value.frame:'none'};
-    if(effects.frame==='event')effects.event={title:Array.from(String(value.event?.title??'함께한 오늘')).slice(0,32).join(''),date:/^\d{4}-\d{2}-\d{2}$/.test(value.event?.date)?value.event.date:''};
+    if(effects.frame==='event')effects.event={title:Array.from(String(value.event?.title??'함께한 오늘')).slice(0,32).join(''),date:/^\d{4}-\d{2}-\d{2}$/.test(value.event?.date)?value.event.date:'',...(/^[a-f0-9-]{36}$/.test(value.event?.templateId||'')?{templateId:value.event.templateId}:{})};
     const decorations=(Array.isArray(value?.decorations)?value.decorations:[]).slice(0,8).filter(item=>item&&['heart','star','speech','text'].includes(item.type)).map((item,index)=>({
       id:String(item.id||'item-'+index).slice(0,80),type:item.type,text:Array.from(String(item.text||'')).slice(0,24).join(''),
       x:Math.max(0.04,Math.min(0.96,Number.isFinite(item.x)?item.x:0.5)),y:Math.max(0.04,Math.min(0.96,Number.isFinite(item.y)?item.y:0.75)),
@@ -231,6 +231,7 @@ window.CameraBeauty = (() => {
       const footer=effects.frame==='polaroid'?border*3:effects.frame==='event'?Math.round(border*4.5):0;
       const framed=document.createElement('canvas');framed.width=canvas.width+border*2;framed.height=canvas.height+border*2+footer;
       const f=framed.getContext('2d');f.fillStyle=effects.frame==='polaroid'?'#fff8ec':effects.frame==='event'?'#f0f5ec':effects.frame==='confetti'?'#fff4e8':effects.frame==='film'?'#25322d':'#ffffff';f.fillRect(0,0,framed.width,framed.height);f.drawImage(canvas,border,border);
+      if(effects.frame==='event'&&effects.frameImage){f.drawImage(effects.frameImage,0,0,framed.width,framed.height);f.drawImage(canvas,border,border);f.fillStyle='#f0f5eceb';f.fillRect(border,border+canvas.height,canvas.width,footer);}
       if(effects.frame==='confetti'){
         const colors=['#d87579','#dda84c','#71a69b','#9b8abd'];
         for(let i=0;i<24;i++){

@@ -146,19 +146,19 @@ async function writeDraft() {
     // 교회폴더 저장은 수백 장을 고를 수 있어 기기에 복사해 두는 양을 제한한다. 넘는 사진은 화면이
     // 꺼지면 다시 골라야 하지만, 이미 접수한 사진은 서버가 알아보고 다시 올리지 않는다.
     let archiveBytes = 0;
-    for (const r of selected) if (r.kind !== 'video' && isArchiveEntry(r) && storedFiles.has(r.key)) archiveBytes += r.file.size + (r.beautyFile?.size || 0);
+    for (const r of selected) if (r.kind !== 'video' && isArchiveEntry(r) && storedFiles.has(r.key)) archiveBytes += r.file.size + (r.beautyFile?.size || 0) + (r.aiFile?.size || 0);
     for (const r of selected) {
       if (r.kind === 'video') continue;
-      const entryBytes = r.file.size + (r.beautyFile?.size || 0);
+      const entryBytes = r.file.size + (r.beautyFile?.size || 0) + (r.aiFile?.size || 0);
       const keep = storedFiles.has(r.key) || !isArchiveEntry(r) || archiveBytes + entryBytes <= DRAFT_BUDGET;
       if (keep && isArchiveEntry(r) && !storedFiles.has(r.key)) archiveBytes += entryBytes;
-      if (keep) { files.set(r.key, r.file); if (r.previewFile) files.set(r.key + ':p', r.previewFile); if (r.beautyFile) files.set(r.key + ':b', r.beautyFile); }
-      const { url, file, previewFile, beautyFile, ...lean } = r; entries.push(lean);
+      if (keep) { files.set(r.key, r.file); if (r.previewFile) files.set(r.key + ':p', r.previewFile); if (r.beautyFile) files.set(r.key + ':b', r.beautyFile); if(r.aiFile)files.set(r.key+':a',r.aiFile); }
+      const { url, file, previewFile, beautyFile, aiFile, ...lean } = r; entries.push(lean);
     }
     for (const p of originals) files.set(p.key, p.file);
     await new Promise((resolve, reject) => {
       const tx = db.transaction(['drafts', 'files'], 'readwrite'), store = tx.objectStore('files');
-      for (const [key, blob] of files) if (!storedFiles.has(key) || key.endsWith(':b')) store.put(blob, key);
+      for (const [key, blob] of files) if (!storedFiles.has(key) || key.endsWith(':b') || key.endsWith(':a')) store.put(blob, key);
       for (const key of storedFiles) if (!files.has(key)) store.delete(key);
       tx.objectStore('drafts').put({ version: 2, settings, entries, originals: originals.map(({ file, ...p }) => p), message: el('message').value, keepMessage: el('keepMessage').checked, shareBatch }, 'current');
       tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
@@ -180,7 +180,7 @@ async function readDraft() {
     const store = db.transaction('files').objectStore('files');
     storedFiles = new Set(await settle(store.getAllKeys()));
     const total = draft.entries.length;
-    for (const r of draft.entries) if (storedFiles.has(r.key)) { r.file = await settle(store.get(r.key)); if (storedFiles.has(r.key + ':p')) r.previewFile = await settle(store.get(r.key + ':p')); if (storedFiles.has(r.key + ':b')) r.beautyFile = await settle(store.get(r.key + ':b')); }
+    for (const r of draft.entries) if (storedFiles.has(r.key)) { r.file = await settle(store.get(r.key)); if (storedFiles.has(r.key + ':p')) r.previewFile = await settle(store.get(r.key + ':p')); if (storedFiles.has(r.key + ':b')) r.beautyFile = await settle(store.get(r.key + ':b')); if(storedFiles.has(r.key+':a'))r.aiFile=await settle(store.get(r.key+':a')); }
     for (const p of draft.originals) if (storedFiles.has(p.key)) p.file = await settle(store.get(p.key));
     draft.entries = draft.entries.filter(r => r.file); draft.originals = draft.originals.filter(p => p.file);
     draft.lost = total - draft.entries.length;
@@ -235,6 +235,37 @@ let beautyEntry = null, beautyPrepared = null, beautyLevel = 0, beautyEpoch = 0,
 let beautyRenderFrame = 0, beautyBase = null, beautyTab = 'skin', beautyEffects = { color: 'none', frame: 'none' };
 let beautyComposition = null, beautyCompositionKey = '', beautyAbort = null;
 let beautyFrameRenderTimer = null;
+let beautyAIFile = null, beautyAIKind = '';
+const aiEditor = new window.CameraAIEditor({
+  api,
+  async getBlob(url,signal){
+    const token=new URLSearchParams(location.search).get('t')||storage.get('token');
+    const controller=new AbortController(),abort=()=>controller.abort(),timer=setTimeout(abort,20000);
+    signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
+    try{const response=await fetch(url,{cache:'no-store',signal:controller.signal,headers:token?{'x-live-token':token}:{}});
+      if(!response.ok)throw new Error('AI 결과를 불러오지 못했습니다. 기존 사진은 유지됩니다.');
+      return await response.blob();
+    }finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
+  },
+  getInput:()=>window.CameraBeauty.exportPhoto(el('beautyOriginal'),beautyEntry.file),
+  async onResult(file,kind,isCurrent){await replaceBeautySource(file,kind,isCurrent);},
+  async onDiscard(){
+    if(!beautyEntry||beautyProcessing||aiEditor.busy)return;
+    const epoch=beautyEpoch;beautyProcessing=true;renderBeauty();
+    try{await replaceBeautySource(null,'',()=>epoch===beautyEpoch);el('aiState').textContent='AI 효과를 제거했습니다. 색감·프레임·꾸미기는 유지됩니다.';}
+    catch{if(epoch===beautyEpoch)el('aiState').textContent='사진을 준비하지 못했습니다. 다시 시도해 주세요.';}
+    finally{if(epoch===beautyEpoch){beautyProcessing=false;renderBeauty();}}
+  },
+  onFrame(id){if(!beautyEntry)return;beautyEffects.event ||= {title:'함께한 오늘',date:localDate(Date.now()).slice(0,10)};if(id)beautyEffects.event.templateId=id;else delete beautyEffects.event.templateId;beautyEffects.frame='event';beautyComparing=false;releaseBeautyComposition();},
+  onRefresh(){if(beautyEntry)renderBeauty();}
+});
+async function replaceBeautySource(file,kind,isCurrent){
+  const canvas=await window.CameraBeauty.decode(file||beautyEntry.file);
+  if(!isCurrent()){canvas.width=canvas.height=1;return;}
+  releaseBeautyComposition();if(beautyBase)beautyBase.width=beautyBase.height=1;
+  beautyPrepared=null;window.CameraBeauty.releaseDetector();beautyBase=canvas;
+  beautyAIFile=file;beautyAIKind=kind;beautyLevel=0;beautyComparing=false;
+}
 const decorationEditor = new window.CameraDecorationEditor({
   canvas:el('decorationOverlay'),
   onChange(items,baseNeeded){beautyEffects.decorations=items;beautyComparing=false;if(baseNeeded)scheduleBeautyRender();},
@@ -244,14 +275,14 @@ function releaseBeautyComposition() {
   if(beautyComposition)beautyComposition.width=beautyComposition.height=1;
   beautyComposition=null;beautyCompositionKey='';
 }
-function hasPhotoEffects() { return beautyLevel > 0 || beautyEffects.color !== 'none' || beautyEffects.frame !== 'none' || !!beautyEffects.decorations?.length; }
+function hasPhotoEffects() { return !!beautyAIFile || beautyLevel > 0 || beautyEffects.color !== 'none' || beautyEffects.frame !== 'none' || !!beautyEffects.decorations?.length; }
 function renderedBeauty() {
   const key=JSON.stringify([beautyLevel,beautyEffects.color,beautyEffects.frame,beautyEffects.frame==='event'?beautyEffects.event:null]);
   if(beautyComposition&&beautyCompositionKey===key)return beautyComposition;
   releaseBeautyComposition();
   const base = beautyPrepared ? window.CameraBeauty.paint(beautyPrepared, beautyLevel) : beautyBase;
   if(!base)return null;
-  beautyComposition=window.CameraBeauty.compose(base,{...beautyEffects,decorations:[]});beautyCompositionKey=key;
+  beautyComposition=window.CameraBeauty.compose(base,{...beautyEffects,decorations:[],frameImage:aiEditor.frameId===beautyEffects.event?.templateId?aiEditor.frameImage:null});beautyCompositionKey=key;
   return beautyComposition;
 }
 async function exportEditorPhoto() {
@@ -267,21 +298,22 @@ function scheduleBeautyRender() {
 }
 function renderBeauty() {
   cancelAnimationFrame(beautyRenderFrame); beautyRenderFrame = 0;
+  const locked=beautyProcessing||aiEditor.busy||aiEditor.loadingFrame;
   for (const tab of document.querySelectorAll('[data-photo-tab]')) {
     const active = tab.dataset.photoTab === beautyTab;
     tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1;
     el(tab.getAttribute('aria-controls')).hidden = !active;
   }
   for (const key of ['color', 'frame']) for (const button of document.querySelectorAll('[data-photo-' + key + ']')) {
-    button.setAttribute('aria-pressed', String(button.dataset[key === 'color' ? 'photoColor' : 'photoFrame'] === beautyEffects[key])); button.disabled = beautyProcessing;
+    button.setAttribute('aria-pressed', String(button.dataset[key === 'color' ? 'photoColor' : 'photoFrame'] === beautyEffects[key])); button.disabled = locked;
   }
   el('eventFrameFields').hidden=beautyEffects.frame!=='event';
   for(const [id,key] of [['frameEventTitle','title'],['frameEventDate','date']]){
-    el(id).disabled=beautyProcessing;
+    el(id).disabled=locked;
     if(document.activeElement!==el(id))el(id).value=beautyEffects.event?.[key]||'';
   }
-  el('applyBeauty').disabled = beautyProcessing || !beautyEntry || (hasPhotoEffects() && !beautyPrepared && !beautyBase);
-  el('beautyStrength').disabled = beautyProcessing || !beautyEntry;
+  el('applyBeauty').disabled = locked || !beautyEntry || (hasPhotoEffects() && !beautyPrepared && !beautyBase) || (beautyEffects.frame==='event'&&!!beautyEffects.event?.templateId&&aiEditor.frameId!==beautyEffects.event.templateId);
+  el('beautyStrength').disabled = locked || !beautyEntry;
   el('beautyStrength').value = beautyLevel;
   el('beautyStrength').setAttribute('aria-valuetext', beautyLevel ? '뽀샤시 ' + beautyLevel + '%' : '뽀샤시 없음');
   el('beautyStrengthValue').textContent = beautyLevel;
@@ -296,30 +328,36 @@ function renderBeauty() {
     if(preview.height!==canvas.height)preview.height=canvas.height;
     preview.getContext('2d').clearRect(0,0,preview.width,preview.height);preview.getContext('2d').drawImage(canvas, 0, 0);
   }
-  decorationEditor.refresh({visible:!!beautyEffects.decorations?.length&&!beautyComparing&&showCorrection,active:beautyTab==='decorate'&&!beautyProcessing&&!beautyComparing&&!!beautyBase,image:beautyComposition||beautyBase});
+  decorationEditor.refresh({visible:!!beautyEffects.decorations?.length&&!beautyComparing&&showCorrection,active:beautyTab==='decorate'&&!locked&&!beautyComparing&&!!beautyBase,image:beautyComposition||beautyBase});
+  aiEditor.refresh({locked:beautyProcessing,photoReady:!!beautyBase,applied:!!beautyAIFile});
 }
 function openBeauty(entry) {
   if (busy || entry.submission || entry.kind === 'video') return;
   beautyEpoch++; beautyEntry = entry; beautyPrepared = null; beautyLevel = 0; beautyProcessing = false; beautyComparing = false;
   releaseBeautyComposition();const epoch=beautyEpoch;
   beautyBase = null; beautyTab = 'skin';
+  beautyAIFile=entry.aiFile||null;beautyAIKind=entry.aiKind||'';
   const effects=window.CameraBeauty.normalizeEffects(entry.photoEffects);
   beautyEffects={...effects,event:effects.event||{title:(settings?.target?.eventName||settings?.target?.folderName||'').replace(/^\d{4}[-.]?\d{2}[-.]?\d{2}[\s_-]*/,'').slice(0,32)||'함께한 오늘',date:/^\d{4}-\d{2}-\d{2}/.test(entry.date||'')?entry.date.slice(0,10):localDate(Date.now()).slice(0,10)}};
   beautyEffects.decorations=decorationEditor.reset(effects.decorations);
   el('beautyState').textContent = '강도 0은 뽀샤시 없음 · 색감과 프레임을 함께 적용할 수 있습니다.';
   el('beautyDestination').textContent = mode === 'both' ? '꾸민 사진을 모니터에 표출하고, 원본은 교회폴더에 보관합니다.' : mode === 'archive' ? '효과를 적용하면 꾸민 사진을 교회폴더에 저장합니다.' : '꾸민 사진을 모니터에 표출합니다.';
   renderBeauty(); openDialog('beautyDialog');
+  aiEditor.open(beautyEffects.event?.templateId||'');
   loadBeautyBase().then(()=>{if(epoch===beautyEpoch&&entry.beautyLevel&&beautyBase)chooseBeauty(savedBeautyStrength(entry));});
 }
 async function loadBeautyBase() {
   if (beautyProcessing || !beautyEntry || beautyPrepared || beautyBase) return;
-  const epoch = beautyEpoch, file = beautyEntry.file;
+  const epoch = beautyEpoch, file = beautyAIFile||beautyEntry.file, originalFile=beautyEntry.file;
   beautyProcessing = true; el('beautyState').textContent = '사진을 준비하고 있습니다…'; renderBeauty();
   try {
     const canvas = await window.CameraBeauty.decode(file);
     if (epoch !== beautyEpoch){canvas.width=canvas.height=1;return;}
     beautyBase = canvas;
-    const original=el('beautyOriginal');original.width=canvas.width;original.height=canvas.height;original.getContext('2d').drawImage(canvas,0,0);
+    const originalCanvas=beautyAIFile?await window.CameraBeauty.decode(originalFile):canvas;
+    if(epoch!==beautyEpoch){if(originalCanvas!==canvas)originalCanvas.width=originalCanvas.height=1;return;}
+    const original=el('beautyOriginal');original.width=originalCanvas.width;original.height=originalCanvas.height;original.getContext('2d').drawImage(originalCanvas,0,0);
+    if(originalCanvas!==canvas)originalCanvas.width=originalCanvas.height=1;
     el('beautyState').textContent = '효과를 함께 고른 뒤 원본과 비교해 보세요.';
   } catch {
     if (epoch !== beautyEpoch) return;
@@ -328,7 +366,7 @@ async function loadBeautyBase() {
   } finally { if (epoch === beautyEpoch) { beautyProcessing = false; renderBeauty(); } }
 }
 async function chooseBeauty(level) {
-  if (!beautyEntry || beautyProcessing) return;
+  if (!beautyEntry || beautyProcessing || aiEditor.busy) return;
   level = Math.max(0, Math.min(100, Math.round((Number(level) || 0) / 5) * 5));
   const epoch = beautyEpoch, entry = beautyEntry;
   beautyComparing = false;
@@ -365,12 +403,12 @@ for (const tab of document.querySelectorAll('[data-photo-tab]')) {
   };
 }
 for (const key of ['color', 'frame']) for (const button of document.querySelectorAll('[data-photo-' + key + ']')) button.onclick = async () => {
-  if (beautyProcessing) return;
+  if (beautyProcessing || aiEditor.busy || aiEditor.loadingFrame) return;
   beautyEffects[key] = button.dataset[key === 'color' ? 'photoColor' : 'photoFrame']; beautyComparing = false;
   await loadBeautyBase(); scheduleBeautyRender();
 };
 for(const [id,key] of [['frameEventTitle','title'],['frameEventDate','date']])el(id).oninput=()=>{
-  if(beautyProcessing)return;
+  if(beautyProcessing||aiEditor.busy||aiEditor.loadingFrame)return;
   beautyEffects.event[key]=el(id).value;beautyComparing=false;
   clearTimeout(beautyFrameRenderTimer);beautyFrameRenderTimer=setTimeout(scheduleBeautyRender,150);
 };
@@ -380,6 +418,7 @@ el('compareBeauty').onclick = () => { beautyComparing = !beautyComparing; render
 el('beautyDialog').addEventListener('close', () => {
   cancelAnimationFrame(beautyRenderFrame); beautyRenderFrame = 0;
   clearTimeout(beautyFrameRenderTimer);decorationEditor.close();
+  aiEditor.close();beautyAIFile=null;beautyAIKind='';
   beautyAbort?.abort();beautyAbort=null;releaseBeautyComposition();
   if(beautyBase)beautyBase.width=beautyBase.height=1;
   beautyEpoch++; beautyEntry = null; beautyPrepared = null; beautyBase = null; beautyProcessing = false;
@@ -387,15 +426,16 @@ el('beautyDialog').addEventListener('close', () => {
   el('beautyCanvas').width = el('beautyCanvas').height = 1;
 });
 el('applyBeauty').onclick = async () => {
-  if (!beautyEntry || beautyProcessing || busy || beautyEntry.submission) return;
+  if (!beautyEntry || beautyProcessing || aiEditor.busy || aiEditor.loadingFrame || el('applyBeauty').disabled || busy || beautyEntry.submission) return;
   const entry = beautyEntry, epoch = beautyEpoch, level = beautyLevel;
   beautyProcessing = true; el('beautyState').textContent = '사진을 준비하고 있습니다…'; renderBeauty();
   try {
     const effects = window.CameraBeauty.normalizeEffects(beautyEffects);
-    const edited=level>0||effects.color!=='none'||effects.frame!=='none'||!!effects.decorations?.length;
+    const edited=!!beautyAIFile||level>0||effects.color!=='none'||effects.frame!=='none'||!!effects.decorations?.length;
     const file = edited ? await exportEditorPhoto() : null;
     if (epoch !== beautyEpoch || !selected.includes(entry)) return;
     URL.revokeObjectURL(entry.url); entry.beautyFile = file; entry.beautyLevel = level; entry.beautyScale = 100; entry.photoEffects = effects; delete entry.previewFile;
+    entry.aiFile=beautyAIFile;entry.aiKind=beautyAIKind;
     entry.url = URL.createObjectURL(file || entry.file); entry.error = '';
     await persistDraft(); renderReview(); closeDialog('beautyDialog');
   } catch { if (epoch === beautyEpoch) el('beautyState').textContent = '보정 사진을 준비하지 못했습니다. 다시 시도하거나 원본을 선택해 주세요.'; }
@@ -879,7 +919,7 @@ async function archiveRequestId(r, s) {
   const effects=window.CameraBeauty.normalizeEffects(r.photoEffects);
   const hasExtraEffects=effects.color!=='none'||effects.frame!=='none'||!!effects.decorations?.length;
   const recipe=effects.decorations?{...effects,decorations:effects.decorations.map(({id,...visual})=>visual)}:effects;
-  const text = JSON.stringify([r.kind || 'photo', r.file.name, r.file.size, r.file.lastModified, ...(r.beautyFile ? [r.beautyLevel, r.beautyFile.size, ...(hasExtraEffects ? [recipe] : [])] : []), s.target?.year, s.target?.folderName || s.target?.eventName, s.uploaderName, s.date]);
+  const text = JSON.stringify([r.kind || 'photo', r.file.name, r.file.size, r.file.lastModified, ...(r.beautyFile ? [r.beautyLevel, r.beautyFile.size, ...(hasExtraEffects ? [recipe] : []), ...(r.aiFile?[r.aiKind,r.aiFile.size,r.aiFile.lastModified]:[])] : []), s.target?.year, s.target?.folderName || s.target?.eventName, s.uploaderName, s.date]);
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return 'a-' + [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 48);
 }

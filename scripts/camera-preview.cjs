@@ -7,7 +7,7 @@ const { fixture } = require('../tests/helpers/camera-fixture');
 const { mountCameraService } = require('../host/camera-service');
 const { mountPhotoRoutes } = require('../host/photo-routes');
 const { PhotoMail } = require('../host/photo-mail');
-async function startPreview({ email = false } = {}) {
+async function startPreview({ email = false, ai = { env: {} } } = {}) {
   const cleanup = [];
   const f = fixture({ after: fn => cleanup.push(fn) });
   f.folder('year-2026', '2026', 'root'); f.folder('event-2026', '20260820목자컨퍼런스', 'year-2026');
@@ -26,7 +26,7 @@ async function startPreview({ email = false } = {}) {
     getConfig: () => config, getSites: () => [{ id: 'offline', name: '1F 로비', online: false }, { id: 'screen', name: '본당 로비', online: true }],
     publish: (photo, bytes) => { published.push({ photo, bytes }); return 1; },
     delivery: id => published.some(p => p.photo.id === id) ? [{ name: '본당 로비', online: true, status: 'displayed' }] : [],
-    cancel: id => { const i = published.findIndex(p => p.photo.id === id); if (i >= 0) published.splice(i, 1); }, mail });
+    cancel: id => { const i = published.findIndex(p => p.photo.id === id); if (i >= 0) published.splice(i, 1); }, mail, ai });
   mountPhotoRoutes(app, f.archive, () => {});
   app.use(express.static(path.resolve(__dirname, '../host/public')));
   await f.archive.initialize();

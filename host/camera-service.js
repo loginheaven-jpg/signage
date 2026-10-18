@@ -29,7 +29,7 @@ function parsePhotoDate(value) {
   return ts;
 }
 
-function mountCameraService(app, { archive, auth, getConfig, getSites, publish, delivery, cancel, mail }) {
+function mountCameraService(app, { archive, auth, getConfig, getSites, publish, delivery, cancel, mail, ai = {} }) {
   const folderCatalog = new CameraFolderCatalog(archive);
   const staging = path.join(archive.root, 'camera-staging');
   const receiptsDir = path.join(archive.root, 'camera-receipts');
@@ -75,6 +75,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
     if (req.cameraOwner !== id) res.cookie('camera_owner', req.cameraOwner + '.' + sign(req.cameraOwner), { httpOnly: true, secure: req.secure || /^https:/.test(process.env.PUBLIC_BASE_URL || ''), sameSite: 'strict', path: '/', maxAge: 365 * 24 * 3600000 });
     next();
   });
+  require('./camera-ai').mountCameraAI(app, { root: archive.root, ...ai });
   const safe = fn => (req, res) => Promise.resolve().then(() => fn(req, res)).catch(error => res.status(error.status || 503).json({ error: errorText(error) }));
   app.get('/live/api/camera/config', (req, res) => res.json({ rootId: archive.folderId, year: new Date(Date.now() + 9 * 3600000).getUTCFullYear(),
     archiveEnabled: getConfig().archiveEnabled !== false, liveEnabled: getConfig().enabled, ready: archive.ready,
