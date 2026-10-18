@@ -190,6 +190,17 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 .cue-table th { text-align: left; font-size: 11px; color: #777; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid #e2e5ea; white-space: nowrap; }
 .cue-table td { padding: 6px 8px; border-bottom: 1px solid #eef0f3; vertical-align: middle; white-space: nowrap; }
 .cue-table tr.off { opacity: 0.5; }
+.cue-table tr.selected { background: #edf4ff; }
+.cue-select { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.cue-select input { accent-color: #1a73e8; width: 16px; height: 16px; }
+.cue-bulk { padding: 8px; margin: 8px 0; background: #f6f7f9; border-radius: 8px; font-size: 12px; }
+.cue-bulk .btn { padding: 6px 9px; font-size: 12px; }
+.cue-copy-dialog { margin: auto; border: 0; border-radius: 12px; padding: 20px; width: min(680px, 92vw); max-height: 85dvh; color: #1a1a2e; box-shadow: 0 16px 60px #0004; }
+.cue-copy-dialog::backdrop { background: #10182880; }
+.cue-copy-dialog h3 { margin: 0 0 10px; }
+.cue-copy-preview { max-height: 40dvh; overflow: auto; margin: 14px 0; }
+.cue-copy-preview table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.cue-copy-preview td, .cue-copy-preview th { padding: 7px; text-align: left; border-bottom: 1px solid #e2e5ea; overflow-wrap: anywhere; }
 .cue-table td.num { color: #999; font-variant-numeric: tabular-nums; width: 28px; }
 .cue-table td.name { white-space: normal; min-width: 170px; width: 100%; }
 .cue-table input[type=number] { width: 58px; }
@@ -230,7 +241,7 @@ select.cue-pick { width: 74px; flex: none; padding: 3px 4px; font-size: 12px; co
 .cue-table.cards tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 0; border-bottom: 1px solid #e2e5ea; }
 .cue-table.cards td { border: 0; padding: 0; white-space: normal; }
 .cue-table.cards td.num { width: auto; font-weight: 600; }
-.cue-table.cards td.name { flex: 1 1 calc(100% - 40px); min-width: 0; width: auto; display: flex; align-items: center; gap: 6px; }
+.cue-table.cards td.name { flex: 1 1 calc(100% - 56px); min-width: 0; width: auto; display: flex; align-items: center; gap: 6px; }
 .cue-table.cards td.name .cue-file { flex: 1; min-width: 0; }
 .cue-table.cards td[data-label]::before { content: attr(data-label); font-size: 11px; color: #888; margin-right: 6px; }
 /* 함께 넘기기: A·B 파일을 첫 줄에 나란히 놓는다 */
@@ -241,7 +252,7 @@ select.cue-pick { width: 74px; flex: none; padding: 3px 4px; font-size: 12px; co
   .cue-table tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 0; border-bottom: 1px solid #e2e5ea; }
   .cue-table td { border: 0; padding: 0; white-space: normal; }
   .cue-table td.num { width: auto; font-weight: 600; }
-  .cue-table td.name { flex: 1 1 calc(100% - 40px); min-width: 0; width: auto; display: flex; align-items: center; gap: 6px; }
+  .cue-table td.name { flex: 1 1 calc(100% - 56px); min-width: 0; width: auto; display: flex; align-items: center; gap: 6px; }
   .cue-table td.name.second { flex-basis: 100%; }
   .cue-table.cards.pair td.name { flex: 1 1 calc(100% - 40px); }
   .cue-table.cards.pair td.name.second { flex-basis: 100%; }
@@ -504,7 +515,9 @@ select.cue-pick { width: 74px; flex: none; padding: 3px 4px; font-size: 12px; co
       <div class="panel">
         <div class="panel-header">
           <span class="panel-title">연결된 클라이언트</span>
+          <button type="button" class="btn btn-secondary" onclick="refreshConnections()">상태 새로고침</button>
         </div>
+        <div id="connectionNotice" role="status" style="font-size:12px;color:#a15c13;margin-bottom:8px" hidden></div>
         <div id="clientList" style="font-size:13px; color:#666;">로딩 중...</div>
       </div>
 
@@ -783,6 +796,7 @@ select.cue-pick { width: 74px; flex: none; padding: 3px 4px; font-size: 12px; co
   </div>
 </div>
 
+<dialog id="cueCopyDialog" class="cue-copy-dialog" aria-labelledby="cueCopyTitle" oncancel="cueCopyPlan = null"></dialog>
 <script>
 // ═══════════════════════════════════════════════════════════
 // 상태
@@ -790,6 +804,10 @@ select.cue-pick { width: 74px; flex: none; padding: 3px 4px; font-size: 12px; co
 let sitesData = [];
 let clientsData = [];
 let contentFiles = [];
+const connectionLoad = {
+  sites: { ready: false, error: false, pending: null },
+  clients: { ready: false, error: false, pending: null }
+};
 
 // ═══════════════════════════════════════════════════════════
 // WebSocket
@@ -862,19 +880,53 @@ function debouncedRefresh() {
 }
 
 async function refreshSites() {
-  const res = await fetch('/api/sites');
-  sitesData = await res.json();
-  renderSiteCards();
-  renderScheduleFilterTabs();
-  renderSitesList();
+  return refreshConnectionData('sites');
 }
 
 async function refreshClients() {
-  const res = await fetch('/api/clients');
-  clientsData = await res.json();
-  renderClientList();
-  renderClientAssignment();
+  return refreshConnectionData('clients');
 }
+
+function refreshConnections() { return Promise.all([refreshSites(), refreshClients()]); }
+
+function refreshConnectionData(kind) {
+  const state = connectionLoad[kind];
+  if (state.pending) return state.pending;
+  state.pending = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const res = await fetch('/api/' + kind, { signal: controller.signal, cache: 'no-store' });
+      if (!res.ok) throw new Error('Connection query failed');
+      const data = await res.json();
+      if (!Array.isArray(data)) throw new Error('Invalid connection list');
+      if (kind === 'sites') sitesData = data;
+      else clientsData = data;
+      state.ready = true; state.error = false;
+    } catch (e) { state.error = true; }
+    finally { clearTimeout(timeout); state.pending = null; }
+    // 두 조회의 도착 순서와 관계없이 사이트·클라이언트를 함께 다시 그린다.
+    renderClientList(); renderClientAssignment(); renderSiteCards();
+    if (kind === 'sites') { renderScheduleFilterTabs(); renderSitesList(); }
+  })();
+  return state.pending;
+}
+
+function connectionWaiting() {
+  return !connectionLoad.sites.ready || !connectionLoad.clients.ready;
+}
+function connectionMessage() {
+  return connectionLoad.sites.error || connectionLoad.clients.error
+    ? '연결 상태를 불러오지 못했습니다. 자동으로 다시 확인합니다. 상태 새로고침으로도 재시도할 수 있습니다.'
+    : '사이트와 클라이언트 연결 상태를 불러오는 중입니다...';
+}
+
+// 웹소켓 연결 전에도 조회하고, 알림 유실·절전 복귀 시 새로고침 없이 복구한다.
+setTimeout(refreshAll, 0);
+setInterval(() => { if (!document.hidden) refreshConnections(); }, 15000);
+window.addEventListener('online', refreshConnections);
+window.addEventListener('pageshow', refreshConnections);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshConnections(); });
 
 async function refreshContent() {
   const res = await fetch('/api/content');
@@ -908,6 +960,10 @@ setInterval(refreshGdriveStatus, 30000);
 // ═══════════════════════════════════════════════════════════
 function renderSiteCards() {
   const el = document.getElementById('siteCards');
+  if (!connectionLoad.sites.ready) {
+    el.innerHTML = `<div class="cc-empty" style="grid-column:1/-1">${connectionMessage()}</div>`;
+    return;
+  }
   // 모니터링 = 온라인(연결) 사이트만 표시
   const onlineSites = sitesData.filter(s => s.online || liveData?.sessions?.some(session => session.siteId === s.id));
   if (onlineSites.length === 0) {
@@ -988,6 +1044,14 @@ function siteOccupant(siteId, exceptId) {
 
 function renderClientList() {
   const el = document.getElementById('clientList');
+  const notice = document.getElementById('connectionNotice');
+  const failed = connectionLoad.sites.error || connectionLoad.clients.error;
+  notice.hidden = !failed || connectionWaiting();
+  notice.textContent = failed ? '연결 상태 갱신에 실패했습니다. 마지막으로 확인한 상태입니다. 자동으로 다시 확인합니다.' : '';
+  if (connectionWaiting()) {
+    el.innerHTML = `<div class="cc-empty">${connectionMessage()}</div>`;
+    return;
+  }
   const pending = clientsData.filter(c => !c.approved);
 
   let html = '';
@@ -1193,6 +1257,9 @@ async function rejectClient(clientId) {
 // ═══════════════════════════════════════════════════════════
 let sheetsData = { sheets: [], sites: {}, now: Date.now() };
 let cueSite = null, cueSheetId = null, cueDraft = null, cueDirty = false, cueCreating = null, cueSaveAs = false;
+const cueSelection = { rows: new Set(), a: new Set(), b: new Set() };
+let cueCopyPlan = null, cueCopyUndo = null;
+function cueClearSelection() { Object.values(cueSelection).forEach(selected => selected.clear()); }
 const CUE_COLORS = ['#4f7cc4', '#c2703d', '#6f9a52', '#8a66b8', '#b8556b', '#3f9aa0'];
 const CUE_TYPE = { sync: '함께 넘기기', separate: '따로 재생' };
 const CUE_DAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -1213,7 +1280,8 @@ async function refreshSchedule() {
 // passive: 서버 알림·자동 갱신으로 온 것. 입력 중이면 화면을 다시 그리지 않아 쓰던 값이 사라지지 않게 한다.
 function cueApply(data, passive) {
   sheetsData = data;
-  if (!cueDirty) cueDraft = null;
+  // 선택만 한 상태도 자동 갱신으로 잃지 않도록 같은 내용의 사본은 유지한다.
+  if (!cueDirty && JSON.stringify(cueDraft) !== JSON.stringify(data.sheets.find(s => s.id === cueSheetId))) cueDraft = null;
   renderSchedule(passive); renderSiteCards();
 }
 function renderScheduleFilterTabs() { renderSchedule(true); }
@@ -1240,7 +1308,7 @@ function renderSchedule(passive) {
   if (passive && focused && focused.closest && focused.closest('#cueEditor, #cueNewPanel') && /^(INPUT|SELECT)$/.test(focused.tagName)) return;
   const h = escapeHtml;
   if (!sitesData.length) {
-    tabs.innerHTML = '<span class="cue-hint">등록된 장소가 없습니다. 모니터 PC가 접속하면 대시보드에서 승인해 주세요.</span>';
+    tabs.innerHTML = `<span class="cue-hint">${!connectionLoad.sites.ready ? connectionMessage() : '등록된 장소가 없습니다. 모니터 PC가 접속하면 대시보드에서 승인해 주세요.'}</span>`;
     for (const id of ['cueNow', 'cueList', 'cueEditor']) document.getElementById(id).innerHTML = '';
     return;
   }
@@ -1248,8 +1316,8 @@ function renderSchedule(passive) {
   const site = sitesData.find(s => s.id === cueSite), sheets = cueSheets(), view = cueView(), dual = site.monitors >= 2;
   const saved = sheets.find(s => s.id === cueSheetId) || sheets.find(s => s.id === view.activeId) || sheets[0] || null;
   cueSheetId = saved ? saved.id : null;
-  if (saved && (!cueDraft || cueDraft.id !== saved.id)) { cueDraft = JSON.parse(JSON.stringify(saved)); cueDirty = false; }
-  if (!saved) cueDraft = null;
+  if (saved && (!cueDraft || cueDraft.id !== saved.id)) { cueDraft = JSON.parse(JSON.stringify(saved)); cueDirty = false; cueClearSelection(); }
+  if (!saved) { cueDraft = null; cueClearSelection(); }
   const live = sheets.find(s => s.id === view.activeId) || null;
 
   tabs.innerHTML = sitesData.map(s => `<button type="button" class="cue-tab ${s.id === cueSite ? 'active' : ''}" data-site="${h(s.id)}" onclick="cuePick('${h(s.id)}')">${h(s.name)}<small>모니터 ${s.monitors}대</small></button>`).join('');
@@ -1314,7 +1382,7 @@ function renderSchedule(passive) {
     ${r.kind === 'date' && !r.from && !r.to ? '<span class="cue-hint">시간을 비우면 하루 종일</span>' : ''}
     <button type="button" class="cue-link" onclick="cueRuleDel(${i})">삭제</button></div>`).join('');
   const body = d.type === 'sync'
-    ? `<div class="cue-scroll"><table class="cue-table cards pair" id="cueRows"><thead><tr><th></th><th>A 모니터</th><th>B 모니터</th><th>시간(초)</th><th>소리</th><th>전환</th><th>기간</th><th>사용</th><th></th></tr></thead><tbody>${d.rows.map((row, i) => cueSyncRow(row, i, d.rows.length)).join('')}</tbody></table></div>
+    ? `${cueBulkTools('rows')}<div class="cue-scroll"><table class="cue-table cards pair" id="cueRows"><thead><tr><th></th><th>A 모니터</th><th>B 모니터</th><th>시간(초)</th><th>소리</th><th>전환</th><th>기간</th><th>사용</th><th></th></tr></thead><tbody>${d.rows.map((row, i) => cueSyncRow(row, i, d.rows.length)).join('')}</tbody></table></div>
        <div class="cue-row cue-between"><button type="button" class="cue-link" id="cueAddRow" onclick="cueAdd('rows')">+ 줄 추가</button><p class="cue-hint">${dual ? '한 줄이 A·B에 동시에 나옵니다. B를 비운 줄에서는 B 화면이 검게 비워집니다.' : '모니터 1대에서는 한 줄의 A 다음에 B를 보여 줍니다.'} 시간 0은 그 줄의 영상이 끝날 때까지입니다.</p></div>`
     : dual
       ? `<div class="cue-ab">${cueListTable('a', 'A 모니터 목록', true)}${cueListTable('b', 'B 모니터 목록', true)}</div><p class="cue-hint">A와 B는 서로 기다리지 않고 각자 처음부터 끝까지 돈 뒤 반복합니다. 시간 0은 영상 길이만큼입니다.</p>`
@@ -1330,7 +1398,7 @@ function renderSchedule(passive) {
     <div class="cue-stack"><div class="cue-row cue-between"><h3 class="cue-h3">적용 시간</h3>${isDefault ? '<span class="cue-chip">기본 큐시트</span>' : '<button type="button" class="cue-link" id="cueMakeDefault" onclick="cueMakeDefault()">기본 큐시트로 지정</button>'}</div>
       ${isDefault ? `<p class="cue-hint">기본 큐시트는 다른 큐시트의 적용 시간이 아닐 때 항상 나갑니다.${d.rules.length ? '' : ' 따로 시간을 정할 필요가 없습니다.'}</p>` : ''}${rules}
       <div class="cue-row"><button type="button" class="cue-link" id="cueAddWeek" onclick="cueRuleAdd('week')">+ 요일 반복</button><button type="button" class="cue-link" id="cueAddDate" onclick="cueRuleAdd('date')">+ 특정 날짜</button></div></div>
-    <div class="cue-stack"><h3 class="cue-h3">항목</h3>${body}</div>
+    <div class="cue-stack"><h3 class="cue-h3">항목</h3>${body}${cueCanUndoCopy() ? '<div class="cue-row cue-bulk" role="status">B에 한 칸 밀어 복사했습니다. 저장하면 반영됩니다.<button type="button" class="cue-link" id="cueUndoCopy" onclick="cueUndoCopy()">복사 되돌리기</button></div>' : ''}</div>
     ${cueSaveAs ? `<div class="cue-rule"><label class="cue-field inline">새 이름<input id="cueSaveAsName" maxlength="40" value="${h(d.name)} 복사본"></label><button type="button" class="btn btn-primary" id="cueSaveAsDo" onclick="cueSaveAsDo()">이 이름으로 저장</button><button type="button" class="btn btn-secondary" onclick="cueSaveAs = false; renderSchedule()">취소</button>
       <p class="cue-hint" style="flex-basis:100%">지금 보이는 항목 그대로 새 큐시트를 만듭니다. 원래 큐시트(${h(saved.name)})는 바뀌지 않습니다. 적용 시간은 복사하지 않으니 새 큐시트에서 따로 정해 주세요.</p></div>` : ''}
     <div class="cue-savebar"><div class="cue-row">${isDefault && sheets.length > 1 ? '' : '<button type="button" class="cue-link" id="cueDelete" style="color:#c0392b" onclick="cueDelete()">큐시트 삭제</button>'}</div><div class="cue-row">
@@ -1359,7 +1427,7 @@ function cueSyncRow(row, index, count) {
   const aVideo = cueIsVideo(row.file1), bVideo = cueIsVideo(row.file2), hasVideo = aVideo || bVideo;
   const secs = aVideo ? (row.videoDuration === 'custom' ? row.duration : 0) : (row.duration || (bVideo ? 0 : 10));
   const sound = [aVideo ? ['left', 'A'] : null, bVideo ? ['right', 'B'] : null].filter(Boolean);
-  return `<tr class="${row.enabled === false ? 'off' : ''}"><td class="num">${index + 1}</td>
+  return `<tr class="${row.enabled === false ? 'off' : ''} ${cueSelection.rows.has(row) ? 'selected' : ''}"><td class="num">${cueSelectionCell('rows', index)}</td>
     <td class="name" data-label="A">${cueFileCell('rows', index, 'file1', row.file1, false)}</td><td class="name second" data-label="B">${cueFileCell('rows', index, 'file2', row.file2, true)}</td>
     <td data-label="시간(초)"><input type="number" aria-label="시간(초)" min="${hasVideo ? 0 : 1}" max="86400" value="${secs}" onchange="cueTime('rows', ${index}, this.value)">${hasVideo && !secs ? ' <span class="cue-chip">영상 끝까지</span>' : ''}</td>
     <td data-label="소리"><select aria-label="소리" ${sound.length ? '' : 'disabled title="이 줄에는 영상이 없습니다"'} onchange="cueSet('rows', ${index}, 'audio', this.value)"><option value="none">없음</option>${sound.map(([value, label]) => `<option value="${value}" ${row.audio === value ? 'selected' : ''}>${label}</option>`).join('')}</select></td>
@@ -1368,9 +1436,10 @@ function cueSyncRow(row, index, count) {
 function cueListTable(list, title, cards) {
   const items = cueDraft[list];
   return `<div><div class="cue-row cue-between"><h3 class="cue-h3">${title}</h3><button type="button" class="cue-link" data-add="${list}" onclick="cueAdd('${list}')">+ 항목</button></div>
+    ${cueBulkTools(list)}
     <div class="cue-scroll"><table class="cue-table ${cards ? 'cards' : ''}" data-list="${list}"><thead><tr><th></th><th>파일</th><th>시간(초)</th><th>소리</th><th>전환</th><th>기간</th><th>사용</th><th></th></tr></thead><tbody>${items.map((item, i) => {
       const video = cueIsVideo(item.file);
-      return `<tr class="${item.enabled === false ? 'off' : ''}"><td class="num">${i + 1}</td><td class="name">${cueFileCell(list, i, 'file', item.file, false)}</td>
+      return `<tr class="${item.enabled === false ? 'off' : ''} ${cueSelection[list].has(item) ? 'selected' : ''}"><td class="num">${cueSelectionCell(list, i)}</td><td class="name">${cueFileCell(list, i, 'file', item.file, false)}</td>
         <td data-label="시간(초)"><input type="number" aria-label="시간(초)" min="${video ? 0 : 1}" max="86400" value="${video ? item.duration : item.duration || 10}" onchange="cueTime('${list}', ${i}, this.value)">${video && !item.duration ? ' <span class="cue-chip">영상 길이</span>' : ''}</td>
         <td data-label="소리"><input type="checkbox" aria-label="소리" ${video ? (item.sound ? 'checked' : '') : 'disabled title="사진에는 소리가 없습니다"'} onchange="cueSet('${list}', ${i}, 'sound', this.checked)"></td>
         ${cueCommonCells(list, item, i, items.length)}</tr>`;
@@ -1378,6 +1447,102 @@ function cueListTable(list, title, cards) {
 }
 
 // ── 편집 동작 (모두 사본 cueDraft 를 바꾼다)
+function cueSelectionCell(list, index) {
+  return `<label class="cue-select"><input type="checkbox" aria-label="${index + 1}번 항목 선택" data-select="${list}" ${cueSelection[list].has(cueDraft[list][index]) ? 'checked' : ''} onchange="cueToggleSelection('${list}', ${index}, this.checked)"><span>${index + 1}</span></label>`;
+}
+function cueBulkTools(list) {
+  const items = cueDraft[list], count = items.filter(item => cueSelection[list].has(item)).length;
+  return `<div class="cue-row cue-bulk" data-bulk="${list}">
+    <label class="cue-select"><input type="checkbox" aria-label="전체 선택" ${items.length && count === items.length ? 'checked' : ''} ${items.length ? '' : 'disabled'} onchange="cueToggleAll('${list}', this.checked)">전체 선택</label>
+    <span aria-live="polite">${count}개 선택</span>
+    <button type="button" class="btn btn-secondary" data-move="top" ${count ? '' : 'disabled'} onclick="cueMoveSelected('${list}', 'top')">⇈ 맨 위로</button>
+    <button type="button" class="btn btn-secondary" data-move="bottom" ${count ? '' : 'disabled'} onclick="cueMoveSelected('${list}', 'bottom')">⇊ 맨 아래로</button>
+    ${cueCopyButton(list)}
+  </div>`;
+}
+function cueCopyButton(list) {
+  if (!['rows', 'a'].includes(list) || (sitesData.find(s => s.id === cueSite)?.monitors || 1) < 2) return '';
+  const chosen = cueDraft[list].filter(item => cueSelection[list].has(item)), items = chosen.length ? chosen : cueDraft[list];
+  const hasFile = items.some(item => list === 'rows' ? item.file1 : item.file);
+  return `<button type="button" class="btn btn-secondary" data-copy="${list}" ${hasFile ? '' : 'disabled'} onclick="cueOpenCopy('${list}')">A ${chosen.length ? '선택' : '전체'} → B 한 칸 밀어 복사</button>`;
+}
+const cueListsSnapshot = () => JSON.stringify({ rows: cueDraft.rows, a: cueDraft.a, b: cueDraft.b });
+function cueOpenCopy(list) {
+  const items = cueDraft[list], selected = items.filter(item => cueSelection[list].has(item));
+  const indices = items.map((item, index) => index).filter(index => (!selected.length || cueSelection[list].has(items[index])) && (list === 'rows' ? items[index].file1 : items[index].file));
+  if (!indices.length) return;
+  // 마지막 항목을 첫 칸으로 돌리고, 나머지는 원래 순서대로 한 칸씩 내린다.
+  const shifted = [indices.at(-1), ...indices.slice(0, -1)];
+  const copies = shifted.map(index => JSON.parse(JSON.stringify(items[index])));
+  cueCopyPlan = { draft: cueDraft, list, indices, copies, before: cueListsSnapshot() };
+  const sync = list === 'rows', h = escapeHtml;
+  const changes = indices.map((index, i) => ({ row: sync ? index + 1 : i + 1, old: sync ? items[index].file2 : cueDraft.b[i]?.file, file: sync ? copies[i].file1 : copies[i].file }));
+  if (!sync) for (let i = copies.length; i < cueDraft.b.length; i++) changes.push({ row: i + 1, old: cueDraft.b[i].file, file: '' });
+  const replaced = sync ? indices.filter(index => items[index].file2).length : cueDraft.b.length;
+  const dialog = document.getElementById('cueCopyDialog');
+  dialog.innerHTML = `<h3 id="cueCopyTitle">A → B 한 칸 밀어 복사</h3>
+    <p class="cue-hint">${indices.length}개를 한 칸씩 아래로 밀고 마지막 항목을 맨 위에 놓습니다. A 목록은 그대로 유지됩니다.</p>
+    <p class="cue-hint" style="margin-top:8px">${sync ? `선택한 줄의 B 칸만 바꿉니다. 기존 B 콘텐츠 ${replaced}개가 교체됩니다. 줄의 시간·기간·사용 설정은 유지됩니다.` : `기존 B 목록 ${replaced}개를 아래 ${copies.length}개로 바꿉니다. 항목의 시간·기간·소리·사용 설정도 복사합니다.`}</p>
+    <div class="cue-copy-preview"><table><thead><tr><th style="width:48px">줄</th><th>현재 B</th><th>복사 후 B</th></tr></thead><tbody>${changes.map(change => `<tr><td>${change.row}</td><td>${h(cueLabel(change.old) || '비어 있음')}</td><td>${h(cueLabel(change.file) || '목록에서 제외')}</td></tr>`).join('')}</tbody></table></div>
+    <p class="cue-hint">${sync ? 'A·B는 같은 줄을 함께 넘깁니다. B 영상의 소리는 해당 줄에서 직접 선택해 주세요.' : '따로 재생에서는 A·B의 재생 속도가 달라질 수 있습니다. 항상 다른 사진을 짝지으려면 함께 넘기기를 사용하세요.'}</p>
+    <div class="cue-row" style="justify-content:flex-end;margin-top:16px"><button type="button" class="btn btn-secondary" onclick="cueCloseCopy()">취소</button><button type="button" class="btn btn-primary" id="cueConfirmCopy" onclick="cueConfirmCopy()">${sync ? 'B 칸 바꾸기' : 'B 목록 바꾸기'}</button></div>`;
+  dialog.showModal();
+}
+function cueCloseCopy() { document.getElementById('cueCopyDialog').close(); cueCopyPlan = null; }
+function cueConfirmCopy() {
+  const plan = cueCopyPlan;
+  if (!plan || plan.draft !== cueDraft || plan.before !== cueListsSnapshot()) {
+    cueCloseCopy(); showToast('편집 내용이 바뀌었습니다. 복사 결과를 다시 확인해 주세요.'); return;
+  }
+  if (plan.list === 'rows') {
+    plan.indices.forEach((index, i) => {
+      const target = cueDraft.rows[index], source = plan.copies[i];
+      target.file2 = source.file1; target.file2Mime = source.file1Mime;
+      if (target.audio === 'right' && !cueIsVideo(target.file2)) target.audio = 'none';
+      if (!target.duration && !cueIsVideo(target.file1) && !cueIsVideo(target.file2)) target.duration = 10;
+    });
+  } else { cueDraft.b = plan.copies; cueSelection.b.clear(); }
+  cueCopyUndo = { draft: cueDraft, before: plan.before, after: cueListsSnapshot() };
+  cueCloseCopy(); cueDirty = true; renderSchedule();
+  showToast('B에 한 칸 밀어 복사했습니다. 저장하면 반영됩니다.');
+}
+function cueCanUndoCopy() { return cueCopyUndo?.draft === cueDraft && cueCopyUndo.after === cueListsSnapshot(); }
+function cueUndoCopy() {
+  if (!cueCanUndoCopy()) return;
+  Object.assign(cueDraft, JSON.parse(cueCopyUndo.before));
+  cueCopyUndo = null; cueClearSelection(); cueDirty = true; renderSchedule();
+  showToast('복사 전 목록으로 되돌렸습니다.');
+}
+function cueToggleSelection(list, index, checked) {
+  const item = cueDraft[list][index];
+  if (checked) cueSelection[list].add(item); else cueSelection[list].delete(item);
+  cueRenderSelection(list);
+}
+function cueToggleAll(list, checked) {
+  cueSelection[list].clear();
+  if (checked) cueDraft[list].forEach(item => cueSelection[list].add(item));
+  cueRenderSelection(list);
+}
+function cueRenderSelection(list) {
+  // 체크할 때마다 긴 파일 목록을 재생성하지 않고 체크·강조·도구만 갱신한다.
+  const tools = document.querySelector(`[data-bulk="${list}"]`), restoreFocus = tools.contains(document.activeElement);
+  tools.outerHTML = cueBulkTools(list);
+  const all = document.querySelector(`[data-bulk="${list}"] input`);
+  const count = cueDraft[list].filter(item => cueSelection[list].has(item)).length;
+  all.indeterminate = count > 0 && count < cueDraft[list].length;
+  if (restoreFocus) all.focus();
+  document.querySelectorAll(`[data-select="${list}"]`).forEach((checkbox, index) => {
+    checkbox.checked = cueSelection[list].has(cueDraft[list][index]);
+    checkbox.closest('tr').classList.toggle('selected', checkbox.checked);
+  });
+}
+function cueMoveSelected(list, edge) {
+  const items = cueDraft[list], selected = items.filter(item => cueSelection[list].has(item));
+  if (!selected.length) return;
+  const rest = items.filter(item => !cueSelection[list].has(item));
+  cueDraft[list] = edge === 'top' ? [...selected, ...rest] : [...rest, ...selected];
+  cueDirty = true; renderSchedule();
+}
 function cueSet(list, index, field, value, redraw) { cueDraft[list][index][field] = value; cueDirty = true; if (redraw) renderSchedule(); }
 function cueFile(list, index, field, value) {
   if (value === '__keep') return;
@@ -1419,7 +1584,7 @@ function cueMove(list, index, delta) {
   [items[index], items[target]] = [items[target], items[index]];
   cueDirty = true; renderSchedule();
 }
-function cueRemove(list, index) { cueDraft[list].splice(index, 1); cueDirty = true; renderSchedule(); }
+function cueRemove(list, index) { cueSelection[list].delete(cueDraft[list][index]); cueDraft[list].splice(index, 1); cueDirty = true; renderSchedule(); }
 function cueRuleAdd(kind) {
   const today = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
   cueDraft.rules.push(kind === 'week' ? { kind: 'week', days: [0], from: '09:00', to: '12:00' } : { kind: 'date', date: today, from: '', to: '' });
@@ -1640,6 +1805,7 @@ async function deleteSite(id) {
 // ═══════════════════════════════════════════════════════════
 function renderClientAssignment() {
   const el = document.getElementById('clientAssignment');
+  if (connectionWaiting()) { el.textContent = connectionMessage(); return; }
   if (clientsData.length === 0) {
     el.innerHTML = '<div style="color:#999;">연결된 클라이언트가 없습니다.</div>';
     return;

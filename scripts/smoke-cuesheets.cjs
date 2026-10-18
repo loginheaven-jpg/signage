@@ -36,8 +36,8 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   let logs = ''; server.stdout.on('data', b => { logs += b; }); server.stderr.on('data', b => { logs += b; });
   let browser, socket;
   try {
-    for (let i = 0; i < 80; i++) { if (await fetch(base + '/api/sheets').then(r => r.ok, () => false)) break; await sleep(100); }
-    assert.ok(fs.existsSync(path.join(root, 'schedule.before-sheets.json')), 'the old file is kept once');
+    for (let i = 0; i < 200; i++) { if (await fetch(base + '/api/sheets').then(r => r.ok, () => false)) break; if (server.exitCode !== null) break; await sleep(100); }
+    assert.ok(fs.existsSync(path.join(root, 'schedule.before-sheets.json')), 'the old file is kept once\n' + logs.slice(-3000));
 
     // A connected player for 로비 that records what it is told to play.
     const received = [];
@@ -52,7 +52,21 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     page.on('dialog', dialog => dialog.accept());
+    // The client response used to render an empty site list and stay there when sites arrived later.
+    let releaseSites;
+    const sitesGate = new Promise(resolve => { releaseSites = resolve; });
+    await page.route('**/api/sites', async route => {
+      const response = await route.fetch();
+      await sitesGate; await route.fulfill({ response });
+    });
     await page.goto(base + '/#schedule');
+    await page.waitForFunction(() => clientsData.length === 1);
+    const loadingText = await page.locator('#clientList').textContent();
+    releaseSites();
+    assert.doesNotMatch(loadingText, /등록된 사이트가 없습니다|새로 접속한 클라이언트가 없습니다/);
+    await page.locator('#clientList .cc-name', { hasText: '로비' }).waitFor({ state: 'attached' });
+    assert.match(await page.locator('#clientList').textContent(), /온라인/);
+    await page.unroute('**/api/sites');
     await page.locator('#cueList .cue-sheet').first().waitFor();
     const toast = async text => page.waitForFunction(t => document.getElementById('toast').textContent.includes(t), text);
 
@@ -140,6 +154,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await page.locator('.cue-type').count(), 0);
     await page.locator('#cueNewName').fill('식단'); await page.locator('#cueCreate').click(); await toast('큐시트를 만들었습니다');
     assert.equal(await page.locator('table[data-list]').count(), 1);
+    assert.equal(await page.locator('[data-copy]').count(), 0, 'a single monitor has no A to B action');
     await page.locator('[data-add=a]').click();
     await page.locator('table[data-list=a] select.cue-pick').selectOption(long);
     await page.locator('#cueSave').click(); await toast('저장하고 모니터에 적용했습니다');
@@ -152,12 +167,146 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await name.evaluate(el => el.scrollHeight <= el.clientHeight + 1), true, 'the long name is not cut off');
     assert.equal(await page.locator('.content').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, 'the page body does not scroll sideways');
 
+    // 9. Shift-copy previews before replacing B, can be cancelled or undone, and reaches the player after saving.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const syncRows = page.locator('#cueRows tbody tr');
+    const syncBefore = await page.evaluate(() => JSON.parse(JSON.stringify(cueDraft.rows)));
+    await page.locator('[data-copy=rows]').click();
+    await page.locator('#cueCopyDialog').waitFor();
+    assert.deepEqual(await page.locator('#cueCopyDialog tbody tr td:last-child').allTextContents(), ['notice.jpg', 'cover.jpg', long]);
+    await page.locator('#cueCopyDialog button', { hasText: '취소' }).click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.rows), syncBefore);
+    await syncRows.nth(0).locator('[data-select=rows]').check();
+    await syncRows.nth(2).locator('[data-select=rows]').check();
+    await page.locator('[data-copy=rows]').click();
+    await page.locator('#cueConfirmCopy').click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.rows.map(r => r.file2)), ['notice.jpg', '', 'cover.jpg']);
+    assert.equal(await page.evaluate(() => cueDraft.rows[2].audio), 'none', 'a copied photo cannot retain sound from the replaced B video');
+    await page.locator('#cueUndoCopy').click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.rows), syncBefore);
+    await page.locator('[data-copy=rows]').click();
+    await page.locator('#cueConfirmCopy').click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.rows.map(r => r.file2)), ['notice.jpg', 'cover.jpg', long]);
+    assert.deepEqual(await page.evaluate(() => cueDraft.rows.map(r => r.file1)), syncBefore.map(r => r.file1));
+    await page.locator('#cueSave').click(); await toast('저장');
+    await page.reload();
+    await page.locator('#cueList .cue-sheet', { hasText: '기본' }).click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.rows.map(r => r.file2)), ['notice.jpg', 'cover.jpg', long]);
+    await page.locator('#cuePin').click(); await toast('전환했습니다');
+    const copied = await latest(s => s.name === '기본' && s.entries[0]?.filename2 === 'notice.jpg');
+    assert.deepEqual(copied.entries.map(r => r.filename2), ['notice.jpg', 'cover.jpg', long]);
+    await page.locator('#cueUnpin').click(); await latest(s => s.name === '주일용');
+
+    // 10. A multi-selection keeps relative order, survives passive refresh, and follows moved/deleted rows.
+    await syncRows.nth(0).locator('[data-select=rows]').check();
+    await syncRows.nth(2).locator('[data-select=rows]').check();
+    await page.evaluate(() => refreshSchedule());
+    assert.equal(await page.locator('[data-select=rows]:checked').count(), 2);
+    await page.locator('[data-bulk=rows] [data-move=top]').click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.rows.map(r => r.file1)), ['cover.jpg', 'notice.jpg', long]);
+    await page.locator('[data-bulk=rows] [data-move=bottom]').click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.rows.map(r => r.file1)), [long, 'cover.jpg', 'notice.jpg']);
+    assert.equal(await page.locator('[data-select=rows]:checked').count(), 2);
+    await syncRows.nth(1).locator('[aria-label=위로]').click();
+    assert.equal(await syncRows.nth(0).locator('[data-select=rows]').isChecked(), true);
+    await syncRows.nth(0).locator('[aria-label=삭제]').click();
+    assert.equal(await page.locator('[data-select=rows]:checked').count(), 1);
+    await page.locator('[data-bulk=rows] [aria-label="전체 선택"]').check();
+    assert.equal(await page.locator('[data-select=rows]:checked').count(), 2);
+    await page.locator('[data-bulk=rows] [aria-label="전체 선택"]').uncheck();
+    assert.equal(await page.locator('[data-bulk=rows] [data-move=top]').isDisabled(), true);
+    // Unsaved changes are discarded on switching; list selections are isolated per sheet.
+    await page.locator('#cueList .cue-sheet', { hasText: '주일용' }).click();
+    assert.equal(await page.locator('[data-select]:checked').count(), 0);
+    await page.locator('table[data-list=a] tbody tr').nth(1).locator('[data-select=a]').check();
+    await page.locator('[data-bulk=a] [data-move=top]').click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.a.map(r => r.file)), [long, 'cover.jpg', 'notice.jpg']);
+    assert.equal(await page.locator('[data-bulk=b] [data-move=top]').isDisabled(), true);
+    await page.locator('[data-bulk=a] [data-move=bottom]').click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.a.map(r => r.file)), ['cover.jpg', 'notice.jpg', long]);
+    await page.locator('#cueSave').click(); await toast('저장');
+    await page.reload();
+    await page.locator('#cueList .cue-sheet', { hasText: '주일용' }).click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.a.map(r => r.file)), ['cover.jpg', 'notice.jpg', long]);
+
+    // Separate mode copies selected complete items, including video settings, without changing A.
+    const aRows = page.locator('table[data-list=a] tbody tr');
+    await aRows.nth(2).locator('select.cue-pick').selectOption('clip.mp4');
+    await aRows.nth(2).locator('[aria-label="시간(초)"]').fill('23');
+    await aRows.nth(2).locator('[aria-label="시간(초)"]').blur();
+    await aRows.nth(2).locator('[aria-label=소리]').check();
+    await aRows.nth(2).locator('[aria-label=시작일]').fill('2026-01-01');
+    await aRows.nth(2).locator('[aria-label=시작일]').blur();
+    await aRows.nth(0).locator('[data-select=a]').check();
+    await aRows.nth(2).locator('[data-select=a]').check();
+    const aBefore = await page.evaluate(() => JSON.parse(JSON.stringify(cueDraft.a)));
+    const bBefore = await page.evaluate(() => JSON.parse(JSON.stringify(cueDraft.b)));
+    await aRows.nth(0).locator('[data-select=a]').uncheck();
+    await page.locator('[data-copy=a]').click();
+    assert.deepEqual(await page.locator('#cueCopyDialog tbody tr td:last-child').allTextContents(), ['clip.mp4', '목록에서 제외'], 'preview includes B items that will be removed by a shorter copy');
+    await page.locator('#cueCopyDialog button', { hasText: '취소' }).click();
+    await aRows.nth(0).locator('[data-select=a]').check();
+    await page.locator('[data-copy=a]').click();
+    await page.locator('#cueConfirmCopy').click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.a), aBefore);
+    assert.deepEqual(await page.evaluate(() => cueDraft.b), [aBefore[2], aBefore[0]]);
+    await page.locator('#cueUndoCopy').click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.b), bBefore);
+    await page.locator('[data-copy=a]').click();
+    await page.setViewportSize({ width: 320, height: 568 });
+    assert.equal(await page.locator('#cueCopyDialog').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
+    assert.equal(await page.locator('#cueCopyDialog').evaluate(el => Math.abs(el.getBoundingClientRect().x + el.getBoundingClientRect().width / 2 - innerWidth / 2) < 2), true, 'the copy dialog is centered even with the global CSS reset');
+    if (process.env.CUESHEET_SHOT) await page.screenshot({ path: process.env.CUESHEET_SHOT.replace(/\.png$/, '-copy.png') });
+    await page.locator('#cueConfirmCopy').click();
+    assert.equal(await page.locator('.content').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
+    if (process.env.CUESHEET_SHOT) {
+      await page.evaluate(() => scrollTo(0, 0));
+      await page.screenshot({ path: process.env.CUESHEET_SHOT.replace(/\.png$/, '-selection.png'), fullPage: true });
+    }
+    await page.locator('#cueSave').click(); await toast('저장');
+    const copiedSeparate = await latest(s => s.name === '주일용' && s.entriesB[0]?.filename === 'clip.mp4' && s.entriesB[0]?.duration === 23);
+    assert.deepEqual(copiedSeparate.entriesB.map(r => r.filename), ['clip.mp4', 'cover.jpg', 'notice.jpg']);
+    assert.equal(copiedSeparate.entriesB[0].sound, 'left');
+    await page.reload();
+    await page.locator('#cueList .cue-sheet', { hasText: '주일용' }).click();
+    assert.deepEqual(await page.evaluate(() => cueDraft.b), [aBefore[2], aBefore[0], aBefore[1]]);
+
+    // 11. Without websocket access HTTP still loads; failures keep the last snapshot and can be retried.
+    const fallback = await browser.newPage();
+    fallback.on('pageerror', error => errors.push(error.message));
+    await fallback.routeWebSocket(/.*/, ws => ws.close({ code: 1013, reason: 'test unavailable' }));
+    let failSites = true, failClients = false;
+    await fallback.route('**/api/sites', route => failSites ? route.fulfill({ status: 503, json: { error: 'temporary' } }) : route.continue());
+    await fallback.route('**/api/clients', route => failClients ? route.fulfill({ status: 200, json: { error: 'bad response' } }) : route.continue());
+    await fallback.goto(base);
+    await fallback.locator('#clientList', { hasText: '불러오지 못했습니다' }).waitFor();
+    assert.doesNotMatch(await fallback.locator('#clientList').textContent(), /등록된 사이트가 없습니다/);
+    failSites = false;
+    await fallback.getByRole('button', { name: '상태 새로고침', exact: true }).click();
+    await fallback.locator('#clientList .cc-name', { hasText: '로비' }).waitFor();
+    failClients = true;
+    await fallback.getByRole('button', { name: '상태 새로고침', exact: true }).click();
+    await fallback.locator('#connectionNotice').waitFor();
+    assert.match(await fallback.locator('#clientList').textContent(), /로비.*온라인/s);
+    failClients = false;
+    await fallback.evaluate(() => window.dispatchEvent(new Event('online')));
+    await fallback.locator('#connectionNotice').waitFor({ state: 'hidden' });
+    // No notification reaches this page; periodic HTTP refresh recovers the player's disconnection.
+    socket.close();
+    await fallback.locator('#clientList .cc-card .pill', { hasText: '오프라인' }).waitFor({ timeout: 22000 });
+    await fallback.route('**/api/sites', route => route.fulfill({ json: [] }));
+    await fallback.route('**/api/clients', route => route.fulfill({ json: [] }));
+    await fallback.getByRole('button', { name: '상태 새로고침', exact: true }).click();
+    await fallback.locator('#clientList', { hasText: '등록된 사이트가 없습니다' }).waitFor();
+    assert.equal(await fallback.locator('#connectionNotice').isVisible(), false, 'a real empty response is different from a query failure');
+    await fallback.close();
+
     // The saved file keeps rows an older server can still read.
     const saved = JSON.parse(fs.readFileSync(path.join(root, 'schedule.json'), 'utf8'));
     assert.deepEqual(saved.sheets.map(s => [s.siteId, s.name, s.type]), [['lobby', '기본', 'sync'], ['lobby', '주일용', 'separate'], ['dining', '식단', 'separate']]);
     assert.equal(saved.entries.filter(e => e.siteId === 'lobby').length, 3);
     assert.deepEqual(errors, []);
-    console.log('Chromium cue sheets passed: old schedule kept as the default sheet, row waiting for a video on B, separate sheet with imported A/B lists, sound only for videos, timed and manual switching delivered to a player, save as, delete, one-monitor list, phone layout.');
+    console.log('Chromium cue sheets passed: migration, sync/separate playback, timing, pinning, save as, single monitor, selection and stable bulk moves, shift-copy preview/cancel/undo/save/reload/player delivery, 320px layout, delayed site loading, HTTP without websocket, failure retry and disconnected-client recovery.');
   } finally {
     socket?.terminate(); if (browser) await browser.close();
     const exited = new Promise(resolve => server.once('exit', resolve)); server.kill(); await exited;
