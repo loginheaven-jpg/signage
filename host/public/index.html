@@ -212,7 +212,21 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #f0f2f5; 
 .cue-fn { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
 .cue-fn.open { -webkit-line-clamp: unset; }
 .cue-empty { color: #999; font-style: italic; }
-select.cue-pick { width: 74px; flex: none; padding: 3px 4px; font-size: 12px; color: #1a73e8; }
+button.cue-pick { flex: none; padding: 4px 8px; font-size: 12px; }
+.cue-file-dialog { width: min(760px, 94vw); }
+.cue-file-dialog[open] { display: flex; flex-direction: column; gap: 12px; }
+.cue-file-dialog h3 { margin: 0; }
+.cue-file-dialog input[type=search] { width: 100%; padding: 10px; border: 1px solid #c8cdd5; border-radius: 6px; font: inherit; }
+.cue-file-results { overflow-y: auto; min-height: 0; max-height: 55dvh; }
+.cue-file-group h4 { margin: 12px 0 6px; font-size: 13px; color: #555; }
+.cue-file-option { display: flex; flex-direction: column; gap: 5px; width: 100%; padding: 10px; border: 0; border-bottom: 1px solid #e2e5ea; background: white; text-align: left; font: inherit; cursor: pointer; }
+.cue-file-option:hover { background: #f1f5fb; }
+.cue-file-option:focus-visible { outline: 2px solid #1a73e8; outline-offset: -2px; }
+.cue-file-option .filename { overflow-wrap: anywhere; color: #171717; }
+.cue-file-option.unused .filename { color: #125bc2; font-weight: 700; }
+.cue-file-option.same .filename { color: #6b7280; }
+.cue-file-option .usage { font-size: 12px; color: #666; overflow-wrap: anywhere; }
+.cue-file-current { overflow-wrap: anywhere; font-size: 13px; color: #555; }
 .cue-icon { border: 1px solid #dcdfe4; background: white; border-radius: 5px; width: 26px; height: 26px; padding: 0; cursor: pointer; font-size: 12px; color: #555; }
 .cue-icon:disabled { opacity: 0.35; cursor: default; }
 .cue-icon.danger { color: #c0392b; }
@@ -797,6 +811,7 @@ select.cue-pick { width: 74px; flex: none; padding: 3px 4px; font-size: 12px; co
 </div>
 
 <dialog id="cueCopyDialog" class="cue-copy-dialog" aria-labelledby="cueCopyTitle" oncancel="cueCopyPlan = null"></dialog>
+<dialog id="cueFileDialog" class="cue-copy-dialog cue-file-dialog" aria-labelledby="cueFileTitle" onclose="if (!this.open) cueFilePicker = null"></dialog>
 <script>
 // ═══════════════════════════════════════════════════════════
 // 상태
@@ -1259,6 +1274,8 @@ let sheetsData = { sheets: [], sites: {}, now: Date.now() };
 let cueSite = null, cueSheetId = null, cueDraft = null, cueDirty = false, cueCreating = null, cueSaveAs = false;
 const cueSelection = { rows: new Set(), a: new Set(), b: new Set() };
 let cueCopyPlan = null, cueCopyUndo = null;
+let cueFilePicker = null;
+const cueFilenameOrder = new Intl.Collator('ko', { numeric: true, sensitivity: 'base' });
 function cueClearSelection() { Object.values(cueSelection).forEach(selected => selected.clear()); }
 const CUE_COLORS = ['#4f7cc4', '#c2703d', '#6f9a52', '#8a66b8', '#b8556b', '#3f9aa0'];
 const CUE_TYPE = { sync: '함께 넘기기', separate: '따로 재생' };
@@ -1304,6 +1321,10 @@ function cueRuleText(sheet) {
 function renderSchedule(passive) {
   const tabs = document.getElementById('cueSites');
   if (!tabs) return;
+  if (cueFilePicker) {
+    if (cueFilePicker.draft !== cueDraft) cueCloseFilePicker();
+    else if (passive) return;
+  }
   const focused = document.activeElement;
   if (passive && focused && focused.closest && focused.closest('#cueEditor, #cueNewPanel') && /^(INPUT|SELECT)$/.test(focused.tagName)) return;
   const h = escapeHtml;
@@ -1409,12 +1430,79 @@ function renderSchedule(passive) {
 // 파일 칸: 종류 표시 + 이름(길면 두 줄, 누르면 전체) + 고르기
 function cueFileCell(list, index, field, name, optional) {
   const h = escapeHtml;
-  const options = contentFiles.map(f => `<option value="${h(f.filename)}">${h(f.originalName)}</option>`).join('');
-  const picker = `<select class="cue-pick" aria-label="파일 고르기" onchange="cueFile('${list}', ${index}, '${field}', this.value)"><option value="__keep">${name ? '바꾸기' : '파일 선택'}</option>${optional && name ? '<option value="">비우기</option>' : ''}${options}</select>`;
+  const picker = `<button type="button" class="btn btn-secondary cue-pick" id="cuePick-${list}-${index}-${field}" aria-haspopup="dialog" aria-label="${index + 1}행 ${list === 'b' || field === 'file2' ? 'B' : 'A'} 파일 고르기" onclick="cueOpenFilePicker('${list}', ${index}, '${field}', ${!!optional})">${name ? '바꾸기' : '파일 선택'}</button>`;
   const shown = name
     ? `<span class="cue-thumb ${cueIsVideo(name) ? 'video' : ''}">${cueIsVideo(name) ? '영상' : '사진'}</span><span class="cue-fn" title="${h(cueLabel(name))}" onclick="this.classList.toggle('open')">${h(cueLabel(name))}</span>${cueContent(name) ? '' : '<span class="cue-chip pin" title="콘텐츠 라이브러리에 이 파일이 없습니다">파일 없음</span>'}`
     : `<span class="cue-empty">${optional ? '비움 (검은 화면)' : '파일을 골라 주세요'}</span>`;
   return `<span class="cue-file">${shown}${picker}</span>`;
+}
+// 현재 칸만 빼고 편집 사본 전체를 집계한다. 꺼진 행과 기간이 지난 행도 등록에 포함한다.
+function cueFileUsage(list, index, field) {
+  const usage = new Map();
+  const add = (items, itemList, itemField, monitor) => items.forEach((item, i) => {
+    if (!item[itemField] || (list === itemList && index === i && field === itemField)) return;
+    const name = item[itemField];
+    if (!usage.has(name)) usage.set(name, { A: [], B: [] });
+    const state = [item.enabled === false ? '사용 꺼짐' : '', item.validFrom || item.validTo ? `기간 ${item.validFrom || '제한 없음'} ~ ${item.validTo || '제한 없음'}` : ''].filter(Boolean).join(' · ');
+    usage.get(name)[monitor].push(`${i + 1}행${state ? ' (' + state + ')' : ''}`);
+  });
+  if (cueDraft.type === 'sync') {
+    add(cueDraft.rows, 'rows', 'file1', 'A'); add(cueDraft.rows, 'rows', 'file2', 'B');
+  } else {
+    add(cueDraft.a, 'a', 'file', 'A');
+    if ((sitesData.find(s => s.id === cueSite)?.monitors || 1) >= 2) add(cueDraft.b, 'b', 'file', 'B');
+  }
+  return usage;
+}
+function cueUsageLabel(usage) {
+  return ['A', 'B'].filter(m => usage[m].length).map(m => `${m} ${usage[m].join(' · ')}`).join(' / ');
+}
+function cueOpenFilePicker(list, index, field, optional) {
+  const item = cueDraft[list][index], monitor = list === 'b' || field === 'file2' ? 'B' : 'A';
+  cueFilePicker = { draft: cueDraft, item, list, field, optional, monitor, trigger: `cuePick-${list}-${index}-${field}` };
+  const h = escapeHtml, dialog = document.getElementById('cueFileDialog');
+  dialog.innerHTML = `<div class="cue-row cue-between"><h3 id="cueFileTitle">${monitor} 모니터 · ${index + 1}행 파일 선택</h3><button type="button" class="btn btn-secondary" onclick="cueCloseFilePicker()">닫기</button></div>
+    <p class="cue-file-current">현재 선택: ${h(item[field] ? cueLabel(item[field]) : '없음')}</p>
+    <p class="cue-hint">미등록 → 반대 모니터만 등록 → 같은 모니터 등록 순서이며, 각 그룹은 파일명순입니다.</p>
+    <input type="search" id="cueFileSearch" aria-label="파일명 검색" placeholder="파일명 검색" oninput="cueRenderFileOptions(this.value)">
+    <div id="cueFileResults" class="cue-file-results"></div>
+    ${optional && item[field] ? '<div><button type="button" class="btn btn-secondary" onclick="cueChooseFile(\'\')">비우기 (검은 화면)</button></div>' : ''}`;
+  cueRenderFileOptions(''); dialog.showModal(); document.getElementById('cueFileSearch').focus();
+}
+function cueRenderFileOptions(query) {
+  const p = cueFilePicker;
+  if (!p || p.draft !== cueDraft) return;
+  const index = cueDraft[p.list].indexOf(p.item), usage = cueFileUsage(p.list, index, p.field);
+  const other = p.monitor === 'A' ? 'B' : 'A', h = escapeHtml;
+  const groups = [[], [], []], needle = query.trim().toLocaleLowerCase('ko');
+  contentFiles.filter(f => String(f.originalName || f.filename).toLocaleLowerCase('ko').includes(needle)).forEach(f => {
+    const used = usage.get(f.filename) || { A: [], B: [] };
+    groups[used[p.monitor].length ? 2 : used[other].length ? 1 : 0].push({ file: f, used });
+  });
+  const titles = ['미등록', `${other} 모니터에만 등록`, `${p.monitor} 모니터에 등록`];
+  document.getElementById('cueFileResults').innerHTML = groups.map((files, group) => {
+    if (!files.length) return '';
+    files.sort((a, b) => cueFilenameOrder.compare(a.file.originalName || a.file.filename, b.file.originalName || b.file.filename) || cueFilenameOrder.compare(a.file.filename, b.file.filename));
+    return `<section class="cue-file-group" data-group="${group + 1}"><h4>${h(titles[group])} (${files.length})</h4>${files.map(({ file, used }) => `<button type="button" class="cue-file-option ${['unused', 'other', 'same'][group]}" data-file="${h(file.filename)}" onclick="cueChooseFile(this.dataset.file)"><span class="filename">${h(file.originalName || file.filename)}</span><span class="usage">${h([cueUsageLabel(used) || '다른 칸에 등록되지 않음', p.item[p.field] === file.filename ? '현재 선택' : ''].filter(Boolean).join(' · '))}</span></button>`).join('')}</section>`;
+  }).join('') || '<p class="cue-hint">표시할 파일이 없습니다.</p>';
+}
+function cueCloseFilePicker() {
+  const trigger = cueFilePicker?.trigger;
+  cueFilePicker = null; document.getElementById('cueFileDialog').close();
+  if (trigger) document.getElementById(trigger)?.focus();
+}
+function cueChooseFile(value) {
+  const p = cueFilePicker;
+  if (!p) return;
+  const index = cueDraft === p.draft ? cueDraft[p.list].indexOf(p.item) : -1;
+  if (index < 0) { cueCloseFilePicker(); showToast('큐시트가 변경되었습니다. 파일 선택을 다시 열어 주세요.'); return; }
+  if (value === p.item[p.field]) { cueCloseFilePicker(); return; }
+  if ((!value && !p.optional) || (value && !cueContent(value))) { showToast('파일을 찾을 수 없습니다. 목록을 다시 확인해 주세요.'); return; }
+  const used = cueFileUsage(p.list, index, p.field).get(value);
+  if (used?.[p.monitor].length && !confirm(`${p.monitor} ${used[p.monitor].join(' · ')}에 이미 등록된 파일입니다. 중복 등록할까요?`)) return;
+  const trigger = p.trigger;
+  cueCloseFilePicker(); cueFile(p.list, index, p.field, value);
+  document.getElementById(trigger)?.focus();
 }
 function cueCommonCells(list, item, index, count) {
   const h = escapeHtml;

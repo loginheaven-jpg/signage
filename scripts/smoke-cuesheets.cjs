@@ -16,9 +16,10 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'signage-cuesheets-'));
   const uploads = path.join(root, 'uploads'); fs.mkdirSync(uploads);
   const long = '2026_추수감사주일_연합예배_안내포스터_최종수정본.jpg';
-  for (const name of ['cover.jpg', 'guide.jpg', 'notice.jpg', long]) await sharp({ create: { width: 64, height: 36, channels: 3, background: '#557' } }).jpeg().toFile(path.join(uploads, name));
+  const pickerFiles = ['a10.jpg', 'a2.jpg', 'b10.jpg', 'b2.jpg', 'c10.jpg', 'c2.jpg', "따옴표'&안내.jpg"];
+  for (const name of ['cover.jpg', 'guide.jpg', 'notice.jpg', long, ...pickerFiles]) await sharp({ create: { width: 64, height: 36, channels: 3, background: '#557' } }).jpeg().toFile(path.join(uploads, name));
   fs.writeFileSync(path.join(uploads, 'clip.mp4'), 'not played here');
-  const content = ['cover.jpg', 'guide.jpg', 'notice.jpg', long, 'clip.mp4'].map((name, i) => ({ id: 'c' + i, originalName: name, filename: name, size: 1, mimeType: name.endsWith('mp4') ? 'video/mp4' : 'image/jpeg', source: 'local', uploadedAt: new Date().toISOString() }));
+  const content = ['cover.jpg', 'guide.jpg', 'notice.jpg', long, 'clip.mp4', ...pickerFiles].map((name, i) => ({ id: 'c' + i, originalName: name, filename: name, size: 1, mimeType: name.endsWith('mp4') ? 'video/mp4' : 'image/jpeg', source: 'local', uploadedAt: new Date().toISOString() }));
   fs.writeFileSync(path.join(root, 'content.json'), JSON.stringify(content));
   fs.writeFileSync(path.join(root, 'sites.json'), JSON.stringify([{ id: 'lobby', name: '로비', icon: '', monitors: 2, description: '' }, { id: 'dining', name: '식당', icon: '', monitors: 1, description: '' }]));
   // The schedule as an older server wrote it.
@@ -51,7 +52,15 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors = []; page.on('pageerror', error => errors.push(error.message));
-    page.on('dialog', dialog => dialog.accept());
+    let rejectDuplicate = false;
+    const duplicatePrompts = [];
+    page.on('dialog', dialog => {
+      if (dialog.message().includes('중복 등록할까요')) {
+        duplicatePrompts.push(dialog.message());
+        if (rejectDuplicate) return dialog.dismiss();
+      }
+      return dialog.accept();
+    });
     // The client response used to render an empty site list and stay there when sites arrived later.
     let releaseSites;
     const sitesGate = new Promise(resolve => { releaseSites = resolve; });
@@ -69,6 +78,12 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     await page.unroute('**/api/sites');
     await page.locator('#cueList .cue-sheet').first().waitFor();
     const toast = async text => page.waitForFunction(t => document.getElementById('toast').textContent.includes(t), text);
+    const fileOption = name => page.locator('#cueFileResults button').filter({ has: page.locator('.filename', { hasText: name }) });
+    const chooseFile = async (button, name) => {
+      await button.click();
+      await fileOption(name).click();
+      await page.locator('#cueFileDialog').waitFor({ state: 'hidden' });
+    };
 
     // 1. The old schedule is the default sheet of 로비 and plays unchanged.
     assert.deepEqual(await page.locator('#cueSites .cue-tab').allTextContents(), ['로비모니터 2대', '식당모니터 1대']);
@@ -79,11 +94,66 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     // No video in a row: the sound choice is off.
     assert.equal(await page.locator('#cueRows tbody tr').first().locator('select[aria-label=소리]').isDisabled(), true);
 
+    // File choice uses the unsaved draft, excludes only this cell, and sorts every group by filename.
+    const pickerBefore = await page.evaluate(() => JSON.parse(JSON.stringify(cueDraft)));
+    await page.evaluate(() => {
+      const make = (file1, file2, extra = {}) => ({ ...cueDraft.rows[0], file1, file2, ...extra });
+      cueDraft.rows = [make('cover.jpg', 'b10.jpg'), make('c10.jpg', 'b2.jpg', { enabled: false, validTo: '2000-01-01' }), make('c2.jpg', 'c2.jpg')];
+      cueDirty = true; renderSchedule();
+    });
+    const firstPicker = page.locator('#cueRows tbody tr').first().locator('button.cue-pick').first();
+    await firstPicker.click();
+    const groupNames = group => page.locator(`#cueFileResults [data-group="${group}"] .filename`).allTextContents();
+    assert.deepEqual(await page.locator('.cue-file-group').evaluateAll(els => els.map(el => el.dataset.group)), ['1', '2', '3']);
+    assert.deepEqual((await groupNames(1)).filter(n => /^a\d/.test(n)), ['a2.jpg', 'a10.jpg']);
+    assert.deepEqual(await groupNames(2), ['b2.jpg', 'b10.jpg']);
+    assert.deepEqual(await groupNames(3), ['c2.jpg', 'c10.jpg']);
+    assert.equal(await fileOption('cover.jpg').evaluate(el => el.classList.contains('unused')), true);
+    assert.match(await fileOption('cover.jpg').textContent(), /현재 선택/);
+    assert.match(await fileOption('c2.jpg').textContent(), /A 3행.*B 3행/);
+    assert.match(await fileOption('c10.jpg').textContent(), /A 2행.*사용 꺼짐.*2000-01-01/);
+    assert.deepEqual(await page.locator('#cueFileResults').evaluate(el => [getComputedStyle(el.querySelector('.unused .filename')).color, getComputedStyle(el.querySelector('.unused .filename')).fontWeight, getComputedStyle(el.querySelector('.other .filename')).color, getComputedStyle(el.querySelector('.same .filename')).color]), ['rgb(18, 91, 194)', '700', 'rgb(23, 23, 23)', 'rgb(107, 114, 128)']);
+    await page.locator('#cueFileSearch').fill('a2');
+    assert.deepEqual(await page.locator('#cueFileResults .filename').allTextContents(), ['a2.jpg']);
+    await page.locator('#cueFileSearch').fill('찾을 수 없는 파일');
+    assert.match(await page.locator('#cueFileResults').textContent(), /표시할 파일이 없습니다/);
+    await page.locator('#cueFileSearch').fill('');
+    await page.evaluate(() => refreshSchedule());
+    assert.equal(await page.locator('#cueFileDialog').isVisible(), true, 'passive refresh preserves the open choice and unsaved draft');
+    await page.setViewportSize({ width: 320, height: 568 });
+    assert.equal(await page.locator('#cueFileDialog').evaluate(el => el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().left >= 0 && el.getBoundingClientRect().right <= innerWidth && el.getBoundingClientRect().bottom <= innerHeight), true, 'file dialog fits a small phone');
+    if (process.env.CUESHEET_SHOT) await page.screenshot({ path: process.env.CUESHEET_SHOT.replace(/\.png$/, '-files-mobile.png') });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    if (process.env.CUESHEET_SHOT) await page.screenshot({ path: process.env.CUESHEET_SHOT.replace(/\.png$/, '-files.png') });
+    rejectDuplicate = true;
+    await fileOption('c10.jpg').click();
+    assert.equal(await page.evaluate(() => cueDraft.rows[0].file1), 'cover.jpg', 'cancelling duplicate keeps the original');
+    assert.equal(await page.locator('#cueFileDialog').isVisible(), true);
+    rejectDuplicate = false;
+    await fileOption('c10.jpg').click();
+    await page.locator('#cueFileDialog').waitFor({ state: 'hidden' });
+    assert.equal(await page.evaluate(() => cueDraft.rows[0].file1), 'c10.jpg', 'intentional repeats are allowed');
+    const promptsBeforeOther = duplicatePrompts.length;
+    await chooseFile(firstPicker, 'b2.jpg');
+    assert.equal(duplicatePrompts.length, promptsBeforeOther, 'opposite monitor reuse needs no confirmation');
+    await chooseFile(firstPicker, "따옴표'&안내.jpg");
+    assert.equal(await page.evaluate(() => cueDraft.rows[0].file1), "따옴표'&안내.jpg", 'file names with quotes and ampersands remain selectable');
+    await firstPicker.click(); await page.keyboard.press('Escape');
+    await page.locator('#cueFileDialog').waitFor({ state: 'hidden' });
+    assert.equal(await firstPicker.evaluate(el => el === document.activeElement), true);
+    await page.evaluate(before => { cueDraft = before; cueDirty = false; renderSchedule(); }, pickerBefore);
+    await page.locator('#cueRows tbody tr').first().locator('button.cue-pick').nth(1).click();
+    assert.match(await page.locator('#cueFileTitle').textContent(), /B 모니터/);
+    assert.equal(await fileOption('cover.jpg').evaluate(el => el.classList.contains('other')), true, 'B choice reverses the monitor classification');
+    await page.getByRole('button', { name: '비우기 (검은 화면)', exact: true }).click();
+    assert.equal(await page.evaluate(() => cueDraft.rows[0].file2), '');
+    await page.evaluate(before => { cueDraft = before; cueDirty = false; renderSchedule(); }, pickerBefore);
+
     // 2. Add a row whose B side is a video and let the row last until it ends (time 0).
     await page.locator('#cueAddRow').click();
     const third = page.locator('#cueRows tbody tr').nth(2);
-    await third.locator('select.cue-pick').first().selectOption('notice.jpg');
-    await third.locator('select.cue-pick').nth(1).selectOption('clip.mp4');
+    await chooseFile(third.locator('button.cue-pick').first(), 'notice.jpg');
+    await chooseFile(third.locator('button.cue-pick').nth(1), 'clip.mp4');
     assert.deepEqual(await third.locator('select[aria-label=소리] option').allTextContents(), ['없음', 'B'], 'sound can only come from the side that is a video');
     await third.locator('input[aria-label="시간(초)"]').fill('0'); await third.locator('input[aria-label="시간(초)"]').blur();
     assert.match(await third.textContent(), /영상 끝까지/);
@@ -103,6 +173,15 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await page.locator('table[data-list=a] tbody tr').count(), 3);
     assert.equal(await page.locator('table[data-list=b] tbody tr').count(), 2);
     assert.equal(await page.locator('#cueLiveName').textContent(), '기본', 'a new sheet does not go on air by itself');
+    await page.locator('table[data-list=a] button.cue-pick').first().click();
+    assert.equal(await fileOption('guide.jpg').evaluate(el => el.classList.contains('other')), true);
+    assert.equal(await fileOption('notice.jpg').evaluate(el => el.classList.contains('same')), true);
+    assert.match(await fileOption('notice.jpg').textContent(), /A 3행/);
+    await page.keyboard.press('Escape');
+    await page.locator('table[data-list=b] button.cue-pick').first().click();
+    assert.equal(await fileOption('notice.jpg').evaluate(el => el.classList.contains('other')), true);
+    assert.equal(await fileOption('clip.mp4').evaluate(el => el.classList.contains('same')), true);
+    await page.keyboard.press('Escape');
     // Sound: only the video can be ticked.
     assert.equal(await page.locator('table[data-list=b] tbody tr').first().locator('input[aria-label^=소리]').isDisabled(), true);
     const clip = page.locator('table[data-list=b] tbody tr').nth(1);
@@ -156,7 +235,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await page.locator('table[data-list]').count(), 1);
     assert.equal(await page.locator('[data-copy]').count(), 0, 'a single monitor has no A to B action');
     await page.locator('[data-add=a]').click();
-    await page.locator('table[data-list=a] select.cue-pick').selectOption(long);
+    await chooseFile(page.locator('table[data-list=a] button.cue-pick'), long);
     await page.locator('#cueSave').click(); await toast('저장하고 모니터에 적용했습니다');
 
     // 8. Phone width: no sideways scrolling and the long file name is fully visible.
@@ -231,7 +310,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
     // Separate mode copies selected complete items, including video settings, without changing A.
     const aRows = page.locator('table[data-list=a] tbody tr');
-    await aRows.nth(2).locator('select.cue-pick').selectOption('clip.mp4');
+    await chooseFile(aRows.nth(2).locator('button.cue-pick'), 'clip.mp4');
     await aRows.nth(2).locator('[aria-label="시간(초)"]').fill('23');
     await aRows.nth(2).locator('[aria-label="시간(초)"]').blur();
     await aRows.nth(2).locator('[aria-label=소리]').check();
@@ -306,7 +385,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.deepEqual(saved.sheets.map(s => [s.siteId, s.name, s.type]), [['lobby', '기본', 'sync'], ['lobby', '주일용', 'separate'], ['dining', '식단', 'separate']]);
     assert.equal(saved.entries.filter(e => e.siteId === 'lobby').length, 3);
     assert.deepEqual(errors, []);
-    console.log('Chromium cue sheets passed: migration, sync/separate playback, timing, pinning, save as, single monitor, selection and stable bulk moves, shift-copy preview/cancel/undo/save/reload/player delivery, 320px layout, delayed site loading, HTTP without websocket, failure retry and disconnected-client recovery.');
+    console.log('Chromium cue sheets passed: grouped file choice with natural filename order, monitor usage and unsaved state, duplicate confirm/cancel, search, escaped filenames, keyboard and 320px dialog; migration, sync/separate playback, timing, pinning, save as, single monitor, selection and stable bulk moves, shift-copy preview/cancel/undo/save/reload/player delivery, delayed site loading, HTTP without websocket, failure retry and disconnected-client recovery.');
   } finally {
     socket?.terminate(); if (browser) await browser.close();
     const exited = new Promise(resolve => server.once('exit', resolve)); server.kill(); await exited;
