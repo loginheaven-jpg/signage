@@ -18,6 +18,7 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const GDriveSync = require('./gdrive-sync');
 const { CueSheets } = require('./cue-sheets');
+const { ContentLibrary, contentUsage } = require('./content-library');
 
 const app = express();
 const server = http.createServer(app);
@@ -46,6 +47,7 @@ if (!process.env.DATA_DIR) {
 // ─── 상태 관리 ───────────────────────────────────────────
 const clients = new Map(); // clientId -> { ws, name, monitors, siteId, lastSeen, scheduleVersion, currentPlaying }
 const contentFiles = []; // { id, originalName, filename, size, mimeType, source, uploadedAt }
+const contentLibrary = new ContentLibrary({ dataDir: DATA_DIR, uploadsDir: UPLOADS_DIR });
 
 // 로컬 업로드 콘텐츠 목록 영속화 (드라이브 콘텐츠는 동기화로 재생성되므로 제외)
 const CONTENT_FILE = path.join(DATA_DIR, 'content.json');
@@ -57,7 +59,7 @@ function loadLocalContent() {
       let restored = 0;
       saved.forEach(f => {
         // 파일이 실제로 남아있는 항목만 복원
-        if (f.source === 'local' && fs.existsSync(path.join(UPLOADS_DIR, f.filename))) {
+        if (f.source === 'local' && contentLibrary.visible(f) && fs.existsSync(path.join(UPLOADS_DIR, f.filename))) {
           contentFiles.push(f);
           restored++;
         }
@@ -79,6 +81,10 @@ function saveLocalContent() {
 }
 
 loadLocalContent();
+for (const file of contentLibrary.activeFiles()) {
+  const index = contentFiles.findIndex(f => f.id === file.id);
+  if (index >= 0) contentFiles[index] = file; else contentFiles.push(file);
+}
 
 // ─── 사이트 관리 ────────────────────────────────────────
 let sites = [];
@@ -152,16 +158,19 @@ const gdrive = new GDriveSync({
   folderId: process.env.GDRIVE_FOLDER_ID || '1NuQfKkX9nA_Dd8Fd75H9By5osyyQz4sm',
   downloadDir: UPLOADS_DIR,
   syncInterval: 3 * 60 * 1000,
+  isExcluded: id => contentLibrary.excludesDrive(id),
   onSyncComplete: (driveFiles) => {
     for (let i = contentFiles.length - 1; i >= 0; i--) {
-      if (contentFiles[i].source === 'gdrive') contentFiles.splice(i, 1);
+      if (contentFiles[i].source === 'gdrive' && !contentFiles[i].retainedLocal && !contentLibrary.isBusy(contentFiles[i].id)) contentFiles.splice(i, 1);
     }
     driveFiles.forEach(f => {
+      if (contentLibrary.excludesDrive(f.driveId)) return;
       contentFiles.push({
         id: f.driveId,
         originalName: f.originalName,
         filename: f.filename,
         mimeType: f.mimeType,
+        size: f.size,
         url: f.url,
         source: 'gdrive',
         uploadedAt: f.modifiedTime
@@ -571,18 +580,63 @@ app.get('/api/content', (req, res) => {
   res.json(contentFiles);
 });
 
-app.delete('/api/content/:id', (req, res) => {
-  const idx = contentFiles.findIndex(f => f.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Not found' });
-  const [removed] = contentFiles.splice(idx, 1);
-  if (removed.source === 'local') {
-    const filePath = path.join(UPLOADS_DIR, removed.filename);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    saveLocalContent();
+const contentLocations = filename => contentUsage(cue.sheets, sites, filename);
+const contentRoute = fn => async (req, res) => {
+  try { await fn(req, res); }
+  catch (error) {
+    console.error('[Content]', error.message);
+    res.status(error.status || 500).json({ error: error.publicMessage || '콘텐츠를 처리하지 못했습니다. 다시 시도해 주세요.', ...(error.locations ? { locations: error.locations } : {}) });
   }
-  broadcastToAdmins({ type: 'content_update' });
+};
+app.get('/api/content/:id/usage', contentRoute((req, res) => {
+  const file = contentFiles.find(f => f.id === req.params.id);
+  if (!file) return res.status(404).json({ error: '콘텐츠를 찾을 수 없습니다.' });
+  res.json({ locations: contentLocations(file.filename) });
+}));
+app.delete('/api/content/:id', contentRoute(async (req, res) => {
+  const file = contentFiles.find(f => f.id === req.params.id);
+  if (!file) {
+    if (contentLibrary.records.get(req.params.id)?.status === 'trash') return res.json({ success: true });
+    return res.status(404).json({ error: '콘텐츠를 찾을 수 없습니다.' });
+  }
+  await contentLibrary.trash(file, contentLocations);
+  const index = contentFiles.findIndex(f => f.id === file.id);
+  if (index >= 0) contentFiles.splice(index, 1);
+  saveLocalContent(); broadcastToAdmins({ type: 'content_update' });
   res.json({ success: true });
-});
+}));
+app.get('/api/content-trash', (req, res) => res.json(contentLibrary.list()));
+app.get('/api/content-trash/:id/preview', contentRoute((req, res) => {
+  const preview = contentLibrary.preview(req.params.id);
+  res.type(preview.mimeType || 'application/octet-stream'); res.set('Cache-Control', 'no-store');
+  res.sendFile(path.resolve(preview.path));
+}));
+// 항목마다 결과를 반환한다. 일부 실패를 전체 성공으로 표시하지 않고 남은 항목은 재시도할 수 있다.
+app.post('/api/content-trash/:action', contentRoute(async (req, res) => {
+  if (!['restore', 'delete'].includes(req.params.action)) return res.sendStatus(404);
+  if (!Array.isArray(req.body?.ids) || !req.body.ids.length || req.body.ids.length > 500 || req.body.ids.some(id => typeof id !== 'string' || id.length > 300)) return res.status(400).json({ error: '처리할 파일을 1~500개 선택해 주세요.' });
+  if (req.params.action === 'delete' && req.body.confirm !== true) return res.status(400).json({ error: '영구 삭제 확인이 필요합니다.' });
+  const results = [];
+  for (const id of new Set(req.body.ids)) {
+    try {
+      if (req.params.action === 'restore') {
+        const file = await contentLibrary.restore(id);
+        const index = contentFiles.findIndex(f => f.id === id);
+        if (index >= 0) contentFiles[index] = file; else contentFiles.push(file);
+      } else await contentLibrary.purge(id);
+      results.push({ id, success: true });
+    } catch (error) { results.push({ id, success: false, error: error.publicMessage || '처리하지 못했습니다. 다시 시도해 주세요.' }); }
+  }
+  saveLocalContent(); broadcastToAdmins({ type: 'content_update' });
+  res.json({ success: results.every(r => r.success), results });
+}));
+
+function assertContentAvailable(input, type) {
+  const names = type === 'sync' ? (input?.rows || []).flatMap(r => [r?.file1, r?.file2]) : [...(input?.a || []), ...(input?.b || [])].map(r => r?.file);
+  for (const name of names) if (name && contentLibrary.unavailable(String(name).replace(/[\\/\x00-\x1f]/g, '').slice(0, 300))) {
+    throw Object.assign(new Error('휴지통 콘텐츠 편성 차단'), { status: 409, publicMessage: '휴지통에 있거나 삭제된 파일이 포함되어 있습니다. 파일을 복원하거나 다른 파일을 골라 주세요.' });
+  }
+}
 
 // ─── 편성표 API (확장) ─────────────────────────────────
 
@@ -621,6 +675,7 @@ app.get('/api/sheets', (req, res) => res.json(sheetsView()));
 
 app.post('/api/sheets', sheetRoute((req, res) => {
   if (!sites.some(s => s.id === req.body?.siteId)) return res.status(404).json({ error: '장소를 찾을 수 없습니다.' });
+  assertContentAvailable(req.body, req.body?.type === 'separate' ? 'separate' : 'sync');
   const sheet = cue.create(req.body.siteId, req.body);
   console.log(`[Sheets] 새 큐시트: ${sheet.name} (${sheet.type}) → ${req.body.siteId}`);
   sheetsChanged(res, { id: sheet.id });
@@ -634,6 +689,7 @@ app.put('/api/sheets/state/:siteId', sheetRoute((req, res) => {
 }));
 
 app.put('/api/sheets/:id', sheetRoute((req, res) => {
+  assertContentAvailable(req.body, cue.sheets.find(s => s.id === req.params.id)?.type);
   const sheet = cue.update(req.params.id, req.body);
   console.log(`[Sheets] 저장: ${sheet.name}`);
   sheetsChanged(res, { id: sheet.id });

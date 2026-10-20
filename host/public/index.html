@@ -356,7 +356,22 @@ button.cue-pick { flex: none; padding: 4px 8px; font-size: 12px; }
   border: none; border-radius: 50%; cursor: pointer;
   font-size: 10px; display: none; align-items: center; justify-content: center;
 }
-.content-card:hover .delete-btn { display: flex; }
+.content-card .delete-btn { display: flex; width: 30px; height: 30px; font-size: 15px; }
+.content-card:focus-within { border-color: #1a73e8; }
+#page-content .panel-header, #page-content .panel-controls, #page-content-trash .panel-header { flex-wrap: wrap; gap: 10px; }
+.trash-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+.trash-toolbar input[type=search] { flex: 1 1 220px; min-width: 0; padding: 9px; border: 1px solid #ccd2da; border-radius: 6px; font: inherit; }
+.trash-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.trash-card { cursor: default; }
+.trash-card.selected { border-color: #1a73e8; background: #f2f7ff; }
+.trash-card .trash-select { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; font-size: 13px; overflow-wrap: anywhere; }
+.trash-card input[type=checkbox] { width: 17px; height: 17px; flex: none; accent-color: #1a73e8; }
+.trash-card .fname { font-size: 13px; }
+.trash-card .trash-meta { color: #666; font-size: 12px; margin: 8px 0; line-height: 1.6; }
+.content-notice { margin: 12px 0; padding: 12px; border-radius: 6px; background: #fff4e5; color: #633b08; font-size: 13px; white-space: pre-line; overflow-wrap: anywhere; }
+.content-notice:empty { display: none; }
+#contentUsageDialog .cue-copy-preview { max-height: 50dvh; }
+#toast button { margin-left: 12px; padding: 4px 8px; border: 1px solid #fff; border-radius: 4px; background: transparent; color: white; cursor: pointer; font: inherit; }
 
 /* ─── Upload Area ─── */
 .upload-area {
@@ -458,6 +473,9 @@ button.cue-pick { flex: none; padding: 4px 8px; font-size: 12px; }
   .cc-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 768px) {
+  .header { flex-wrap: wrap; gap: 10px; padding: 12px 20px; }
+  .header-right { flex-wrap: wrap; gap: 10px; }
+  .sync-status { white-space: nowrap; }
   .main { grid-template-columns: 1fr; }
   .sidebar { display: none; }
   .site-cards { grid-template-columns: 1fr; }
@@ -567,6 +585,7 @@ button.cue-pick { flex: none; padding: 4px 8px; font-size: 12px; }
           <div class="panel-controls">
             <button class="btn btn-success" onclick="manualSync()">☁️ 드라이브 동기화</button>
             <span id="contentCount" style="font-size:12px; color:#888; align-self:center;"></span>
+            <button type="button" class="btn btn-secondary" id="openContentTrash" onclick="navigateTo('content-trash')">🗑 휴지통</button>
           </div>
         </div>
 
@@ -578,6 +597,28 @@ button.cue-pick { flex: none; padding: 4px 8px; font-size: 12px; }
         <input type="file" id="fileInput" multiple accept="image/*,video/*" style="display:none">
 
         <div class="content-grid" id="contentGrid"></div>
+      </div>
+    </div>
+
+    <div class="page" id="page-content-trash">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="cue-row"><button type="button" class="btn btn-secondary" onclick="navigateTo('content')">← 콘텐츠 라이브러리</button><h2 class="panel-title">휴지통</h2></div>
+          <span id="trashSummary" class="cue-hint">불러오는 중...</span>
+        </div>
+        <p class="cue-hint">보관기한 없이 유지됩니다. 복원하면 다시 편성할 수 있습니다. 영구 삭제한 파일은 복원할 수 없으며, Drive 원본은 유지됩니다.</p>
+        <div class="trash-toolbar">
+          <input type="search" id="trashSearch" aria-label="휴지통 파일명 검색" placeholder="휴지통 파일명 검색" oninput="trashSelection.clear(); renderTrash()">
+          <button type="button" class="btn btn-secondary" onclick="refreshTrash()">새로고침</button>
+        </div>
+        <div class="trash-toolbar">
+          <label class="cue-select"><input type="checkbox" id="trashSelectAll" onchange="trashToggleAll(this.checked)">검색 결과 전체 선택</label>
+          <span id="trashSelectedCount" class="cue-hint">0개 선택</span>
+          <button type="button" class="btn btn-primary" id="trashRestoreSelected" onclick="trashAction('restore')" disabled>선택 복원</button>
+          <button type="button" class="btn btn-danger" id="trashDeleteSelected" onclick="trashAction('delete')" disabled>선택 영구 삭제</button>
+        </div>
+        <div id="trashNotice" class="content-notice" role="status"></div>
+        <div class="content-grid trash-grid" id="trashGrid"></div>
       </div>
     </div>
 
@@ -812,6 +853,7 @@ button.cue-pick { flex: none; padding: 4px 8px; font-size: 12px; }
 
 <dialog id="cueCopyDialog" class="cue-copy-dialog" aria-labelledby="cueCopyTitle" oncancel="cueCopyPlan = null"></dialog>
 <dialog id="cueFileDialog" class="cue-copy-dialog cue-file-dialog" aria-labelledby="cueFileTitle" onclose="if (!this.open) cueFilePicker = null"></dialog>
+<dialog id="contentUsageDialog" class="cue-copy-dialog" aria-labelledby="contentUsageTitle"></dialog>
 <script>
 // ═══════════════════════════════════════════════════════════
 // 상태
@@ -819,6 +861,9 @@ button.cue-pick { flex: none; padding: 4px 8px; font-size: 12px; }
 let sitesData = [];
 let clientsData = [];
 let contentFiles = [];
+let trashData = { items: [], count: 0, totalBytes: 0 }, trashReady = false, trashBusy = false;
+const trashSelection = new Set(), contentMoving = new Set();
+let contentRefreshSequence = 0, trashRefreshSequence = 0;
 const connectionLoad = {
   sites: { ready: false, error: false, pending: null },
   clients: { ready: false, error: false, pending: null }
@@ -863,9 +908,11 @@ function navigateTo(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const navItem = document.querySelector(`.sidebar-item[data-page="${page}"]`);
   if (navItem) navItem.classList.add('active');
+  if (page === 'content-trash') document.querySelector('.sidebar-item[data-page="content"]').classList.add('active');
   document.getElementById(`page-${page}`).classList.add('active');
   // 주소에 남겨 두어 새로고침·북마크·링크 공유가 되도록 한다 (예: /#live)
   try { if (location.hash !== '#' + page) history.replaceState(null, '', '#' + page); } catch (e) {}
+  if (page === 'content-trash') refreshTrash();
 }
 
 // URL 해시로 특정 페이지를 바로 열기 — /#live 로 라이브 송출 화면 직접 접근
@@ -944,10 +991,17 @@ window.addEventListener('pageshow', refreshConnections);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshConnections(); });
 
 async function refreshContent() {
-  const res = await fetch('/api/content');
-  contentFiles = await res.json();
-  renderContentGrid();
-  renderSchedule(true); // 파일 목록 갱신 (입력 중이면 건너뜀)
+  const sequence = ++contentRefreshSequence;
+  try {
+    const res = await fetch('/api/content');
+    if (!res.ok) throw new Error('콘텐츠 목록을 불러오지 못했습니다.');
+    const files = await res.json();
+    if (!Array.isArray(files)) throw new Error('콘텐츠 목록을 불러오지 못했습니다.');
+    if (sequence !== contentRefreshSequence) return;
+    contentFiles = files; renderContentGrid(); renderSchedule(true);
+    if (cueFilePicker) cueRenderFileOptions(document.getElementById('cueFileSearch')?.value || '');
+  } catch (error) { console.warn(error.message); }
+  await refreshTrash();
 }
 
 async function refreshGdriveStatus() {
@@ -1780,17 +1834,18 @@ function renderContentGrid() {
   }
 
   el.innerHTML = contentFiles.map(f => {
+    const h = escapeHtml;
     const isVideo = f.mimeType && f.mimeType.startsWith('video');
     const thumbContent = isVideo
       ? '<span style="font-size:28px">🎬</span>'
-      : `<img src="/uploads/${f.filename}" alt="${f.originalName}" loading="lazy">`;
+      : `<img src="/uploads/${encodeURIComponent(f.filename)}" alt="${h(f.originalName)}" loading="lazy">`;
     const sourceClass = f.source === 'gdrive' ? 'source-gdrive' : 'source-local';
-    const sourceLabel = f.source === 'gdrive' ? 'Drive' : 'Local';
+    const sourceLabel = f.source === 'gdrive' ? (f.retainedLocal ? 'Drive · 복원' : 'Drive') : 'Local';
     return `
-      <div class="content-card">
-        <button class="delete-btn" onclick="deleteContent('${f.id}', event)" title="삭제">✕</button>
+      <div class="content-card" data-content-id="${h(f.id)}">
+        <button type="button" class="delete-btn" data-id="${h(f.id)}" onclick="deleteContent(this.dataset.id, event)" title="휴지통으로 이동" aria-label="${h(f.originalName)} 휴지통으로 이동" ${contentMoving.has(f.id) ? 'disabled' : ''}>🗑</button>
         <div class="thumb">${thumbContent}</div>
-        <div class="fname">${f.originalName}</div>
+        <div class="fname">${h(f.originalName)}</div>
         <div class="fmeta">
           <span class="source-badge ${sourceClass}">${sourceLabel}</span>
           <span>${formatSize(f.size)}</span>
@@ -1801,11 +1856,114 @@ function renderContentGrid() {
 }
 
 async function deleteContent(id, event) {
-  event.stopPropagation();
-  if (!confirm('이 콘텐츠를 삭제하시겠습니까?')) return;
-  const res = await fetch(`/api/content/${id}`, { method: 'DELETE' });
-  const data = await res.json();
-  if (data.success) { showToast('삭제 완료'); refreshContent(); }
+  event?.stopPropagation();
+  if (contentMoving.has(id)) return;
+  const file = contentFiles.find(f => f.id === id);
+  if (!file) return;
+  contentMoving.add(id); renderContentGrid();
+  try {
+    const check = await fetch(`/api/content/${encodeURIComponent(id)}/usage`);
+    const usage = await check.json();
+    if (!check.ok) throw new Error(usage.error || '사용 위치를 확인하지 못했습니다.');
+    const locations = usage.locations || [];
+    // 이 브라우저에서 편집 중인 저장 전 파일도 먼저 해제하도록 안내한다.
+    if (cueDirty && cueDraft) {
+      const add = (items, field, monitor) => (items || []).forEach((item, i) => {
+        if (item[field] === file.filename && !locations.some(loc => loc.sheetId === cueDraft.id && loc.monitor === monitor && loc.row === i + 1)) locations.push({ siteId: cueDraft.siteId, siteName: sitesData.find(s => s.id === cueDraft.siteId)?.name || '', sheetId: cueDraft.id, sheetName: cueDraft.name, monitor, row: i + 1, unsaved: true });
+      });
+      if (cueDraft.type === 'sync') { add(cueDraft.rows, 'file1', 'A'); add(cueDraft.rows, 'file2', 'B'); }
+      else { add(cueDraft.a, 'file', 'A'); add(cueDraft.b, 'file', 'B'); }
+    }
+    if (locations.length) { showContentUsage(file, locations); return; }
+    const res = await fetch(`/api/content/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) {
+      if (data.locations?.length) { showContentUsage(file, data.locations); return; }
+      throw new Error(data.error || '휴지통으로 옮기지 못했습니다.');
+    }
+    await refreshContent();
+    showToast('휴지통으로 이동했습니다.', { label: '실행 취소', run: () => trashAction('restore', [id]) });
+  } catch (error) { showToast(error.message || '연결을 확인하고 다시 시도해 주세요.'); }
+  finally { contentMoving.delete(id); renderContentGrid(); }
+}
+
+function showContentUsage(file, locations) {
+  const h = escapeHtml, dialog = document.getElementById('contentUsageDialog');
+  dialog.innerHTML = `<h3 id="contentUsageTitle">큐시트에서 사용 중인 콘텐츠</h3><p class="cue-file-current">${h(file.originalName)}</p>
+    <p class="cue-hint">아래 큐시트에서 파일을 바꾸거나 항목을 삭제한 뒤 저장해 주세요. 사용 꺼짐·기간 종료 항목도 포함됩니다.</p>
+    <div class="cue-copy-preview"><table><thead><tr><th>장소 / 큐시트</th><th>위치</th><th></th></tr></thead><tbody>${locations.map(loc => `<tr><td>${h(loc.siteName)} / ${h(loc.sheetName)}${loc.unsaved ? ' (편집 중 · 저장 전)' : ''}</td><td>${h(loc.monitor)} ${loc.row}행${loc.enabled === false ? '<br><span class="cue-hint">사용 꺼짐</span>' : ''}${loc.validFrom || loc.validTo ? `<br><span class="cue-hint">${h(loc.validFrom || '제한 없음')} ~ ${h(loc.validTo || '제한 없음')}</span>` : ''}</td><td><button type="button" class="btn btn-secondary" data-site="${h(loc.siteId)}" data-sheet="${h(loc.sheetId)}" onclick="openContentUsage(this.dataset.site, this.dataset.sheet)">큐시트 열기</button></td></tr>`).join('')}</tbody></table></div>
+    <div class="cue-row" style="justify-content:flex-end"><button type="button" class="btn btn-secondary" onclick="document.getElementById('contentUsageDialog').close()">닫기</button></div>`;
+  dialog.showModal();
+}
+function openContentUsage(siteId, sheetId) {
+  if (cueSite !== siteId || cueSheetId !== sheetId) {
+    if (!cueLeave()) return;
+    cueSite = siteId; cueSheetId = sheetId; cueDraft = null; cueDirty = false; cueCreating = null;
+  }
+  document.getElementById('contentUsageDialog').close(); navigateTo('schedule'); renderSchedule();
+}
+async function refreshTrash() {
+  const sequence = ++trashRefreshSequence;
+  try {
+    const res = await fetch('/api/content-trash');
+    if (!res.ok) throw new Error('휴지통을 불러오지 못했습니다. 새로고침으로 다시 시도해 주세요.');
+    const data = await res.json();
+    if (!Array.isArray(data.items)) throw new Error('휴지통 응답을 확인하지 못했습니다.');
+    if (sequence !== trashRefreshSequence) return;
+    trashData = data; trashReady = true;
+    const notice = document.getElementById('trashNotice');
+    if (notice.dataset.loadError === 'true') { notice.textContent = ''; delete notice.dataset.loadError; }
+    for (const id of trashSelection) if (!data.items.some(item => item.id === id)) trashSelection.delete(id);
+    document.getElementById('openContentTrash').textContent = `🗑 휴지통 (${data.count})`;
+    renderTrash();
+  } catch (error) {
+    const notice = document.getElementById('trashNotice'); notice.textContent = error.message; notice.dataset.loadError = 'true';
+  }
+}
+function filteredTrash() {
+  const query = document.getElementById('trashSearch').value.trim().toLocaleLowerCase('ko');
+  return trashData.items.filter(item => String(item.originalName).toLocaleLowerCase('ko').includes(query));
+}
+function renderTrash() {
+  const h = escapeHtml, files = filteredTrash();
+  document.getElementById('trashSummary').textContent = trashReady ? `${trashData.count}개 · 보관 용량 ${formatSize(trashData.totalBytes) || '0 B'}` : '불러오는 중...';
+  document.getElementById('trashGrid').innerHTML = files.map(file => `<div class="content-card trash-card ${trashSelection.has(file.id) ? 'selected' : ''}" data-trash-id="${h(file.id)}">
+    <div class="thumb">${String(file.mimeType).startsWith('video') ? '🎬' : `<img src="${h(file.url)}" alt="${h(file.originalName)}" loading="lazy">`}</div>
+    <label class="trash-select"><input type="checkbox" data-trash-select="${h(file.id)}" ${trashSelection.has(file.id) ? 'checked' : ''} ${trashBusy ? 'disabled' : ''} onchange="trashToggle(this.dataset.trashSelect, this.checked)"><span class="fname">${h(file.originalName)}</span></label>
+    <div class="trash-meta">${file.source === 'gdrive' ? 'Drive' : 'Local'} · ${formatSize(file.size) || '0 B'}<br>이동일 ${h(new Date(file.trashedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }))}${file.deleting ? '<br>영구 삭제 처리 중 · 삭제 재시도 가능' : ''}</div>
+    <div class="cue-row"><button type="button" class="btn btn-secondary" data-id="${h(file.id)}" onclick="trashAction('restore', [this.dataset.id])" ${trashBusy || file.deleting ? 'disabled' : ''}>복원</button><button type="button" class="btn btn-danger" data-id="${h(file.id)}" onclick="trashAction('delete', [this.dataset.id])" ${trashBusy ? 'disabled' : ''}>영구 삭제</button></div></div>`).join('') || `<p class="cue-hint">${!trashReady ? '불러오는 중...' : trashData.items.length ? '검색 결과가 없습니다.' : '휴지통이 비어 있습니다.'}</p>`;
+  trashRenderSelection();
+}
+function trashRenderSelection() {
+  const files = filteredTrash(), chosen = files.filter(f => trashSelection.has(f.id)).length;
+  const all = document.getElementById('trashSelectAll');
+  all.checked = !!files.length && chosen === files.length; all.indeterminate = chosen > 0 && chosen < files.length; all.disabled = trashBusy || !files.length;
+  document.getElementById('trashSelectedCount').textContent = `${trashSelection.size}개 선택${trashBusy ? ' · 처리 중...' : ''}`;
+  for (const id of ['trashRestoreSelected', 'trashDeleteSelected']) document.getElementById(id).disabled = trashBusy || !trashSelection.size;
+  document.querySelectorAll('[data-trash-select]').forEach(input => { input.checked = trashSelection.has(input.dataset.trashSelect); input.closest('.trash-card').classList.toggle('selected', input.checked); });
+}
+function trashToggle(id, checked) { if (checked) trashSelection.add(id); else trashSelection.delete(id); trashRenderSelection(); }
+function trashToggleAll(checked) { for (const file of filteredTrash()) { if (checked) trashSelection.add(file.id); else trashSelection.delete(file.id); } trashRenderSelection(); }
+async function trashAction(action, ids = [...trashSelection]) {
+  if (trashBusy || !ids.length) return;
+  const files = new Map(trashData.items.map(f => [f.id, f]));
+  if (action === 'delete' && !confirm(`${ids.length}개 파일을 영구 삭제할까요?\n${ids.length === 1 ? (files.get(ids[0])?.originalName || '') + '\n' : ''}이 작업은 되돌릴 수 없습니다. Drive 원본은 삭제하지 않습니다.`)) return;
+  trashBusy = true; renderTrash(); document.getElementById('trashNotice').textContent = '';
+  try {
+    const results = [];
+    for (let i = 0; i < ids.length; i += 500) {
+      const res = await fetch(`/api/content-trash/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: ids.slice(i, i + 500), ...(action === 'delete' ? { confirm: true } : {}) }) });
+      const data = await res.json();
+      if (!res.ok || !Array.isArray(data.results)) throw new Error(data.error || '처리하지 못했습니다. 다시 시도해 주세요.');
+      results.push(...data.results);
+      for (const result of data.results) if (result.success) trashSelection.delete(result.id);
+    }
+    const failures = results.filter(r => !r.success), succeeded = results.length - failures.length;
+    await refreshContent();
+    document.getElementById('trashNotice').textContent = failures.map(r => `${files.get(r.id)?.originalName || '파일'}: ${r.error}`).join('\n');
+    showToast(`${succeeded}개 ${action === 'restore' ? '복원' : '영구 삭제'}${failures.length ? ` · ${failures.length}개 처리 실패` : ' 완료'}`);
+  } catch (error) { document.getElementById('trashNotice').textContent = error.message; showToast('처리 결과를 확인하고 다시 시도해 주세요.'); await refreshContent(); }
+  finally { trashBusy = false; renderTrash(); }
 }
 
 // Upload
@@ -2210,11 +2368,17 @@ function timeAgo(ts) {
   return `${Math.floor(sec / 86400)}일 전`;
 }
 
-function showToast(msg) {
+let toastTimer;
+function showToast(msg, action) {
   const t = document.getElementById('toast');
+  clearTimeout(toastTimer);
   t.textContent = msg;
+  if (action) {
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = action.label;
+    button.onclick = () => { t.classList.remove('show'); action.run(); }; t.appendChild(button);
+  }
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 3000);
+  toastTimer = setTimeout(() => t.classList.remove('show'), action ? 10000 : 3000);
 }
 </script>
 <script src="/admin-session.js"></script>

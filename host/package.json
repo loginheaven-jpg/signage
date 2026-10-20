@@ -1,6 +1,6 @@
 {
   "name": "digital-signage-host",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "description": "디지털 게시판 호스트 서버 (MVP)",
   "main": "server.js",
   "engines": {
@@ -14,7 +14,7 @@
     "test:camera-beauty": "node ../scripts/smoke-camera-beauty.cjs",
     "test:camera-decorate": "node ../scripts/smoke-camera-decorate.cjs",
     "test:camera-background": "node ../scripts/smoke-camera-background.cjs",
-    "test:admin-ui": "node ../scripts/smoke-cuesheets.cjs",
+    "test:admin-ui": "node ../scripts/smoke-cuesheets.cjs && node ../scripts/smoke-content-trash.cjs",
     "test:camera-ai": "node ../scripts/smoke-camera-ai.cjs",
     "test:camera-flow": "node ../scripts/smoke-camera-flow.cjs"
   },

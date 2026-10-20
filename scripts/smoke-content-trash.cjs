@@ -1,0 +1,100 @@
+const { chromium } = require('../host/node_modules/@playwright/test');
+const assert = require('node:assert/strict');
+const fixture = require('./helpers/content-fixture.cjs');
+
+(async () => {
+  const f = await fixture(); let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    let page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors = []; let acceptDelete = false, confirmations = 0;
+    const watch = p => {
+      p.on('pageerror', error => errors.push(error.message));
+      p.on('dialog', dialog => {
+        if (dialog.message().includes('영구 삭제할까요')) { confirmations++; return acceptDelete ? dialog.accept() : dialog.dismiss(); }
+        return dialog.accept();
+      });
+    }; watch(page);
+    const card = name => page.locator('#contentGrid .content-card').filter({ has: page.getByText(name, { exact: true }) });
+    const trashCard = name => page.locator('#trashGrid .trash-card').filter({ has: page.getByText(name, { exact: true }) });
+    const ready = () => page.waitForFunction(() => !trashBusy && trashReady);
+    const move = async name => { await card(name).getByRole('button').click(); await card(name).waitFor({ state: 'detached' }); };
+    await page.goto(f.base + '/#content');
+    await page.waitForFunction(() => contentFiles.length === 4 && trashReady);
+    assert.match(await page.locator('#openContentTrash').textContent(), /휴지통 \(1\)/);
+    assert.equal(await card("행사 <안내>&'최종.png").locator('.fname').textContent(), "행사 <안내>&'최종.png");
+
+    await card('used.png').getByRole('button').click();
+    await page.locator('#contentUsageDialog').waitFor();
+    assert.equal(await page.locator('#contentUsageDialog tbody tr').count(), 4);
+    assert.match(await page.locator('#contentUsageDialog').textContent(), /식당.*지난 행사/s);
+    await page.locator('#contentUsageDialog tbody tr').first().getByRole('button').click();
+    assert.equal(await page.locator('#page-schedule').evaluate(el => el.classList.contains('active')), true);
+    assert.match(await page.locator('#cueEditor').textContent(), /지난 행사 편집/);
+    await page.locator('[data-page=content]').click();
+
+    await move('unused.png');
+    await page.locator('#toast').getByRole('button', { name: '실행 취소' }).click();
+    await card('unused.png').waitFor(); await ready();
+    assert.equal((await f.api('/api/content')).data.filter(file => file.id === 'unused').length, 1);
+    assert.equal(confirmations, 0, 'reversible trash move never asks for permanent deletion approval');
+    await move('unused.png'); await move('second.png');
+    if (process.env.CONTENT_TRASH_SHOT) await page.screenshot({ path: process.env.CONTENT_TRASH_SHOT.replace(/\.png$/, '-library.png'), fullPage: true });
+    await page.locator('#openContentTrash').click();
+    await page.waitForFunction(() => trashData.count === 3 && !trashBusy);
+    assert.match(await page.locator('#trashSummary').textContent(), /3개 · 보관 용량/);
+    await page.locator('#trashSearch').fill('unused');
+    assert.equal(await page.locator('#trashGrid .trash-card').count(), 1);
+    await page.locator('#trashSelectAll').check();
+    assert.match(await page.locator('#trashSelectedCount').textContent(), /1개 선택/);
+    await page.locator('#trashSearch').fill('');
+    assert.match(await page.locator('#trashSelectedCount').textContent(), /0개 선택/, 'a changed filter clears hidden selections');
+    await trashCard('unused.png').locator('input').check();
+    await trashCard('second.png').locator('input').check();
+    await page.locator('#trashRestoreSelected').click();
+    await page.waitForFunction(() => !trashBusy && trashData.count === 1);
+    assert.match(await page.locator('#trashGrid').textContent(), /Drive 보관 사진/);
+
+    await page.getByRole('button', { name: '← 콘텐츠 라이브러리' }).click();
+    await move('unused.png'); await move('second.png'); await move("행사 <안내>&'최종.png");
+    await page.locator('#openContentTrash').click();
+    await page.waitForFunction(() => trashData.count === 4 && !trashBusy);
+    await page.locator('#trashSearch').fill('unused'); await page.locator('#trashSelectAll').check();
+    await page.locator('#trashDeleteSelected').click();
+    assert.equal(confirmations, 1); assert.equal((await f.api('/api/content-trash')).data.count, 4, 'cancelled permanent delete keeps the file');
+    acceptDelete = true; await page.locator('#trashDeleteSelected').click();
+    await page.waitForFunction(() => !trashBusy && trashData.count === 3);
+    await page.locator('#trashSearch').fill('');
+    assert.equal(await trashCard('unused.png').count(), 0);
+    await page.reload(); await page.waitForFunction(() => trashReady && trashData.count === 3);
+    assert.equal(await page.locator('#page-content-trash').evaluate(el => el.classList.contains('active')), true, 'trash is a bookmarkable separate screen');
+    if (process.env.CONTENT_TRASH_SHOT) await page.screenshot({ path: process.env.CONTENT_TRASH_SHOT, fullPage: true });
+    await page.setViewportSize({ width: 320, height: 760 });
+    assert.equal(await page.locator('.content').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, 'no horizontal scrolling on a small phone');
+    if (process.env.CONTENT_TRASH_SHOT) await page.screenshot({ path: process.env.CONTENT_TRASH_SHOT.replace(/\.png$/, '-mobile.png'), fullPage: true });
+    await trashCard('Drive 보관 사진.png').getByRole('button', { name: '복원', exact: true }).click();
+    await page.waitForFunction(() => !trashBusy && trashData.count === 2);
+    const restoredDrive = (await f.api('/api/content')).data.find(file => file.id === 'drive-1');
+    assert.equal(restoredDrive.filename, 'gdrive_drive-1_picture.png'); assert.equal(restoredDrive.retainedLocal, true);
+    await page.close(); await f.stop(); await f.start();
+    page = await browser.newPage({ viewport: { width: 1280, height: 900 } }); watch(page);
+    await page.goto(f.base + '/#content-trash'); await page.waitForFunction(() => trashReady && trashData.count === 2);
+    await trashCard("행사 <안내>&'최종.png").getByRole('button', { name: '복원', exact: true }).click();
+    await page.waitForFunction(() => !trashBusy && trashData.count === 1);
+    await page.locator('[data-page=schedule]').click();
+    await page.locator('#cueSites [data-site=lobby]').click();
+    await page.locator('#cueList [data-sheet=live]').click();
+    await page.locator('#cueAddRow').click();
+    await page.locator('#cueRows button.cue-pick').first().click();
+    assert.equal(await page.locator('#cueFileResults .filename', { hasText: 'unused.png' }).count(), 0);
+    assert.equal(await page.locator('#cueFileResults .filename', { hasText: 'second.png' }).count(), 0);
+    await page.locator('#cueFileResults button', { hasText: "행사 <안내>&'최종.png" }).click();
+    await page.locator('[data-page=content]').click();
+    await card("행사 <안내>&'최종.png").getByRole('button').click();
+    await page.locator('#contentUsageDialog').waitFor();
+    assert.match(await page.locator('#contentUsageDialog').textContent(), /편집 중 · 저장 전/);
+    assert.equal((await f.api('/api/content')).data.some(file => file.id === "quote-'id"), true);
+    assert.deepEqual(errors, []);
+    console.log('Chromium content trash passed: placement/count, all-sheet usage and navigation, undo, escaped names, search and selection, batch restore, cancel/confirm permanent deletion, reload, 320px layout, Drive snapshot restore without original, restart persistence, cue picker exclusion and unsaved draft protection.');
+  } finally { if (browser) await browser.close(); await f.cleanup(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });

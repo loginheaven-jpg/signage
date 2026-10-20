@@ -9,6 +9,8 @@
 const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
+const { pipeline } = require('node:stream/promises');
+const crypto = require('node:crypto');
 
 class GDriveSync {
   constructor(options = {}) {
@@ -21,6 +23,7 @@ class GDriveSync {
     this.lastSync = null;
     this.syncInProgress = false;
     this.onSyncComplete = options.onSyncComplete || null;
+    this.isExcluded = options.isExcluded || (() => false);
 
     // 동기화 상태 추적
     this.syncedFiles = new Map(); // driveFileId -> { name, localPath, mimeType, modifiedTime }
@@ -122,17 +125,16 @@ class GDriveSync {
     })`;
 
     try {
-      const response = await this.drive.files.list({
-        q: query,
-        fields: 'files(id, name, mimeType, modifiedTime, size)',
-        orderBy: 'name',
-        pageSize: 1000
-      });
-
-      return response.data.files || [];
+      const files = [];
+      let pageToken;
+      do {
+        const response = await this.drive.files.list({ q: query, fields: 'nextPageToken,files(id, name, mimeType, modifiedTime, size)', orderBy: 'name', pageSize: 1000, pageToken });
+        files.push(...(response.data.files || [])); pageToken = response.data.nextPageToken;
+      } while (pageToken);
+      return files;
     } catch (err) {
       console.error('[GDrive] 파일 목록 조회 실패:', err.message);
-      return [];
+      throw err; // 조회 실패를 빈 폴더로 취급해 기존 캐시를 삭제하지 않는다.
     }
   }
 
@@ -140,7 +142,10 @@ class GDriveSync {
    * 파일 다운로드
    */
   async downloadFile(fileId, fileName) {
-    const destPath = path.join(this.downloadDir, `gdrive_${fileId}_${fileName}`);
+    const safeId = String(fileId).replace(/[^\w-]/g, '');
+    const safeFileName = path.basename(String(fileName).replace(/\\/g, '/'));
+    const destPath = path.join(this.downloadDir, `gdrive_${safeId}_${safeFileName}`);
+    const tempPath = destPath + '.' + crypto.randomUUID() + '.part';
     
     try {
       const response = await this.drive.files.get(
@@ -148,23 +153,17 @@ class GDriveSync {
         { responseType: 'stream' }
       );
 
-      const writer = fs.createWriteStream(destPath);
-      
-      return new Promise((resolve, reject) => {
-        response.data
-          .on('end', () => {
-            console.log(`[GDrive] ✓ 다운로드 완료: ${fileName}`);
-            resolve(destPath);
-          })
-          .on('error', (err) => {
-            fs.unlinkSync(destPath);
-            reject(err);
-          })
-          .pipe(writer);
-      });
+      await pipeline(response.data, fs.createWriteStream(tempPath, { flags: 'wx' }));
+      // 다운로드 도중 휴지통 이동·영구 삭제·복원이 일어나도 파일을 다시 내놓지 않는다.
+      if (this.isExcluded(fileId)) return null;
+      fs.renameSync(tempPath, destPath);
+      console.log(`[GDrive] ✓ 다운로드 완료: ${fileName}`);
+      return destPath;
     } catch (err) {
       console.error(`[GDrive] 다운로드 실패 (${fileName}):`, err.message);
       throw err;
+    } finally {
+      try { fs.unlinkSync(tempPath); } catch (error) { if (error.code !== 'ENOENT') console.warn('[GDrive] 임시 파일 정리 실패:', error.message); }
     }
   }
 
@@ -190,16 +189,14 @@ class GDriveSync {
 
       // 1. 새 파일 또는 수정된 파일 다운로드
       for (const file of driveFiles) {
+        if (this.isExcluded(file.id)) continue;
         const existing = this.syncedFiles.get(file.id);
         
-        if (!existing || existing.modifiedTime !== file.modifiedTime) {
-          // 기존 파일이 수정된 경우 삭제 후 재다운로드
-          if (existing && fs.existsSync(existing.localPath)) {
-            fs.unlinkSync(existing.localPath);
-          }
-
+        if (!existing || existing.modifiedTime !== file.modifiedTime || !fs.existsSync(existing.localPath)) {
           try {
             const localPath = await this.downloadFile(file.id, file.name);
+            if (!localPath || this.isExcluded(file.id)) continue;
+            if (existing && existing.localPath !== localPath && fs.existsSync(existing.localPath)) fs.unlinkSync(existing.localPath);
             this.syncedFiles.set(file.id, {
               name: file.name,
               localPath,
@@ -216,6 +213,7 @@ class GDriveSync {
 
       // 2. 드라이브에서 삭제된 파일 로컬에서도 제거
       for (const [fileId, fileInfo] of this.syncedFiles) {
+        if (this.isExcluded(fileId)) continue;
         if (!driveFileIds.has(fileId)) {
           if (fs.existsSync(fileInfo.localPath)) {
             fs.unlinkSync(fileInfo.localPath);
@@ -250,6 +248,7 @@ class GDriveSync {
   getFileList() {
     const files = [];
     for (const [fileId, info] of this.syncedFiles) {
+      if (this.isExcluded(fileId)) continue;
       if (fs.existsSync(info.localPath)) {
         const filename = path.basename(info.localPath);
         files.push({
@@ -259,6 +258,7 @@ class GDriveSync {
           mimeType: info.mimeType,
           url: `/uploads/${filename}`,
           source: 'gdrive',
+          size: Number(info.size) || fs.statSync(info.localPath).size,
           modifiedTime: info.modifiedTime
         });
       }
