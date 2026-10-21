@@ -86,7 +86,7 @@ const { startPreview } = require('./camera-preview.cjs');
   await cameraUI.click(page,'#compareBeauty');assert.equal(await page.locator('#beautyCanvas').isVisible(),true);
   assert.equal(await page.evaluate(()=>beautyPrepared.pixels===window.savedPaintPixels),true,'painting reuses the pixel buffer');
   assert.equal(await page.locator('#beautyStrength').inputValue(),'35','comparison preserves the selected strength');
-  assert.equal(await page.evaluate(()=>window.beautyPrepareCalls),1,'comparison does not rerun detection');
+  assert.ok(await page.evaluate(()=>window.beautyPrepareCalls)<=1,'comparison reuses automatic preparation');
   await page.screenshot({path:require('node:path').join(__dirname,'../output/camera-beauty-mobile.png')});
   await page.evaluate(()=>{window.canvasesToRelease=[renderedBeauty(),beautyBase];window.editorAbortSignal=beautyAbort.signal;});
   await cameraUI.click(page,'#applyBeauty');await page.locator('#beautyDialog').waitFor({state:'hidden'});
@@ -124,7 +124,7 @@ const { startPreview } = require('./camera-preview.cjs');
   assert.deepEqual(fs.readFileSync(preview.archive.localPath(record)),face);
   // 얼굴이 없는 사진에서는 보정으로 위장하지 않고 원본으로 진행한다.
   await page.locator('#galleryInput').setInputFiles(preview.photo);await cameraUI.click(page,'.beautyEdit');
-  await setStrength(35);await page.waitForFunction(()=>!beautyProcessing);
+  await setStrength(35);await page.waitForFunction(()=>!beautyProcessing&&beautySkinJob?.stage==='error');
   assert.ok((await page.locator('#beautyState').textContent()).includes('얼굴을 찾지 못했습니다'));
   assert.equal(await page.locator('#applyBeauty').isEnabled(),true);
   await cameraUI.click(page,'#applyBeauty');await page.locator('#beautyDialog').waitFor({state:'hidden'});
@@ -167,7 +167,7 @@ const { startPreview } = require('./camera-preview.cjs');
   await page.waitForFunction(()=>document.querySelector('[data-photo-frame="polaroid"]').getAttribute('aria-pressed')==='true');
   const composition=await page.evaluate(async()=>({width:renderedBeauty().width,height:renderedBeauty().height,corner:Array.from(renderedBeauty().getContext('2d').getImageData(0,0,1,1).data),bytes:Array.from(new Uint8Array(await (await CameraBeauty.exportPhoto(renderedBeauty(),beautyEntry.file)).arrayBuffer()))}));
   assert.ok(composition.width>1200&&composition.height>900);assert.deepEqual(composition.corner,[255,248,236,255]);
-  assert.equal(await page.evaluate(()=>window.filterPrepareCalls),0,'color/frame do not require face detection');
+  assert.ok(await page.evaluate(()=>window.filterPrepareCalls)<=1,'color/frame changes do not repeat automatic skin preparation');
   for(const frame of ['confetti','film']){
     await cameraUI.click(page,'[data-photo-frame="'+frame+'"]');
     await page.waitForFunction(frame=>document.querySelector('[data-photo-frame="'+frame+'"]').getAttribute('aria-pressed')==='true',frame);

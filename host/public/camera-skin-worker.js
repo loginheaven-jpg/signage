@@ -2,6 +2,7 @@
 self.onmessage = async ({ data: { bitmap, stage, faces } }) => {
   let model;
   try {
+    self.postMessage({ progress: 'loading' });
     const { OVAL, connectedSkin, skinMasks, smoothSkin } = await import('./camera-skin-core.mjs');
     const { FaceLandmarker, ImageSegmenter, FilesetResolver } = await import('./vendor/mediapipe/vision_bundle.mjs');
     const vision = await FilesetResolver.forVisionTasks('/vendor/mediapipe/wasm');
@@ -11,6 +12,7 @@ self.onmessage = async ({ data: { bitmap, stage, faces } }) => {
         baseOptions: { modelAssetPath: '/vendor/mediapipe/face_landmarker.task', delegate: 'CPU' },
         runningMode: 'IMAGE', numFaces: 8, minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5
       });
+      self.postMessage({ progress: 'face' });
       const points = model.detect(bitmap).faceLandmarks;
       model.close(); model = null; bitmap.close();
       self.postMessage({ faces: points }); return;
@@ -24,6 +26,7 @@ self.onmessage = async ({ data: { bitmap, stage, faces } }) => {
     const labels = model.getLabels();
     if (labels[2] !== 'body-skin' || labels[3] !== 'face-skin') throw new Error('Unexpected skin model labels');
     const regions = [];
+    self.postMessage({ progress: 'skin' });
     for (const face of faces) {
       const xs = OVAL.map(i => face[i].x * w), ys = OVAL.map(i => face[i].y * h);
       const fw = Math.max(...xs) - Math.min(...xs), fh = Math.max(...ys) - Math.min(...ys);
@@ -47,6 +50,7 @@ self.onmessage = async ({ data: { bitmap, stage, faces } }) => {
       crop.width = crop.height = 1;
     }
     model.close(); model = null;
+    self.postMessage({ progress: 'finishing' });
     const canvas = new OffscreenCanvas(w, h), ctx = canvas.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(bitmap, 0, 0); bitmap.close();
     const source = ctx.getImageData(0, 0, w, h).data;

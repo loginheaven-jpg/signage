@@ -344,6 +344,15 @@ button.cue-pick { flex: none; padding: 4px 8px; font-size: 12px; }
   overflow: hidden;
 }
 .content-card .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.content-card button.thumb { width:100%; border:0; cursor:zoom-in; padding:0; }
+.content-card button.thumb:focus-visible { outline:3px solid #1a73e8; outline-offset:-3px; }
+.content-preview { margin:auto; padding:16px; width:min(1200px,96vw); max-height:94dvh; border:0; border-radius:12px; box-shadow:0 16px 60px #0005; }
+.content-preview::backdrop { background:#101828b0; }
+.content-preview header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; }
+.content-preview h2 { font-size:16px; overflow-wrap:anywhere; }
+.content-preview .preview-media { display:grid; place-items:center; background:#181b22; height:75dvh; border-radius:8px; overflow:hidden; }
+.content-preview img,.content-preview video { display:block; width:100%; height:100%; min-height:0; max-height:75dvh; object-fit:contain; }
+.content-preview [hidden] { display:none; }
 .content-card .fname { font-size: 11px; font-weight: 500; word-break: break-all; line-height: 1.3; }
 .content-card .fmeta { font-size: 10px; color: #999; margin-top: 3px; display: flex; justify-content: space-between; }
 .content-card .source-badge { font-size: 9px; padding: 1px 4px; border-radius: 3px; font-weight: 600; }
@@ -852,6 +861,7 @@ button.cue-pick { flex: none; padding: 4px 8px; font-size: 12px; }
 </div>
 
 <dialog id="cueCopyDialog" class="cue-copy-dialog" aria-labelledby="cueCopyTitle" oncancel="cueCopyPlan = null"></dialog>
+<dialog id="contentPreviewDialog" class="content-preview" aria-labelledby="contentPreviewName"><header><h2 id="contentPreviewName"></h2><button id="contentPreviewClose" type="button" class="btn btn-secondary">닫기</button></header><div class="preview-media"><img id="contentPreviewImage" alt="" hidden><video id="contentPreviewVideo" controls preload="metadata" playsinline hidden></video></div><p id="contentPreviewError" role="status" hidden>미리보기를 열지 못했습니다. 파일 상태를 확인해 주세요.</p></dialog>
 <dialog id="cueFileDialog" class="cue-copy-dialog cue-file-dialog" aria-labelledby="cueFileTitle" onclose="if (!this.open) cueFilePicker = null"></dialog>
 <dialog id="contentUsageDialog" class="cue-copy-dialog" aria-labelledby="contentUsageTitle"></dialog>
 <script>
@@ -1844,7 +1854,7 @@ function renderContentGrid() {
     return `
       <div class="content-card" data-content-id="${h(f.id)}">
         <button type="button" class="delete-btn" data-id="${h(f.id)}" onclick="deleteContent(this.dataset.id, event)" title="휴지통으로 이동" aria-label="${h(f.originalName)} 휴지통으로 이동" ${contentMoving.has(f.id) ? 'disabled' : ''}>🗑</button>
-        <div class="thumb">${thumbContent}</div>
+        <button type="button" class="thumb" data-preview-id="${h(f.id)}" onclick="openContentPreview(this.dataset.previewId)" aria-label="${h(f.originalName)} 크게 보기">${thumbContent}</button>
         <div class="fname">${h(f.originalName)}</div>
         <div class="fmeta">
           <span class="source-badge ${sourceClass}">${sourceLabel}</span>
@@ -1928,7 +1938,7 @@ function renderTrash() {
   const h = escapeHtml, files = filteredTrash();
   document.getElementById('trashSummary').textContent = trashReady ? `${trashData.count}개 · 보관 용량 ${formatSize(trashData.totalBytes) || '0 B'}` : '불러오는 중...';
   document.getElementById('trashGrid').innerHTML = files.map(file => `<div class="content-card trash-card ${trashSelection.has(file.id) ? 'selected' : ''}" data-trash-id="${h(file.id)}">
-    <div class="thumb">${String(file.mimeType).startsWith('video') ? '🎬' : `<img src="${h(file.url)}" alt="${h(file.originalName)}" loading="lazy">`}</div>
+    <button type="button" class="thumb" data-preview-id="${h(file.id)}" onclick="openContentPreview(this.dataset.previewId, true)" aria-label="${h(file.originalName)} 크게 보기">${String(file.mimeType).startsWith('video') ? '🎬' : `<img src="${h(file.url)}" alt="${h(file.originalName)}" loading="lazy">`}</button>
     <label class="trash-select"><input type="checkbox" data-trash-select="${h(file.id)}" ${trashSelection.has(file.id) ? 'checked' : ''} ${trashBusy ? 'disabled' : ''} onchange="trashToggle(this.dataset.trashSelect, this.checked)"><span class="fname">${h(file.originalName)}</span></label>
     <div class="trash-meta">${file.source === 'gdrive' ? 'Drive' : 'Local'} · ${formatSize(file.size) || '0 B'}<br>이동일 ${h(new Date(file.trashedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }))}${file.deleting ? '<br>영구 삭제 처리 중 · 삭제 재시도 가능' : ''}</div>
     <div class="cue-row"><button type="button" class="btn btn-secondary" data-id="${h(file.id)}" onclick="trashAction('restore', [this.dataset.id])" ${trashBusy || file.deleting ? 'disabled' : ''}>복원</button><button type="button" class="btn btn-danger" data-id="${h(file.id)}" onclick="trashAction('delete', [this.dataset.id])" ${trashBusy ? 'disabled' : ''}>영구 삭제</button></div></div>`).join('') || `<p class="cue-hint">${!trashReady ? '불러오는 중...' : trashData.items.length ? '검색 결과가 없습니다.' : '휴지통이 비어 있습니다.'}</p>`;
@@ -2382,6 +2392,7 @@ function showToast(msg, action) {
 }
 </script>
 <script src="/admin-session.js"></script>
+<script src="/content-preview.js"></script>
 <script src="/camera-default-event-admin.js"></script>
 </body>
 </html>

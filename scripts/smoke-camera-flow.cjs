@@ -50,7 +50,7 @@ const {startPreview}=require('./camera-preview.cjs');
   await admin.locator('#clearCurrentEvent').click();await admin.waitForFunction(()=>document.getElementById('currentEventSummary').textContent.includes('미지정'));assert.equal(preview.currentEvent.get(),null);
   await noEvent.locator('#home').click();await noEvent.locator('#archiveOnly').click();assert.equal(await noEvent.locator('#setup').isVisible(),false,'the quick archive branch also starts with capture');assert.equal(await noEvent.evaluate(()=>mode),'archive');
   await noEvent.locator('#galleryInput').setInputFiles({name:'archive-branch.png',mimeType:'image/png',buffer:fs.readFileSync(preview.photo)});await noEvent.locator('#send').click();await noEvent.waitForFunction(()=>!busy&&!selected.length);assert.equal(preview.published.length,3,'archive branch never publishes to the monitor');await noEvent.locator('#completePanel').waitFor();
-  assert.deepEqual(errors,[]);assert.deepEqual(models,[],'the basic flow loads no face model');
+  assert.deepEqual(errors,[]);assert.equal(await page.evaluate(()=>beautyWarmup.cached),null,'registration releases any speculative skin preparation');
   console.log(JSON.stringify({ok:true,published:preview.published.length,personalPriority:true,commonFallback:true,noEventStillRegisters:true,adminPanel:true,originalsPreserved:true}));
  }finally{releaseConfig?.();if(browser)await browser.close();await preview.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

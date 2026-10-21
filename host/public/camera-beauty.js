@@ -3,7 +3,7 @@
 window.CameraBeauty = (() => {
   let skinCore;
   const analysisJobs = new Set();
-  async function analyze(canvas, stage, faces, signal) {
+  async function analyze(canvas, stage, faces, signal, onProgress) {
     if (signal?.aborted) throw new DOMException('편집 취소', 'AbortError');
     if (typeof Worker !== 'function' || typeof OffscreenCanvas !== 'function') throw new Error('Skin analysis unavailable');
     const scale = stage === 'faces' ? Math.min(1, 768 / Math.max(canvas.width, canvas.height)) : 1;
@@ -24,7 +24,10 @@ window.CameraBeauty = (() => {
       const cancel = () => finish(new DOMException('편집 취소', 'AbortError'));
       const timeout = setTimeout(() => finish(new Error('Skin analysis timeout')), 40000);
       analysisJobs.add(cancel); signal?.addEventListener('abort', cancel, { once: true });
-      worker.onmessage = event => event.data.error ? finish(new Error(event.data.error)) : finish(null, event.data);
+      worker.onmessage = event => {
+        if (event.data.progress) { onProgress?.(event.data.progress); return; }
+        if (event.data.error) finish(new Error(event.data.error)); else finish(null, event.data);
+      };
       worker.onerror = event => { event.preventDefault(); finish(new Error('Skin analysis worker failed')); };
       worker.onmessageerror = () => finish(new Error('Skin analysis result failed'));
       try { worker.postMessage({ bitmap, stage, faces }, [bitmap]); }
@@ -74,11 +77,11 @@ window.CameraBeauty = (() => {
     const canvas = options.canvas || await decode(file);
     try {
       skinCore ||= await import('/camera-skin-core.mjs');
-      const { faces } = await analyze(canvas, 'faces', undefined, options.signal);
+      const { faces } = await analyze(canvas, 'faces', undefined, options.signal, options.onProgress);
       checkCancelled();
       if (!faces.length) throw new Error('얼굴을 찾지 못했습니다. 정면에 가까운 사진을 사용하거나 원본으로 진행해 주세요.');
       // 얼굴 워커를 종료한 뒤 피부 워커를 시작해 두 모델의 메모리를 겹쳐 보관하지 않는다.
-      const result = await analyze(canvas, 'skin', faces, options.signal);
+      const result = await analyze(canvas, 'skin', faces, options.signal, options.onProgress);
       checkCancelled();
       return { canvas, source: new ImageData(result.source, canvas.width, canvas.height), retouched: result.retouched,
         alpha: result.alpha, tone: result.tone, faces: faces.length };

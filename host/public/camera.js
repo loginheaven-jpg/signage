@@ -239,6 +239,34 @@ let beautyRenderFrame = 0, beautyBase = null, beautyTab = 'skin', beautyEffects 
 let beautyComposition = null, beautyCompositionKey = '', beautyAbort = null;
 let beautyFrameRenderTimer = null;
 let beautyAIFile = null, beautyAIKind = '';
+const beautyWarmup = new window.CameraBeautyWarmup();
+let beautySkinJob = null;
+let beautyWarmCandidate = null;
+function resumeCapturedWarmup() {
+  if (document.hidden || !beautyWarmCandidate) return;
+  const { entry, at } = beautyWarmCandidate; beautyWarmCandidate = null;
+  if (Date.now() - at < 60000 && currentPage === 'work' && workStage === 'review' && selected.at(-1) === entry && !busy && !beautyEntry && typeof Worker === 'function' && typeof OffscreenCanvas === 'function') beautyWarmup.start(entry.file);
+}
+const beautyStageText = { loading: '뽀샤시 준비 중…', face: '얼굴을 살펴보는 중…', skin: '피부를 살펴보는 중…', finishing: '거의 다 됐어요…' };
+function watchBeautySkin(job, epoch) {
+  job.subscribe(() => { if (epoch === beautyEpoch && job === beautySkinJob) renderBeauty(); });
+  job.ready.then(prepared => {
+    if (epoch !== beautyEpoch || job !== beautySkinJob) return;
+    if (prepared) { beautyPrepared = prepared; releaseBeautyComposition(); }
+    else if (job.error && beautyLevel) {
+      beautyLevel = 0;
+      el('beautyState').textContent = job.error.message?.includes('얼굴을 찾지') ? job.error.message : '뽀샤시를 준비하지 못했어요. 다시 조절하거나 원본으로 진행해 주세요.';
+    }
+    renderBeauty();
+  });
+}
+function beginBeautySkin(retry = false) {
+  if (!beautyEntry || !beautyBase || beautyPrepared || (beautySkinJob && (!retry || !beautySkinJob.error))) return;
+  // 실패한 작업이 참조하던 사진 Canvas는 현재 편집창에서 계속 사용한다.
+  if (beautySkinJob) { beautySkinJob.canvas = null; beautySkinJob.dispose(); }
+  beautySkinJob = beautyWarmup.create(beautyAIFile || beautyEntry.file, beautyBase);
+  beautyAbort = beautySkinJob.controller; watchBeautySkin(beautySkinJob, beautyEpoch); renderBeauty();
+}
 const aiEditor = new window.CameraAIEditor({
   api,
   async getBlob(url,signal){
@@ -265,6 +293,7 @@ const aiEditor = new window.CameraAIEditor({
 async function replaceBeautySource(file,kind,isCurrent){
   const canvas=await window.CameraBeauty.decode(file||beautyEntry.file);
   if(!isCurrent()){canvas.width=canvas.height=1;return;}
+  beautySkinJob?.dispose();beautySkinJob=null;
   releaseBeautyComposition();if(beautyBase)beautyBase.width=beautyBase.height=1;
   beautyPrepared=null;window.CameraBeauty.releaseDetector();beautyBase=canvas;
   beautyAIFile=file;beautyAIKind=kind;beautyLevel=0;beautyComparing=false;
@@ -315,11 +344,18 @@ function renderBeauty() {
     el(id).disabled=locked;
     if(document.activeElement!==el(id))el(id).value=beautyEffects.event?.[key]||'';
   }
-  el('applyBeauty').disabled = locked || !beautyEntry || (hasPhotoEffects() && !beautyPrepared && !beautyBase) || (beautyEffects.frame==='event'&&!!beautyEffects.event?.templateId&&aiEditor.frameId!==beautyEffects.event.templateId);
+  el('applyBeauty').disabled = locked || !beautyEntry || (beautyLevel > 0 && !beautyPrepared) || (hasPhotoEffects() && !beautyPrepared && !beautyBase) || (beautyEffects.frame==='event'&&!!beautyEffects.event?.templateId&&aiEditor.frameId!==beautyEffects.event.templateId);
   el('beautyStrength').disabled = locked || !beautyEntry;
   el('beautyStrength').value = beautyLevel;
   el('beautyStrength').setAttribute('aria-valuetext', beautyLevel ? '뽀샤시 ' + beautyLevel + '%' : '뽀샤시 없음');
   el('beautyStrengthValue').textContent = beautyLevel;
+  const preparing = beautySkinJob && !beautySkinJob.prepared && !beautySkinJob.error && !beautySkinJob.controller.signal.aborted;
+  el('beautyProgress').hidden = !preparing;
+  el('beautyProgressText').textContent = beautyStageText[beautySkinJob?.stage] || '뽀샤시 준비 중…';
+  el('beautyProgress').setAttribute('aria-busy', String(!!preparing));
+  if (!beautyProcessing && beautySkinJob && !beautySkinJob.error) el('beautyState').textContent = preparing
+    ? '강도를 미리 골라도 돼요. 준비되면 바로 적용돼요.'
+    : beautyLevel ? '뽀샤시 ' + beautyLevel : '뽀샤시 준비 완료 · 강도를 골라 보세요.';
   el('compareBeauty').disabled = beautyProcessing || !hasPhotoEffects();
   el('compareBeauty').setAttribute('aria-pressed', String(beautyComparing));
   el('compareBeauty').textContent = beautyComparing ? '효과 보기' : '원본 비교';
@@ -336,10 +372,13 @@ function renderBeauty() {
 }
 function openBeauty(entry) {
   if (busy || entry.submission || entry.kind === 'video') return;
-  beautyEpoch++; beautyEntry = entry; beautyPrepared = null; beautyLevel = 0; beautyProcessing = false; beautyComparing = false;
+  beautySkinJob?.dispose();
+  beautyEpoch++; beautyEntry = entry; beautyPrepared = null; beautyLevel = savedBeautyStrength(entry); beautyProcessing = false; beautyComparing = false;
   releaseBeautyComposition();const epoch=beautyEpoch;
   beautyBase = null; beautyTab = 'skin';
   beautyAIFile=entry.aiFile||null;beautyAIKind=entry.aiKind||'';
+  beautySkinJob = beautyWarmup.take(beautyAIFile || entry.file);
+  if (beautySkinJob) { beautyAbort = beautySkinJob.controller; watchBeautySkin(beautySkinJob, epoch); }
   const effects=window.CameraBeauty.normalizeEffects(entry.photoEffects);
   beautyEffects={...effects,event:effects.event||{title:(settings?.target?.eventName||settings?.target?.folderName||'').replace(/^\d{4}[-.]?\d{2}[-.]?\d{2}[\s_-]*/,'').slice(0,32)||'함께한 오늘',date:/^\d{4}-\d{2}-\d{2}/.test(entry.date||'')?entry.date.slice(0,10):localDate(Date.now()).slice(0,10)}};
   beautyEffects.decorations=decorationEditor.reset(effects.decorations);
@@ -347,19 +386,21 @@ function openBeauty(entry) {
   el('beautyDestination').textContent = mode === 'both' ? '꾸민 사진을 모니터에 표출하고, 원본은 교회폴더에 보관합니다.' : mode === 'archive' ? '효과를 적용하면 꾸민 사진을 교회폴더에 저장합니다.' : '꾸민 사진을 모니터에 표출합니다.';
   renderBeauty(); openDialog('beautyDialog');
   aiEditor.open(beautyEffects.event?.templateId||'');
-  loadBeautyBase().then(()=>{if(epoch===beautyEpoch&&entry.beautyLevel&&beautyBase)chooseBeauty(savedBeautyStrength(entry));});
+  loadBeautyBase().then(()=>{if(epoch===beautyEpoch&&beautyBase)beginBeautySkin();});
 }
 async function loadBeautyBase() {
   if (beautyProcessing || !beautyEntry || beautyPrepared || beautyBase) return;
   const epoch = beautyEpoch, file = beautyAIFile||beautyEntry.file, originalFile=beautyEntry.file;
   beautyProcessing = true; el('beautyState').textContent = '사진을 준비하고 있습니다…'; renderBeauty();
   try {
-    const canvas = await window.CameraBeauty.decode(file);
+    const canvas = beautySkinJob ? await beautySkinJob.base : await window.CameraBeauty.decode(file);
     if (epoch !== beautyEpoch){canvas.width=canvas.height=1;return;}
     beautyBase = canvas;
     const originalCanvas=beautyAIFile?await window.CameraBeauty.decode(originalFile):canvas;
     if(epoch!==beautyEpoch){if(originalCanvas!==canvas)originalCanvas.width=originalCanvas.height=1;return;}
-    const original=el('beautyOriginal');original.width=originalCanvas.width;original.height=originalCanvas.height;original.getContext('2d').drawImage(originalCanvas,0,0);
+    const original=el('beautyOriginal');original.width=originalCanvas.width;original.height=originalCanvas.height;
+    if (!beautyAIFile && beautyPrepared) original.getContext('2d').putImageData(beautyPrepared.source,0,0);
+    else original.getContext('2d').drawImage(originalCanvas,0,0);
     if(originalCanvas!==canvas)originalCanvas.width=originalCanvas.height=1;
     el('beautyState').textContent = '효과를 함께 고른 뒤 원본과 비교해 보세요.';
   } catch {
@@ -371,31 +412,10 @@ async function loadBeautyBase() {
 async function chooseBeauty(level) {
   if (!beautyEntry || beautyProcessing || aiEditor.busy) return;
   level = Math.max(0, Math.min(100, Math.round((Number(level) || 0) / 5) * 5));
-  const epoch = beautyEpoch, entry = beautyEntry;
   beautyComparing = false;
-  if (!level || beautyPrepared) {
-    beautyLevel = level;
-    el('beautyState').textContent = level ? '얼굴 ' + beautyPrepared.faces + '명 · 뽀샤시 ' + level : '뽀샤시 없음 · 색감과 프레임은 유지됩니다.';
-    scheduleBeautyRender(); return;
-  }
-  beautyProcessing = true; el('beautyState').textContent = beautyPrepared ? '뽀샤시를 적용하고 있습니다…' : '얼굴과 피부를 확인하고 있습니다. 처음에는 보정 도구를 불러오는 데 시간이 걸릴 수 있습니다…'; renderBeauty();
-  try {
-    if (!beautyPrepared) {
-      let deadline;
-      let prepared;
-      const controller=new AbortController();beautyAbort=controller;
-      try { prepared = await Promise.race([window.CameraBeauty.prepare(entry.file,{canvas:beautyBase,signal:controller.signal}), new Promise((_, reject) => { deadline = setTimeout(() => {controller.abort();reject(new Error('beauty timeout'));}, 45000); })]); }
-      finally { clearTimeout(deadline); }
-      if (epoch !== beautyEpoch) return;
-      beautyPrepared = prepared;
-    }
-    beautyLevel = level;
-    el('beautyState').textContent = '얼굴 ' + beautyPrepared.faces + '명 · 뽀샤시 ' + level;
-  } catch (error) {
-    if (epoch !== beautyEpoch) return;
-    beautyLevel = 0;
-    el('beautyState').textContent = error.message?.includes('얼굴을 찾지') ? error.message : '보정 도구를 불러오지 못했거나 이 사진을 처리할 수 없습니다. 원본으로 진행하거나 다시 시도해 주세요.';
-  } finally { if (epoch === beautyEpoch) { beautyProcessing = false; renderBeauty(); if (hasPhotoEffects()) loadBeautyBase(); } }
+  beautyLevel = level;
+  if (level && !beautyPrepared) beginBeautySkin(true);
+  scheduleBeautyRender();
 }
 for (const tab of document.querySelectorAll('[data-photo-tab]')) {
   tab.onclick = () => { beautyTab = tab.dataset.photoTab; renderBeauty(); };
@@ -423,6 +443,7 @@ el('beautyDialog').addEventListener('close', () => {
   clearTimeout(beautyFrameRenderTimer);decorationEditor.close();
   aiEditor.close();beautyAIFile=null;beautyAIKind='';
   beautyAbort?.abort();beautyAbort=null;releaseBeautyComposition();
+  beautySkinJob?.dispose();beautySkinJob=null;
   if(beautyBase)beautyBase.width=beautyBase.height=1;
   beautyEpoch++; beautyEntry = null; beautyPrepared = null; beautyBase = null; beautyProcessing = false;
   window.CameraBeauty.releaseDetector();el('beautyOriginal').width=el('beautyOriginal').height=1;
@@ -518,6 +539,8 @@ function refreshCommonTarget(){
   Object.assign(settings,targetDefault());storage.set('settings',settings);
 }
 function renderFlow(){
+  if (currentPage !== 'work' || workStage !== 'review') beautyWarmCandidate = null;
+  if (beautyWarmup.cached && (currentPage !== 'work' || workStage !== 'review' || !selected.some(entry => entry.file === beautyWarmup.cached.file))) beautyWarmup.clear();
   if(!config||!settings)return;
   el('cameraSteps').hidden=currentPage!=='work';
   for(const step of document.querySelectorAll('[data-step]')){if(step.dataset.step===workStage)step.setAttribute('aria-current','step');else step.removeAttribute('aria-current');}
@@ -869,6 +892,8 @@ function uploadVideo(form, onProgress) {
   });
 }
 async function addFiles(files, captured = false) {
+  beautyWarmCandidate = null;
+  beautyWarmup.clear();
   storage.set('capturePending', false);
   // 모니터에 표출하는 목적은 30장, 교회폴더에 저장만 하는 목적은 한 번에 수백 장까지 받는다.
   const limit = mode === 'archive' ? (config.maxArchiveBatch || 500) : (config.maxBatch || 30);
@@ -905,6 +930,10 @@ async function addFiles(files, captured = false) {
   await persistDraft(); renderReview();
   if (selected.length) el('review').scrollIntoView({ behavior: 'smooth', block: 'start' });
   workStage='review';renderReview();
+  // 폰 기본 카메라에서 확인을 눌러 돌아온 사진 한 장만 미리 준비한다.
+  if (captured && added.length === 1 && files.length === 1 && selected.at(-1) === added[0]) {
+    beautyWarmCandidate = { entry: added[0], at: Date.now() }; resumeCapturedWarmup();
+  }
 }
 function renderReview() {
   el('review').hidden = !selected.length;
@@ -1338,6 +1367,8 @@ el('continueResume').onclick = () => { if (settings) {workStage=selected.length?
 for (const [button, input] of [['shoot', 'shootInput'], ['shootVideo', 'videoInput'], ['choose', 'galleryInput']]) {
   el(button).onclick = async () => {
     if (busy) return;
+    beautyWarmCandidate = null;
+    beautyWarmup.clear();
     if (button === 'shoot' && !isMobile) {
       if (!navigator.mediaDevices?.getUserMedia) return notice('이 브라우저에서는 카메라를 사용할 수 없습니다. 사진 파일을 선택해 주세요.', true);
       try {
@@ -1369,8 +1400,8 @@ el('snap').onclick = async () => {
   } catch { notice('사진을 만들지 못했습니다. 다시 촬영해 주세요.', true); }
   finally { el('snap').disabled = false; }
 };
-window.addEventListener('pagehide', () => { cameraStream?.getTracks().forEach(track => track.stop()); });
-el('send').onclick = sendPhotos;
+window.addEventListener('pagehide', () => { beautyWarmCandidate = null; beautyWarmup.clear(); cameraStream?.getTracks().forEach(track => track.stop()); });
+el('send').onclick = () => { beautyWarmCandidate = null; beautyWarmup.clear(); return sendPhotos(); };
 el('discard').onclick = () => {
   if (busy) return;
   if (hasFrozen() && !confirm('이미 접수된 사진이 있을 수 있습니다. 대기 목록만 비울까요? 실제 사진 취소는 내 업로드에서 할 수 있습니다.')) return;
@@ -1380,7 +1411,8 @@ el('refreshHistory').onclick = loadHistory;
 el('message').oninput = () => { el('messageCount').textContent = el('message').value.length; persistDraft(); }; el('keepMessage').onchange = () => persistDraft();
 el('email').oninput = () => rememberEmail(); el('clearEmail').onclick = clearEmail;
 setInterval(expireEmail, 30000);
-document.addEventListener('visibilitychange', () => { syncWakeLock(); if (!document.hidden) { expireEmail(); resumeArchive(); } });
+document.addEventListener('visibilitychange', () => { syncWakeLock(); if (document.hidden) beautyWarmup.clear(); else { resumeCapturedWarmup(); expireEmail(); resumeArchive(); } });
+for (const event of ['pointerdown', 'keydown', 'input']) document.addEventListener(event, () => beautyWarmup.touch(), { passive: true });
 window.addEventListener('beforeunload', event => { if ((busy && !backgroundActive) || originals.length) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('online', () => { notice('인터넷에 다시 연결되었습니다. 대기 사진을 확인하고 전송해 주세요.'); originals.forEach(p => p.error = ''); runOriginals(); loadHistory(); resumeArchive(); });
 window.addEventListener('offline', () => notice('인터넷 연결이 끊겼습니다. 선택한 사진은 대기 목록에 유지합니다.', true));

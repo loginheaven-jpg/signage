@@ -82,7 +82,8 @@ const {startPreview}=require('./camera-preview.cjs');
   const record=[...preview.archive.records.values()][0],original=record.driveId?preview.remote.get(record.driveId).bytes:fs.readFileSync(preview.archive.localPath(record));
   assert.deepEqual(original,fs.readFileSync(preview.photo),'original archive remains untouched');
   assert.notDeepEqual(preview.published[0].bytes,original);
-  assert.deepEqual(models,[],'no extra AI models for event frames and decorations');assert.deepEqual(errors,[]);
+  assert.ok(models.every(url=>/\/(vision_bundle\.mjs|face_landmarker\.task|wasm\/vision_wasm_(nosimd_)?internal\.(js|wasm))$/.test(url)),'only shared skin preparation tools are loaded, not extra decoration models');
+  assert.ok(models.filter(url=>url.endsWith('face_landmarker.task')).length<=2,'at most one automatic face preparation per editor opening');assert.deepEqual(errors,[]);
   console.log(JSON.stringify({ok:true,eventPixels,memory,items:8}));
  }finally{if(browser)await browser.close();await preview.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
