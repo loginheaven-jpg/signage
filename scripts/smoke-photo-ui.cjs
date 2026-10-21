@@ -48,7 +48,7 @@ const { startPreview } = require('./camera-preview.cjs');
     await page.locator('#galleryInput').setInputFiles(preview.photo);
     await page.locator('#review').waitFor({ state: 'visible' });
     await cameraUI.click(page,'#home'); await page.locator('#captureHome').waitFor();
-    assert.equal(await page.locator('#draftCount').textContent(), '대기 사진 1장 · 사진과 작업 설정을 유지하고 있습니다.');
+    assert.equal(await page.locator('#draftCount').textContent(), '아직 올리지 않은 사진 1장');
     await cameraUI.click(page,'#continueResume'); await page.locator('#review').waitFor();
     // Hold the request to verify mobile/browser back cannot abandon an upload.
     let release; const gate = new Promise(resolve => { release = resolve; });

@@ -8,7 +8,7 @@
 <nav class="topNav" aria-label="카메라 탐색"><div class="brand">YEBOM <span>CAMERA</span></div><div class="navActions"><button id="home" type="button" disabled>⌂ 촬영</button><button id="moreMenu" type="button" aria-haspopup="dialog" disabled>더보기</button></div></nav>
 <div id="notice" role="status" aria-live="polite" hidden></div>
 <nav id="cameraSteps" class="cameraSteps" aria-label="등록 진행"><span data-step="capture" aria-current="step">촬영·선택</span><span aria-hidden="true">›</span><span data-step="review">사진 확인</span><span aria-hidden="true">›</span><span data-step="done">등록</span></nav>
-<section id="resume" class="resumeStrip" hidden><p id="resumeSummary" hidden></p><p id="draftCount"></p><button id="continueResume" type="button">대기 사진 확인</button></section>
+<section id="resume" class="resumeStrip" hidden><p id="resumeSummary" hidden></p><button id="continueResume" type="button"><span class="resumeCopy"><strong id="draftCount"></strong><span id="resumeHint"></span></span><span id="resumeAction">사진 보기 ›</span></button></section>
 <section id="purpose" hidden><h2>사진 등록 방식</h2><p class="hint">기본은 화면에 올리고 원본도 보관합니다.</p><div class="purposes">
 <button data-mode="both" class="recommended"><span class="symbol">▣ + ▤</span><strong>화면에 올리고 원본도 보관 <span class="badge">기본</span></strong><small>모니터에 먼저 표시하고 원본은 행사 폴더에 보관합니다.</small></button>
 <button data-mode="live"><span class="symbol">▤</span><strong>화면에만 올리기</strong><small>원본을 교회폴더에 장기 보관하지 않습니다.</small></button>
@@ -33,7 +33,7 @@
 <section id="review" hidden><h2 id="reviewTitle">사진을 확인하세요</h2><p id="reviewDestination" class="hint"></p><div id="selectedPhotos" class="photoGrid"></div>
 <div class="reviewTools"><button id="reviewRetake" type="button">다시 촬영</button><button id="reviewAdd" type="button">사진 추가</button><button id="reviewOptions" type="button" aria-haspopup="dialog">추가 옵션</button></div>
 <label id="muteLabel" hidden><span class="check"><input id="muteVideo" type="checkbox" checked>영상을 소리 없이 재생</span></label>
-<div class="reviewSend"><button id="send" class="primary">화면에 올리기</button><button id="discard" class="link">선택 비우기</button></div><p id="progress" role="status" aria-live="polite"></p></section>
+<div class="reviewSend"><button id="send" class="primary">화면에 올리기</button><button id="discard" class="link" type="button">전체 삭제</button></div><p id="progress" role="status" aria-live="polite"></p></section>
 <section id="completePanel" class="completePanel" hidden><div class="completeMark" aria-hidden="true">✓</div><h2 id="completeTitle">등록을 접수했어요</h2><p id="completeState" role="status" aria-live="polite"></p><button id="nextCapture" type="button" class="primary">다음 사진 촬영</button><div class="completeActions"><button id="showShare" type="button">사진 공유하기</button><button id="showStatus" type="button">등록 상태</button><button id="withdrawLatest" type="button" hidden>게시 취소</button></div></section>
 <button id="locationNotice" type="button" class="locationNotice" hidden>원본 보관 위치를 선택해 주세요</button><button id="transferNotice" type="button" class="link" hidden>원본 전송 상태 확인</button>
 </section>

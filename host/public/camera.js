@@ -38,14 +38,17 @@ function migrateLegacyState() {
     storage.set('legacyMigrated', true);
   } catch {}
 }
-function notice(text, error = false) { el('notice').textContent = text; el('notice').classList.toggle('error', error); el('notice').hidden = !text; }
+function notice(text, error = false, context = '') { el('notice').textContent = text; el('notice').classList.toggle('error', error); el('notice').hidden = !text; el('notice').dataset.context = context; }
 function node(tag, text, className) { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (className) n.className = className; return n; }
 function option(value, text) { const n = node('option', text); n.value = value; return n; }
 function homeSummary() {
+  if (!selected.length && el('notice').dataset.context === 'draft') notice('');
   el('resume').hidden = currentPage !== 'work' || workStage!=='capture' || (!selected.length&&!originals.length);
   if (settings) el('resumeSummary').textContent = destination(settings);
-  el('draftCount').textContent = selected.length ? '대기 사진 ' + selected.length + '장 · 사진과 작업 설정을 유지하고 있습니다.' : originals.length ? '원본 전송 대기 ' + originals.length + '장 · 앱을 닫기 전에 확인해 주세요.' : '';
-  el('continueResume').textContent=selected.length?'대기 사진 확인':'전송 상태 보기';
+  el('draftCount').textContent = selected.length ? (hasFrozen() ? '등록 확인이 필요한 사진 ' : '아직 올리지 않은 사진 ') + selected.length + '장' : originals.length ? '등록한 사진의 원본 전송 ' + originals.length + '장' : '';
+  el('resumeHint').textContent = selected.length ? (hasFrozen() ? '등록 상태를 확인하거나 다시 시도하세요' : '확인하고 올리거나 삭제하세요') : '원본 전송 상태를 확인하세요';
+  el('resumeAction').textContent=selected.length?'사진 보기 ›':'상태 보기 ›';
+  el('continueResume').disabled=busy;
 }
 function view(name, push = true) {
   currentPage = name;
@@ -525,7 +528,7 @@ el('sharePhotos').onclick = async () => {
 };
 function canEdit() {
   if (busy) return false;
-  if (hasFrozen()) { notice('응답을 확인하지 못한 사진이 있습니다. 같은 설정으로 재시도하거나 대기 목록에서 제외한 뒤 설정을 변경해 주세요.', true); return false; }
+  if (hasFrozen()) { notice('응답을 확인하지 못한 사진이 있습니다. 같은 설정으로 재시도하거나 목록에서 뺀 뒤 설정을 변경해 주세요.', true, 'draft'); return false; }
   return true;
 }
 function targetDefault() {
@@ -957,16 +960,19 @@ function renderReview() {
     const label = node('label', (r.kind === 'video' ? '영상' : '사진') + ' 날짜 (한국 시간)'); const input = node('input'); input.type = 'datetime-local'; input.step = '1'; input.value = r.date; input.disabled = !!r.submission || busy;
     input.onchange = () => { r.date = input.value; r.dateSource = 'user'; persistDraft(); }; label.append(input);
     const dateInfo = node('p', ({ exif: '사진 촬영정보', capture: '방금 촬영한 날짜', fileModified: '파일 수정일시 — 필요하면 수정하세요', user: '직접 지정', unknown: '날짜미상' })[r.dateSource]);
-    const remove = node('button', '제외'); remove.disabled = busy;
-    remove.onclick = () => { if (r.submission && !confirm('서버에 접수되었을 수 있는 사진입니다. 대기 목록에서 제외해도 이미 접수된 사진은 취소되지 않습니다. 제외할까요?')) return; URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r); persistDraft(); renderReview(); };
+    const remove = node('button', r.submission ? '목록에서 빼기' : '삭제', 'photoRemove'); remove.type = 'button'; remove.disabled = busy;
+    remove.setAttribute('aria-label', r.file.name + (r.submission ? ' 목록에서 빼기' : ' 삭제'));
+    remove.onclick = () => removeDraftEntries([r]);
     card.append(img);
     if(r.error)card.append(node('p',r.error,'photoError'));
+    const actions = node('div', undefined, 'photoActions');
     if (r.kind !== 'video') {
       const edit = node('button', '사진 꾸미기', 'beautyEdit'); edit.type = 'button'; edit.disabled = busy || !!r.submission;
-      edit.onclick = () => openBeauty(r); card.append(edit);
-      if (r.beautyFile) card.append(node('p', mode === 'both' ? '꾸민 사진 표출 · 원본 보관' : mode === 'archive' ? '꾸민 사진 저장' : '꾸민 사진 표출', 'beautyApplied'));
+      edit.onclick = () => openBeauty(r); actions.append(edit);
     }
-    const details=node('details',undefined,'photoDetails');details.append(node('summary','촬영 날짜·파일 정보'),caption,state,label,dateInfo,remove);card.append(details);return card;
+    actions.append(remove); card.append(actions);
+    if (r.beautyFile) card.append(node('p', mode === 'both' ? '꾸민 사진 표출 · 원본 보관' : mode === 'archive' ? '꾸민 사진 저장' : '꾸민 사진 표출', 'beautyApplied'));
+    const details=node('details',undefined,'photoDetails');details.append(node('summary','촬영 날짜·파일 정보'),caption,state,label,dateInfo);card.append(details);return card;
   }));
   if (selected.length > reviewShown) {
     const more = node('button', '나머지 ' + (selected.length - reviewShown) + '장 중 ' + Math.min(REVIEW_PAGE, selected.length - reviewShown) + '장 더 보기'); more.type = 'button'; more.id = 'moreReview'; more.disabled = busy;
@@ -974,8 +980,23 @@ function renderReview() {
     el('selectedPhotos').append(node('p', '목록에는 ' + reviewShown + '장만 표시합니다. 표시하지 않은 사진도 함께 전송합니다.', 'hint'), more);
   }
   el('send').textContent = (selected.length>1?countText+' ':'')+(mode==='archive'?'이 사진 보관하기':'화면에 올리기');
+  el('discard').textContent = hasFrozen() ? '목록 비우기' : '전체 삭제';
   if(!selected.length&&workStage==='review')workStage='capture';
   renderFlow();homeSummary();
+}
+function removeDraftEntries(entries, all = false) {
+  if (busy || !entries.length) return;
+  const frozen = entries.some(r => r.submission);
+  if (frozen) {
+    if (!confirm('이미 서버에 접수된 사진이 있을 수 있습니다. 이 기기의 목록에서만 뺄까요?\n이미 등록한 사진은 취소되지 않습니다. 등록 취소는 내 사진에서 할 수 있습니다.')) return;
+  } else if (all && !confirm('아직 올리지 않은 사진·영상 ' + entries.length + '개를 모두 삭제할까요?\n휴대폰 앨범과 이미 등록한 사진은 삭제하지 않습니다.')) return;
+  for (const r of entries) URL.revokeObjectURL(r.url);
+  selected = selected.filter(r => !entries.includes(r));
+  if (!selected.length) for (const id of ['shootInput', 'videoInput', 'galleryInput']) el(id).value = '';
+  el('progress').textContent = '';
+  if (beautyWarmCandidate && entries.includes(beautyWarmCandidate.entry)) beautyWarmCandidate = null;
+  if (el('notice').dataset.context === 'draft') notice('');
+  persistDraft(); renderReview();
 }
 function setBusy(value) {
   busy = value;
@@ -1128,7 +1149,7 @@ async function sendArchive(auto = false) {
     for (const r of videos) await sendOne(r);
     el('progress').textContent = accepted + '장 서버 접수 완료' + (skipped ? ' · 이미 올린 사진 ' + skipped + '장은 건너뜀' : '') + (selected.length ? ' · ' + selected.length + '장은 올리지 못했습니다. 전송을 다시 눌러 주세요.' : ' · 같은 작업으로 계속 촬영하거나 사진을 선택하세요.');
     if(!selected.length&&(accepted||skipped)){lastCompletion={mode:'archive',count:accepted+skipped};workStage='done';}
-    if (selected.length) notice('올리지 못한 사진 ' + selected.length + '장을 대기 목록에 남겼습니다. 다시 전송해도 중복 접수하지 않습니다.', true);
+    if (selected.length) notice('올리지 못한 사진이 있습니다. 사진을 확인하고 다시 시도해 주세요. 다시 전송해도 중복 접수하지 않습니다.', true, 'draft');
     else notice(skipped?'이미 보관한 사진 '+skipped+'장은 건너뛰었습니다.':'');
   } finally {
     if (!selected.length) { el('shootInput').value = ''; el('videoInput').value = ''; el('galleryInput').value = ''; }
@@ -1188,7 +1209,7 @@ async function sendPhotos() {
     }
     el('progress').textContent = accepted + '장 서버 접수 완료' + (selected.length ? ' · ' + selected.length + '장 응답 확인 필요. 같은 설정으로 재시도해 주세요.' : ' · 같은 작업으로 계속 촬영하거나 사진을 선택하세요.');
     if(!selected.length&&accepted){lastCompletion={mode,shareKey:shareBatch?.key===batchKey?batchKey:null,count:accepted};workStage='done';}
-    if (selected.length) notice('전송하지 못했거나 응답을 확인하지 못한 사진을 대기 목록에 남겼습니다. 재시도해도 중복 접수하지 않습니다.', true);
+    if (selected.length) notice('전송하지 못했거나 응답을 확인하지 못한 사진을 대기 목록에 남겼습니다. 재시도해도 중복 접수하지 않습니다.', true, 'draft');
     else notice('');
     if (accepted && mode !== 'archive' && el('email').value) rememberEmail(true);
     if (!el('keepMessage').checked) el('message').value = '';
@@ -1402,11 +1423,7 @@ el('snap').onclick = async () => {
 };
 window.addEventListener('pagehide', () => { beautyWarmCandidate = null; beautyWarmup.clear(); cameraStream?.getTracks().forEach(track => track.stop()); });
 el('send').onclick = () => { beautyWarmCandidate = null; beautyWarmup.clear(); return sendPhotos(); };
-el('discard').onclick = () => {
-  if (busy) return;
-  if (hasFrozen() && !confirm('이미 접수된 사진이 있을 수 있습니다. 대기 목록만 비울까요? 실제 사진 취소는 내 업로드에서 할 수 있습니다.')) return;
-  selected.forEach(r => URL.revokeObjectURL(r.url)); selected = []; persistDraft(); renderReview();
-};
+el('discard').onclick = () => removeDraftEntries([...selected], true);
 el('refreshHistory').onclick = loadHistory;
 el('message').oninput = () => { el('messageCount').textContent = el('message').value.length; persistDraft(); }; el('keepMessage').onchange = () => persistDraft();
 el('email').oninput = () => rememberEmail(); el('clearEmail').onclick = clearEmail;
@@ -1438,7 +1455,9 @@ async function init() {
     if (draft?.entries?.length && settings) {
       selected = draft.entries.map(r => ({ ...r, url: URL.createObjectURL(r.beautyFile || r.file) }));
       el('message').value = draft.message || ''; el('keepMessage').checked = !!draft.keepMessage;
-      notice('전송 대기 사진 ' + selected.length + '장을 복원했습니다. 같은 작업으로 계속해 주세요.' + (draft.lost ? ' 나머지 ' + draft.lost + '장은 다시 선택해 주세요. 이미 올라간 사진은 다시 올리지 않습니다.' : ''), !!draft.lost);
+      // 복원 안내는 실제 목록을 보여주는 resume 버튼 하나로 제공한다.
+      // 일반 notice에 장수를 남겨 두면 삭제 후에도 오래된 안내가 남는다.
+      if (draft.lost) notice('저장하지 못한 사진 ' + draft.lost + '장은 다시 선택해 주세요. 이미 올라간 사진은 다시 올리지 않습니다.', true);
     } else if (draft?.lost) { notice('화면이 닫혀 올리던 사진 ' + draft.lost + '장이 대기 목록에서 빠졌습니다. 같은 사진을 다시 선택하면 이미 올라간 사진은 건너뛰고 나머지만 올립니다.', true);
     } else if (storage.get('capturePending')) { notice('촬영·사진 선택 중 화면이 다시 열렸습니다. 사진이 전달되지 않았다면 앨범에서 다시 선택해 주세요.', true); storage.set('capturePending', false); }
     if (settings?.target && settings.targetSource==='device'&&!storage.get('lastTarget')) rememberTarget(settings.target);

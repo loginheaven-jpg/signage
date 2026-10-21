@@ -28,6 +28,7 @@ async function click(page,selector){
  if(selector==='#continueResume'){await page.locator('#work').waitFor();if(!await page.locator('#continueResume').isVisible())return;}
  const locator=page.locator(selector),details=locator.locator('xpath=ancestor::details[1]');
  if(await details.count()&&!await details.evaluate(el=>el.open))await details.locator('summary').click();
+ if(selector==='#discard'&&!page.listenerCount('dialog'))page.once('dialog',dialog=>dialog.accept());
  await locator.click();
  if(selector==='#saveLocation'&&await page.locator('#locationDialog').isVisible())await page.locator('#locationDialog').waitFor({state:'hidden'});
 }
