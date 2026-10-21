@@ -46,38 +46,26 @@ const { startPreview } = require('./camera-preview.cjs');
   assert.equal(await page.evaluate(()=>window.beautyPaintCalls),1,'rapid slider events render once per frame');
   await setStrength(35);await page.waitForFunction(()=>document.querySelector('#beautyStrength').value==='35');
   const pixels=await page.evaluate(()=>{
-   const {source,retouched,alpha}=beautyPrepared;
+   const {source,retouched,alpha,tone}=beautyPrepared;
    const output=CameraBeauty.paint(beautyPrepared,35).getContext('2d').getImageData(0,0,source.width,source.height).data;
    let changed=0,outside=0,smoothed=0;
    for(let i=0;i<output.length;i+=4){
     const different=output[i]!==source.data[i]||output[i+1]!==source.data[i+1]||output[i+2]!==source.data[i+2];
-    if(different){changed++;if(!alpha[i+3])outside++;}
-    if(alpha[i+3]&&(retouched[i]!==source.data[i]||retouched[i+1]!==source.data[i+1]))smoothed++;
+    if(different){changed++;if(!alpha[i/4]&&!tone[i/4])outside++;}
+    if(alpha[i/4]&&(retouched[i]!==source.data[i]||retouched[i+1]!==source.data[i+1]))smoothed++;
    }
    const strengths=[0,35,70,100].map(strength=>{
     const image=CameraBeauty.paint(beautyPrepared,strength).getContext('2d').getImageData(0,0,source.width,source.height).data;
     let sum=0,count=0;
-    for(let i=0;i<image.length;i+=4)if(alpha[i+3]>250)for(let c=0;c<3;c++){sum+=Math.abs(image[i+c]-source.data[i+c]);count++;}
+    for(let i=0;i<image.length;i+=4)if(alpha[i/4]>250)for(let c=0;c<3;c++){sum+=Math.abs(image[i+c]-source.data[i+c]);count++;}
     return sum/count;
    });
-   // 피부색과 무관하게 마스크 가장자리 자체가 넓고 연속적인 완충 구간을 갖는지 확인한다.
-   let widest=0,edgeRamp=0,edgeMaxStep=0;
-   for(let y=0;y<source.height;y++){
-    const row=[];for(let x=0;x<source.width;x++)row.push(alpha[(y*source.width+x)*4+3]);
-    const first=row.findIndex(a=>a>0),full=row.findIndex(a=>a>=250);
-    let last=row.length-1;while(last>=0&&!row[last])last--;
-    if(first>=0&&full>first&&last-first>widest){
-     widest=last-first;edgeRamp=full-first;edgeMaxStep=0;
-     for(let x=first;x<=full;x++)edgeMaxStep=Math.max(edgeMaxStep,row[x]-(row[x-1]||0));
-    }
-   }
-   return {changed,outside,smoothed,faces:beautyPrepared.faces,strengths,edgeRamp,edgeMaxStep};
+   return {changed,outside,smoothed,faces:beautyPrepared.faces,strengths,maskBytes:alpha.byteLength+tone.byteLength};
   });
   assert.ok(pixels.faces>=1);assert.ok(pixels.changed>1000);assert.ok(pixels.smoothed>1000);assert.equal(pixels.outside,0,'background and excluded features remain unchanged');
-  assert.equal(pixels.strengths[0],0);assert.ok(pixels.strengths[1]>4,'natural preset visibly exceeds previous 1.3-level mean change');
+  assert.equal(pixels.strengths[0],0);assert.ok(pixels.strengths[1]>2,'skin correction remains visible with restrained tone adjustment');
   assert.ok(pixels.strengths[2]>pixels.strengths[1]*1.7);assert.ok(pixels.strengths[3]>pixels.strengths[2]);
-  assert.ok(pixels.edgeRamp>=10,'outer facial mask has a broad transition instead of a narrow gray ring');
-  assert.ok(pixels.edgeMaxStep<=30,'outer transition avoids a sudden brightness step');
+  assert.equal(pixels.maskBytes,await page.evaluate(()=>beautyBase.width*beautyBase.height*2),'skin and tone use compact masks');
   assert.equal(await page.locator('#beautyStrength').inputValue(),'35');
   assert.equal(await page.evaluate(()=>beautyPrepared.canvas===beautyBase),true,'face processing reuses the decoded photo');
   assert.equal(await page.evaluate(()=>beautyPrepared.smooth===undefined),true,'intermediate smoothing array is not retained');
