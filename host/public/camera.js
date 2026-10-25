@@ -1025,11 +1025,17 @@ function renderMessageChips() {
   el('messageChips').hidden = mode === 'archive' || !groups.length;
 }
 // ── 촬영 ──
-// 안드로이드는 폰 카메라 앱을 여는 동안 메모리가 모자라면 이 화면을 닫아 버리고, 그러면 찍은 사진을 받을 곳이 없어
-// 사라진다(카메라 앱이 앱에 넘겨주려고 찍은 사진은 앨범에도 남지 않는다). 그래서 화면 안 카메라를 기본으로 쓰고,
-// 찍자마자 대기 목록(기기 저장소)에 넣는다. 아이폰은 화면 안 카메라의 화질이 낮아 폰 카메라 앱으로 찍는다.
+// 폰의 기본 촬영은 폰 카메라 앱이다. 다만 카메라 앱을 여는 동안 메모리가 모자라면 휴대폰이 이 화면을 닫아 버리고,
+// 그러면 찍은 사진을 받을 곳이 없어 사라진다(카메라 앱이 앱에 넘겨주려고 찍은 사진은 앨범에도 남지 않는다).
+// 그런 일이 생겼을 때만 보조카메라(화면 안 카메라)를 권한다. 화면을 떠나지 않으므로 찍자마자 대기 목록에 남는다.
 let cameraFacing = 'environment';
-const inPageCamera = () => !!navigator.mediaDevices?.getUserMedia && (!isMobile || /Android/i.test(navigator.userAgent));
+const auxCameraAvailable = () => isMobile && !!navigator.mediaDevices?.getUserMedia;
+async function openAuxCamera() {
+  if (await openInPageCamera()) return;
+  // 권한 창을 거치면 '사용자가 누른 동작'이 끝나 파일 창을 바로 열 수 없으므로 단추로 이어 준다.
+  notice('보조카메라를 열지 못했습니다. 브라우저 설정에서 이 사이트의 카메라 권한을 확인해 주세요. 지금은 폰 카메라나 앨범으로 다시 할 수 있습니다.', true, 'capture');
+  noticeActions([['다시 촬영', () => el('shoot').click(), true], ['앨범에서 고르기', () => el('choose').click()]]);
+}
 async function openInPageCamera() {
   try {
     cameraStream?.getTracks().forEach(track => track.stop());
@@ -1037,7 +1043,7 @@ async function openInPageCamera() {
     if (currentPage !== 'work') { cameraStream.getTracks().forEach(track => track.stop()); cameraStream = null; return true; }
     el('cameraVideo').srcObject = cameraStream;
     el('cameraVideo').classList.toggle('mirrored', cameraFacing === 'user');
-    el('flipCamera').hidden = !isMobile; el('nativeCamera').hidden = !isMobile;
+    el('flipCamera').hidden = !isMobile; el('nativeCamera').hidden = !isMobile; el('cameraTitle').textContent = isMobile ? '보조카메라' : '사진 촬영';
     if (!el('cameraDialog').open) openDialog('cameraDialog');
     return true;
   } catch { cameraStream = null; return false; }
@@ -1074,9 +1080,10 @@ function captureLostNotice(kind) {
     notice('사진을 고르는 동안 휴대폰이 이 화면을 다시 열었습니다. 다시 골라 주세요. 앨범의 사진은 그대로 있습니다.', true, 'capture');
     return noticeActions([['앨범에서 고르기', () => el('choose').click(), true]]);
   }
-  const video = kind === 'videoInput';
-  notice('카메라 앱을 다녀오는 동안 휴대폰이 이 화면을 다시 열어, 방금 찍은 ' + (video ? '영상' : '사진') + '을 받지 못했습니다. 카메라 앱으로 찍은 것은 앨범에 남지 않을 수 있으니 다시 찍어 주세요.', true, 'capture');
-  noticeActions([['다시 촬영', () => el(video ? 'shootVideo' : 'shoot').click(), true], ['앨범에서 고르기', () => el('choose').click()]]);
+  const video = kind === 'videoInput', aux = !video && auxCameraAvailable();
+  notice('카메라 앱을 다녀오는 동안 휴대폰 메모리가 부족해 이 화면이 다시 열렸고, 방금 찍은 ' + (video ? '영상' : '사진') + '을 받지 못했습니다. 카메라 앱으로 찍은 것은 앨범에 남지 않을 수 있으니 다시 찍어 주세요.' +
+    (aux ? ' 같은 일이 반복되면 보조카메라로 찍으세요. 이 화면 안에서 찍어 사진이 사라지지 않습니다.' : ''), true, 'capture');
+  noticeActions([['다시 촬영', () => el(video ? 'shootVideo' : 'shoot').click(), true], ...(aux ? [['보조카메라로 찍기', openAuxCamera]] : []), ['앨범에서 고르기', () => el('choose').click()]]);
 }
 function removeDraftEntries(entries, all = false) {
   if (busy || !entries.length) return;
@@ -1484,12 +1491,11 @@ for (const [button, input] of [['shoot', 'shootInput'], ['shootVideo', 'videoInp
     if (busy) return;
     beautyWarmCandidate = null;
     beautyWarmup.clear();
-    if (button === 'shoot' && inPageCamera()) {
-      if (await openInPageCamera()) return;
-      if (!isMobile) return notice('카메라 연결과 브라우저의 카메라 허용 여부를 확인해 주세요. 사진 파일 선택도 사용할 수 있습니다.', true);
-      // 권한 창을 거치면 '사용자가 누른 동작'이 끝나 파일 창을 바로 열 수 없으므로 단추로 이어 준다.
-      notice('화면 안 카메라를 쓸 수 없습니다. 브라우저의 카메라 권한을 허용하면 찍은 사진이 더 안전하게 저장됩니다. 지금은 폰 카메라 앱으로 찍을 수 있습니다.', true, 'capture');
-      return noticeActions([['폰 카메라 앱으로 찍기', () => nativeCapture('shootInput'), true]]);
+    // 폰은 항상 폰 카메라 앱으로 찍는다. PC에는 카메라 앱이 없으므로 화면 안 카메라를 연다.
+    if (button === 'shoot' && !isMobile) {
+      if (!navigator.mediaDevices?.getUserMedia) return notice('이 브라우저에서는 카메라를 사용할 수 없습니다. 사진 파일을 선택해 주세요.', true);
+      if (!await openInPageCamera()) notice('카메라 연결과 브라우저의 카메라 허용 여부를 확인해 주세요. 사진 파일 선택도 사용할 수 있습니다.', true);
+      return;
     }
     nativeCapture(input);
   };
