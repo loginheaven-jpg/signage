@@ -1024,6 +1024,60 @@ function renderMessageChips() {
   el('messageChips').replaceChildren(...groups);
   el('messageChips').hidden = mode === 'archive' || !groups.length;
 }
+// ── 촬영 ──
+// 안드로이드는 폰 카메라 앱을 여는 동안 메모리가 모자라면 이 화면을 닫아 버리고, 그러면 찍은 사진을 받을 곳이 없어
+// 사라진다(카메라 앱이 앱에 넘겨주려고 찍은 사진은 앨범에도 남지 않는다). 그래서 화면 안 카메라를 기본으로 쓰고,
+// 찍자마자 대기 목록(기기 저장소)에 넣는다. 아이폰은 화면 안 카메라의 화질이 낮아 폰 카메라 앱으로 찍는다.
+let cameraFacing = 'environment';
+const inPageCamera = () => !!navigator.mediaDevices?.getUserMedia && (!isMobile || /Android/i.test(navigator.userAgent));
+async function openInPageCamera() {
+  try {
+    cameraStream?.getTracks().forEach(track => track.stop());
+    cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing }, width: { ideal: 3840 }, height: { ideal: 2160 } }, audio: false });
+    if (currentPage !== 'work') { cameraStream.getTracks().forEach(track => track.stop()); cameraStream = null; return true; }
+    el('cameraVideo').srcObject = cameraStream;
+    el('cameraVideo').classList.toggle('mirrored', cameraFacing === 'user');
+    el('flipCamera').hidden = !isMobile; el('nativeCamera').hidden = !isMobile;
+    if (!el('cameraDialog').open) openDialog('cameraDialog');
+    return true;
+  } catch { cameraStream = null; return false; }
+}
+function nativeCapture(input) { storage.set('capturePending', input); el(input).value = ''; el(input).click(); }
+// 사진기 품질의 정지 사진(ImageCapture)을 먼저 쓰고, 지원하지 않거나 기기 회전 정보 때문에 방향이 화면과 다르면
+// 화면에 보이는 그대로 찍는다(잘못 돌아간 사진보다 낫다). 셀카도 저장은 좌우를 뒤집지 않은 사진으로 한다.
+async function takeStill(video) {
+  const track = cameraStream?.getVideoTracks()[0];
+  if (track && 'ImageCapture' in window) {
+    try {
+      const blob = await new ImageCapture(track).takePhoto();
+      const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+      const sameShape = (bitmap.width >= bitmap.height) === (video.videoWidth >= video.videoHeight); bitmap.close();
+      if (sameShape && blob.size) return blob;
+    } catch {}
+  }
+  const canvas = document.createElement('canvas'); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+}
+// 알림 아래에 바로 누를 수 있는 단추를 붙인다. actions: [이름, 동작, 강조]
+function noticeActions(actions) {
+  const row = node('div', undefined, 'noticeActions');
+  for (const [label, run, primary] of actions) {
+    const button = node('button', label, primary ? 'primary' : undefined); button.type = 'button';
+    button.onclick = () => { notice(''); run(); }; row.append(button);
+  }
+  el('notice').append(row);
+}
+// 폰 카메라 앱·앨범을 다녀오는 사이 화면이 다시 열린 경우. 받지 못한 것은 되찾을 수 없으니 곧바로 다시 하게 한다.
+function captureLostNotice(kind) {
+  if (kind === 'galleryInput') {
+    notice('사진을 고르는 동안 휴대폰이 이 화면을 다시 열었습니다. 다시 골라 주세요. 앨범의 사진은 그대로 있습니다.', true, 'capture');
+    return noticeActions([['앨범에서 고르기', () => el('choose').click(), true]]);
+  }
+  const video = kind === 'videoInput';
+  notice('카메라 앱을 다녀오는 동안 휴대폰이 이 화면을 다시 열어, 방금 찍은 ' + (video ? '영상' : '사진') + '을 받지 못했습니다. 카메라 앱으로 찍은 것은 앨범에 남지 않을 수 있으니 다시 찍어 주세요.', true, 'capture');
+  noticeActions([['다시 촬영', () => el(video ? 'shootVideo' : 'shoot').click(), true], ['앨범에서 고르기', () => el('choose').click()]]);
+}
 function removeDraftEntries(entries, all = false) {
   if (busy || !entries.length) return;
   const frozen = entries.some(r => r.submission);
@@ -1430,30 +1484,32 @@ for (const [button, input] of [['shoot', 'shootInput'], ['shootVideo', 'videoInp
     if (busy) return;
     beautyWarmCandidate = null;
     beautyWarmup.clear();
-    if (button === 'shoot' && !isMobile) {
-      if (!navigator.mediaDevices?.getUserMedia) return notice('이 브라우저에서는 카메라를 사용할 수 없습니다. 사진 파일을 선택해 주세요.', true);
-      try {
-        cameraStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 3840 }, height: { ideal: 2160 } }, audio: false });
-        if (currentPage !== 'work') { cameraStream.getTracks().forEach(track => track.stop()); cameraStream = null; return; }
-        el('cameraVideo').srcObject = cameraStream; openDialog('cameraDialog');
-      } catch { notice('카메라 연결과 브라우저의 카메라 허용 여부를 확인해 주세요. 사진 파일 선택도 사용할 수 있습니다.', true); }
-      return;
+    if (button === 'shoot' && inPageCamera()) {
+      if (await openInPageCamera()) return;
+      if (!isMobile) return notice('카메라 연결과 브라우저의 카메라 허용 여부를 확인해 주세요. 사진 파일 선택도 사용할 수 있습니다.', true);
+      // 권한 창을 거치면 '사용자가 누른 동작'이 끝나 파일 창을 바로 열 수 없으므로 단추로 이어 준다.
+      notice('화면 안 카메라를 쓸 수 없습니다. 브라우저의 카메라 권한을 허용하면 찍은 사진이 더 안전하게 저장됩니다. 지금은 폰 카메라 앱으로 찍을 수 있습니다.', true, 'capture');
+      return noticeActions([['폰 카메라 앱으로 찍기', () => nativeCapture('shootInput'), true]]);
     }
-    storage.set('capturePending', true); el(input).value = ''; el(input).click();
+    nativeCapture(input);
   };
   el(input).onchange = () => addFiles(el(input).files, input === 'videoInput' || input === 'shootInput');
   el(input).addEventListener('cancel', () => storage.set('capturePending', false));
 }
 el('closeCamera').onclick = () => closeDialog('cameraDialog');
+el('flipCamera').onclick = async () => {
+  cameraFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+  if (!await openInPageCamera()) notice('다른 쪽 카메라를 열지 못했습니다.', true);
+};
+// 파일 창은 누른 동작 안에서 먼저 연 뒤 카메라 화면을 닫는다.
+el('nativeCamera').onclick = () => { nativeCapture('shootInput'); closeDialog('cameraDialog'); };
 el('cameraDialog').addEventListener('close', () => { cameraStream?.getTracks().forEach(track => track.stop()); cameraStream = null; el('cameraVideo').srcObject = null; });
 el('snap').onclick = async () => {
   const video = el('cameraVideo');
   if (!video.videoWidth) return notice('카메라가 준비되면 다시 촬영해 주세요.', true);
   el('snap').disabled = true;
   try {
-    const canvas = document.createElement('canvas'); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
-    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+    const blob = await takeStill(video);
     if (!blob) throw new Error('capture');
     const file = new File([blob], '촬영_' + Date.now() + '.jpg', { type: 'image/jpeg', lastModified: Date.now() });
     const closed = new Promise(resolve => el('cameraDialog').addEventListener('close', resolve, { once: true }));
@@ -1499,7 +1555,9 @@ async function init() {
       // 일반 notice에 장수를 남겨 두면 삭제 후에도 오래된 안내가 남는다.
       if (draft.lost) notice('저장하지 못한 사진 ' + draft.lost + '장은 다시 선택해 주세요. 이미 올라간 사진은 다시 올리지 않습니다.', true);
     } else if (draft?.lost) { notice('화면이 닫혀 올리던 사진 ' + draft.lost + '장이 대기 목록에서 빠졌습니다. 같은 사진을 다시 선택하면 이미 올라간 사진은 건너뛰고 나머지만 올립니다.', true);
-    } else if (storage.get('capturePending')) { notice('촬영·사진 선택 중 화면이 다시 열렸습니다. 사진이 전달되지 않았다면 앨범에서 다시 선택해 주세요.', true); storage.set('capturePending', false); }
+    }
+    // 대기 사진이 있어도 알린다. 사진이 도착했다면 addFiles 가 이 표시를 지웠을 것이다.
+    if (storage.get('capturePending')) { captureLostNotice(storage.get('capturePending')); storage.set('capturePending', false); }
     if (settings?.target && settings.targetSource==='device'&&!storage.get('lastTarget')) rememberTarget(settings.target);
     storage.set('settings',settings);
     workStage='capture';navigation = { camera: true, page: 'work', depth: 0 }; history.replaceState(navigation, '');showWork(false);
