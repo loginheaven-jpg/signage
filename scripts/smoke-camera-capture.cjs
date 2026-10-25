@@ -23,6 +23,7 @@ const ANDROID = 'Mozilla/5.0 (Linux; Android 14; SM-S921N) AppleWebKit/537.36 (K
       const page = await context.newPage();
       const errors = []; page.on('pageerror', error => errors.push(error.message));
       page.on('dialog', dialog => dialog.accept());
+      await page.addInitScript(() => { if (localStorage.getItem('test.discard')) Object.defineProperty(document, 'wasDiscarded', { configurable: true, value: true }); });
       await page.goto(preview.url + '/camera');
       await cameraUI.click(page, '#home'); await page.locator('#captureHome').waitFor();
       await cameraUI.click(page, '[data-mode=live]'); await cameraUI.fill(page, '#uploader', '김예봄');
@@ -32,12 +33,19 @@ const ANDROID = 'Mozilla/5.0 (Linux; Android 14; SM-S921N) AppleWebKit/537.36 (K
       return { page, errors };
     };
     const watchNative = page => page.evaluate(() => { window.nativeOpened = []; for (const id of ['shootInput', 'videoInput', 'galleryInput']) document.getElementById(id).addEventListener('click', () => window.nativeOpened.push(id)); });
-    // 폰 카메라 앱·앨범을 다녀오는 사이 휴대폰이 화면을 다시 연 상황
-    const reopenedWhile = async (page, input) => {
-      await page.evaluate(id => localStorage.setItem('camera.capturePending', JSON.stringify(id)), input);
-      await page.reload(); await page.locator('#work').waitFor(); await page.locator('#notice .noticeActions').waitFor();
+    // 폰 카메라 앱·앨범을 다녀오는 사이 휴대폰이 화면을 다시 연 상황. 브라우저가 메모리 부족으로 닫았다는 표시(document.wasDiscarded)를 함께 흉내 낸다.
+    const reopenedWhile = async (page, input, { discarded = true, sameSession = true, ageMs = 20000 } = {}) => {
+      await page.evaluate(({ input, discarded, sameSession, ageMs }) => {
+        const at = Date.now() - ageMs;
+        localStorage.setItem('camera.capturePending', JSON.stringify({ input, at }));
+        if (sameSession) sessionStorage.setItem('camera.captureSession', String(at)); else sessionStorage.removeItem('camera.captureSession');
+        localStorage.setItem('test.discard', discarded ? '1' : '');
+      }, { input, discarded, sameSession, ageMs });
+      await page.reload(); await page.locator('#work').waitFor();
+      await page.waitForFunction(() => localStorage.getItem('camera.capturePending') === 'false');
       await watchNative(page);
     };
+    const lastLog = page => page.evaluate(() => JSON.parse(localStorage.getItem('camera.captureLog'))[0]);
     const buttons = page => page.locator('#notice .noticeActions button').allTextContents();
 
     const { page, errors } = await open(['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'], ['camera']);
@@ -50,11 +58,13 @@ const ANDROID = 'Mozilla/5.0 (Linux; Android 14; SM-S921N) AppleWebKit/537.36 (K
     assert.deepEqual(await page.evaluate(() => window.nativeOpened), ['shootInput']);
     assert.equal(await page.locator('#cameraDialog').isHidden(), true, 'the in-page camera is not the default');
     assert.equal(await page.evaluate(() => localStorage.getItem('camera.capturePending')), 'false', 'a delivered photo clears the pending mark');
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('camera.captureCount'))), 1);
 
     // 2. The page was reopened while the camera app was open: the notice shows even with photos waiting.
     await reopenedWhile(page, 'shootInput');
-    assert.match(await page.locator('#notice').textContent(), /메모리가 부족해.*방금 찍은 사진을 받지 못했습니다.*보조카메라/s);
+    assert.match(await page.locator('#notice').textContent(), /메모리가 부족해.*방금 찍은 사진을 받지 못했습니다.*12MP.*보조카메라/s);
     assert.deepEqual(await buttons(page), ['다시 촬영', '보조카메라로 찍기']);
+    assert.match(JSON.stringify(await lastLog(page)), /"kind":"discarded".*"photos":1/, 'the device keeps a record of the interruption');
     // "다시 촬영" goes back to the phone camera app.
     const again = page.waitForEvent('filechooser');
     await page.locator('#notice .noticeActions button', { hasText: '다시 촬영' }).click();
@@ -89,6 +99,32 @@ const ANDROID = 'Mozilla/5.0 (Linux; Android 14; SM-S921N) AppleWebKit/537.36 (K
     await reopenedWhile(page, 'galleryInput');
     assert.match(await page.locator('#notice').textContent(), /갤러리의 사진은 그대로 있습니다/);
     assert.deepEqual(await buttons(page), ['갤러리에서 다시 고르기']);
+    // Without the browser's memory signal: a reload in the same tab is reported as such; a fresh launch later only mentions the past attempt; a very old mark is cleared quietly.
+    await reopenedWhile(page, 'shootInput', { discarded: false });
+    assert.match(await page.locator('#notice').textContent(), /새로 열렸습니다\(메모리 부족 표시는 없음\)/);
+    assert.deepEqual(await buttons(page), ['다시 촬영', '보조카메라로 찍기']);
+    assert.equal((await lastLog(page)).kind, 'reloaded');
+    await reopenedWhile(page, 'shootInput', { discarded: false, sameSession: false });
+    assert.match(await page.locator('#notice').textContent(), /지난번 촬영이 끝나기 전에 앱이 닫혔습니다.*취소만 했다면 무시해도 됩니다/);
+    assert.deepEqual(await buttons(page), ['다시 촬영']);
+    assert.equal((await lastLog(page)).kind, 'reopened');
+    await reopenedWhile(page, 'shootInput', { discarded: false, sameSession: false, ageMs: 11 * 60000 });
+    assert.equal(await page.locator('#notice .noticeActions').count(), 0, 'a mark older than ten minutes is not worth a warning');
+    assert.equal((await lastLog(page)).kind, 'stale');
+    // Coming back from the camera app without a photo (cancel on a browser that sends no cancel event) clears the mark after a few seconds.
+    await page.evaluate(() => { localStorage.setItem('camera.capturePending', JSON.stringify({ input: 'shootInput', at: Date.now() - 3000 })); document.dispatchEvent(new Event('visibilitychange')); });
+    await page.waitForFunction(() => localStorage.getItem('camera.capturePending') === 'false', null, { timeout: 8000 });
+    assert.equal((await lastLog(page)).kind, 'cancelled');
+    // ...but a photo that arrives within that window is not mistaken for a cancel.
+    await page.evaluate(() => { localStorage.setItem('camera.capturePending', JSON.stringify({ input: 'shootInput', at: Date.now() - 3000 })); document.dispatchEvent(new Event('visibilitychange')); });
+    await page.locator('#shootInput').setInputFiles(photo());
+    await page.waitForTimeout(5500);
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('camera.captureLog')).filter(r => r.kind === 'cancelled').length), 1, 'no new cancel record once the photo arrived');
+    // The record is shown on the status screen so it can be reported.
+    await cameraUI.status(page);
+    assert.match(await page.locator('#captureLogSummary').textContent(), /화면이 다시 열린 경우 \d+회/);
+    assert.ok(await page.locator('#captureLogList p').count() >= 5);
+    await cameraUI.closeDialogs(page);
     assert.deepEqual(errors, []);
 
     // 4. Without camera permission the aux camera cannot open; the phone camera stays one tap away.

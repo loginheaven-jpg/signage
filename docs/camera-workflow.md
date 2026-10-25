@@ -227,3 +227,16 @@ OAuth callback은 기존 signage.yebom.org에서 수행하고 기본 관리자 �
 - 사진 유실 안내에 카메라 앱을 12MP 기본 모드로 두라는 안내를 넣었다.
 
 검증: `node ../scripts/smoke-camera-memory.cjs`. 실제 효과는 갤럭시에서 개선 전후를 비교해야 한다: (A) 등록하지 않고 10장 연속 추가, (B) 한 장씩 등록하며 30회 반복. USB 연결이 되면 `adb shell dumpsys meminfo` 로 브라우저 렌더러(`com.android.chrome:sandboxed_process*`)의 메모리를 각 단계에서 읽고, 어려우면 화면이 다시 열린 횟수를 센다.
+## 촬영 중단의 원인 가리기와 기록 (2026-10-25)
+
+카메라 앱·갤러리를 열 때 `localStorage camera.capturePending`에 `{ input, at }`를 적고, 같은 탭인지 가리는 표시를 `sessionStorage camera.captureSession`에 둔다.
+사진이 오거나(`addFiles`) 취소 신호(`cancel`)가 오면 지운다. 취소 신호를 주지 않는 브라우저를 위해, 화면이 다시 보인 뒤 5초 안에 사진이 오지 않으면 취소로 보고 지운다(`cancelled`).
+
+화면이 열릴 때 표시가 남아 있으면 원인을 가려 안내와 기록을 달리한다.
+- `discarded`: `document.wasDiscarded`가 참. 브라우저가 메모리 부족으로 페이지를 닫았다는 신호. 강한 안내(다시 촬영·보조카메라, 12MP 안내).
+- `reloaded`: 같은 탭이 10분 안에 다시 열렸으나 메모리 신호는 없음(사용자 새로고침, 로그인 되돌아오기 등). "메모리 부족 표시는 없음"이라고 밝힌다.
+- `reopened`: 새 세션(앱을 새로 엶). 지난번 촬영이 끝나기 전에 앱이 닫혔다고만 알리고, 취소만 했다면 무시하라고 한다. 보조카메라 단추는 내지 않는다.
+- `stale`: 표시가 10분 넘게 묵음. 알리지 않고 기록만 남긴다.
+
+기록은 `localStorage camera.captureLog`(최근 20건: 시각·종류·연 지 몇 초·대기 사진 수·RAM·스크립트 힙·브라우저·설치형 여부·navigation type)와 `camera.captureCount`(카메라·갤러리를 연 횟수)에 두고,
+`내 사진·등록 상태`의 `촬영 중단 기록`에 보여 준다. 서버로 보내지 않는다. 문제를 알릴 때 이 화면을 캡처해 보내면 진짜 유실(`discarded`·`reloaded`)인지 잘못된 경보인지와 발생 비율을 알 수 있다.

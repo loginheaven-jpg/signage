@@ -82,7 +82,7 @@ const { startPreview } = require('./camera-preview.cjs');
     await low.page.waitForFunction(() => selected.length === 1);
     assert.equal(await low.page.evaluate(() => beautyWarmup.cached === null && beautyWarmCandidate === null && !storage.get('warmStreak')), true, 'no preparation on a low-memory phone');
     // Losing a photo to the camera app also tells the photographer about the camera's 12MP mode.
-    await low.page.evaluate(() => localStorage.setItem('camera.capturePending', JSON.stringify('shootInput')));
+    await low.page.evaluate(() => { const at = Date.now() - 5000; localStorage.setItem('camera.capturePending', JSON.stringify({ input: 'shootInput', at })); sessionStorage.setItem('camera.captureSession', String(at)); });
     await low.page.reload(); await low.page.locator('#notice .noticeActions').waitFor();
     assert.match(await low.page.locator('#notice').textContent(), /12MP 기본 모드/);
     assert.deepEqual(low.errors, []);

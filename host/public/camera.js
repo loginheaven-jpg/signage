@@ -919,7 +919,7 @@ function uploadVideo(form, onProgress) {
 async function addFiles(files, captured = false) {
   beautyWarmCandidate = null;
   beautyWarmup.clear();
-  storage.set('capturePending', false);
+  clearCapturePending(); clearTimeout(captureReturnTimer);
   // 모니터에 표출하는 목적은 30장, 교회폴더에 저장만 하는 목적은 한 번에 수백 장까지 받는다.
   const limit = mode === 'archive' ? (config.maxArchiveBatch || 500) : (config.maxBatch || 30);
   const slots = limit - selected.length;
@@ -1083,7 +1083,59 @@ async function openInPageCamera() {
   } catch { cameraStream = null; return false; }
 }
 // 폰 카메라 앱·앨범을 열기 직전에 미리보기 이미지와 공유용 메모리 사본을 거둬, 뒤로 가는 이 화면이 가볍게 남게 한다.
-function nativeCapture(input) { releaseReviewMedia(); offloadShareBatch(); storage.set('capturePending', input); el(input).value = ''; el(input).click(); }
+function nativeCapture(input) {
+  releaseReviewMedia(); offloadShareBatch();
+  const at = Date.now();
+  storage.set('capturePending', { input, at });
+  try { sessionStorage.setItem('camera.captureSession', String(at)); } catch {}   // 같은 탭이 다시 열린 것인지 가리는 표시
+  storage.set('captureCount', (storage.get('captureCount') || 0) + 1);
+  el(input).value = ''; el(input).click();
+}
+function clearCapturePending() { storage.set('capturePending', false); try { sessionStorage.removeItem('camera.captureSession'); } catch {} }
+// 카메라 앱·앨범에서 돌아왔는데 몇 초가 지나도 사진이 오지 않으면 취소한 것으로 본다.
+// 브라우저가 취소(cancel) 신호를 주지 않는 기기에서 표시가 남아 다음에 열 때 엉뚱한 안내가 뜨지 않게 한다.
+let captureReturnTimer = null;
+function watchCaptureReturn() {
+  clearTimeout(captureReturnTimer);
+  const pending = storage.get('capturePending');
+  if (!pending || typeof pending !== 'object' || Date.now() - pending.at < 1000) return;
+  captureReturnTimer = setTimeout(() => {
+    const still = storage.get('capturePending');
+    if (still && still.at === pending.at) { logCapture('cancelled', still, Date.now() - still.at, false); clearCapturePending(); }
+  }, 5000);
+}
+// 촬영 중단 기록(이 기기에만). kind: discarded(브라우저가 메모리 부족으로 닫았다고 표시) · reloaded(같은 탭이 다시 열림) · reopened(앱을 새로 엶) · stale(10분 넘은 표시) · cancelled(사진 없이 돌아옴)
+function logCapture(kind, pending, elapsed, discarded) {
+  let navigation = ''; try { navigation = performance.getEntriesByType('navigation')[0]?.type || ''; } catch {}
+  const row = { at: Date.now(), kind, input: pending.input, elapsed: elapsed === null ? null : Math.round(elapsed / 1000), discarded: !!discarded, navigation,
+    photos: selected.length, memory: navigator.deviceMemory || null, heap: Math.round((performance.memory?.usedJSHeapSize || 0) / 1048576) || null,
+    browser: /SamsungBrowser\/(\d+)/.exec(navigator.userAgent) ? '삼성 인터넷 ' + /SamsungBrowser\/(\d+)/.exec(navigator.userAgent)[1] : /Chrome\/(\d+)/.exec(navigator.userAgent) ? 'Chrome ' + /Chrome\/(\d+)/.exec(navigator.userAgent)[1] : /iPhone|iPad/.test(navigator.userAgent) ? 'iPhone Safari' : '기타',
+    standalone: matchMedia('(display-mode: standalone)').matches };
+  storage.set('captureLog', [row, ...(storage.get('captureLog') || [])].slice(0, 20));
+}
+const CAPTURE_KIND_LABEL = { discarded: '메모리 부족으로 화면이 닫힘(브라우저 표시)', reloaded: '같은 화면이 다시 열림(메모리 표시 없음)', reopened: '촬영이 끝나기 전에 앱이 닫힘', stale: '오래된 표시 정리', cancelled: '사진 없이 돌아옴(취소)' };
+const CAPTURE_INPUT_LABEL = { shootInput: '사진 촬영', videoInput: '영상 촬영', galleryInput: '갤러리 선택' };
+function renderCaptureLog() {
+  const log = storage.get('captureLog') || [], count = storage.get('captureCount') || 0;
+  el('captureLogSection').hidden = !log.length && !count;
+  const incidents = log.filter(r => ['discarded', 'reloaded', 'reopened'].includes(r.kind)).length;
+  el('captureLogSummary').textContent = '이 기기에서 카메라 앱·갤러리를 연 ' + count + '회 중 화면이 다시 열린 경우 ' + incidents + '회';
+  el('captureLogList').replaceChildren(...log.map(r => node('p', kst.format(new Date(r.at)) + ' · ' + (CAPTURE_INPUT_LABEL[r.input] || r.input) + ' · ' + (CAPTURE_KIND_LABEL[r.kind] || r.kind) +
+    (r.elapsed !== null && r.elapsed !== undefined ? ' · 연 지 ' + r.elapsed + '초' : '') + ' · 대기 사진 ' + r.photos + '장' + (r.memory ? ' · RAM ' + r.memory + 'GB' : '') + (r.heap ? ' · 스크립트 ' + r.heap + 'MB' : '') +
+    ' · ' + r.browser + (r.standalone ? '(설치형)' : '') + (r.navigation ? ' · ' + r.navigation : ''), 'hint')));
+}
+// 화면이 열렸을 때 카메라 앱·갤러리를 열었던 표시가 남아 있으면, 왜 다시 열렸는지 가려서 알린다.
+function checkCaptureInterrupted() {
+  const raw = storage.get('capturePending');
+  if (!raw) return;
+  const pending = typeof raw === 'object' ? raw : { input: raw, at: 0 };
+  const elapsed = pending.at ? Date.now() - pending.at : null;
+  let sameSession = false; try { sameSession = sessionStorage.getItem('camera.captureSession') === String(pending.at); } catch {}
+  const discarded = !!document.wasDiscarded;
+  const kind = discarded ? 'discarded' : elapsed !== null && elapsed > 10 * 60000 ? 'stale' : sameSession ? 'reloaded' : 'reopened';
+  logCapture(kind, pending, elapsed, discarded); clearCapturePending();
+  if (kind !== 'stale') captureLostNotice(pending.input, kind);
+}
 // 사진기 품질의 정지 사진(ImageCapture)을 먼저 쓰고, 지원하지 않거나 기기 회전 정보 때문에 방향이 화면과 다르면
 // 화면에 보이는 그대로 찍는다(잘못 돌아간 사진보다 낫다). 셀카도 저장은 좌우를 뒤집지 않은 사진으로 한다.
 async function takeStill(video) {
@@ -1110,14 +1162,19 @@ function noticeActions(actions) {
   el('notice').append(row);
 }
 // 폰 카메라 앱·앨범을 다녀오는 사이 화면이 다시 열린 경우. 받지 못한 것은 되찾을 수 없으니 곧바로 다시 하게 한다.
-function captureLostNotice(kind) {
+// reason: discarded(메모리 부족이 확인됨) · reloaded(같은 탭이 다시 열림, 메모리 표시 없음) · reopened(앱을 새로 엶 — 지난번 촬영 중단)
+function captureLostNotice(kind, reason = 'discarded') {
+  const past = reason === 'reopened';
   if (kind === 'galleryInput') {
-    notice('사진을 고르는 동안 휴대폰이 이 화면을 다시 열었습니다. 다시 골라 주세요. 갤러리의 사진은 그대로 있습니다.', true, 'capture');
+    notice(past ? '지난번에 갤러리에서 고르던 중 앱이 닫혔습니다. 갤러리의 사진은 그대로 있으니 다시 골라 주세요.' : '사진을 고르는 동안 휴대폰이 이 화면을 다시 열었습니다. 다시 골라 주세요. 갤러리의 사진은 그대로 있습니다.', true, 'capture');
     return noticeActions([['갤러리에서 다시 고르기', () => el('choose').click(), true]]);
   }
-  const video = kind === 'videoInput', aux = !video && auxCameraAvailable();
-  notice('카메라 앱을 다녀오는 동안 휴대폰 메모리가 부족해 이 화면이 다시 열렸고, 방금 찍은 ' + (video ? '영상' : '사진') + '을 받지 못했습니다. 카메라 앱으로 찍은 ' + (video ? '영상' : '사진') + '은 갤러리에 저장되지 않으니 다시 찍어 주세요.' +
-    ' 카메라 앱을 12MP 기본 모드로 두면 메모리를 덜 써서 이런 일이 줄어듭니다.' + (aux ? ' 같은 일이 반복되면 보조카메라로 찍으세요. 이 화면 안에서 찍어 사진이 사라지지 않습니다.' : ''), true, 'capture');
+  const video = kind === 'videoInput', what = video ? '영상' : '사진', aux = !video && !past && auxCameraAvailable();
+  const why = reason === 'discarded' ? '카메라 앱을 다녀오는 동안 휴대폰 메모리가 부족해 이 화면이 다시 열렸고, 방금 찍은 ' + what + '을 받지 못했습니다.'
+    : reason === 'reloaded' ? '카메라 앱을 다녀오는 동안 이 화면이 새로 열렸습니다(메모리 부족 표시는 없음). 방금 찍은 ' + what + '이 목록에 없으면 받지 못한 것입니다.'
+    : '지난번 촬영이 끝나기 전에 앱이 닫혔습니다. 그때 찍은 ' + what + '이 목록에 없으면 받지 못한 것입니다. 카메라에서 취소만 했다면 무시해도 됩니다.';
+  notice(why + ' 카메라 앱으로 찍은 ' + what + '은 갤러리에 저장되지 않으니 다시 찍어 주세요.' +
+    (past ? '' : ' 카메라 앱을 12MP 기본 모드로 두면 메모리를 덜 써서 이런 일이 줄어듭니다.') + (aux ? ' 같은 일이 반복되면 보조카메라로 찍으세요. 이 화면 안에서 찍어 사진이 사라지지 않습니다.' : ''), true, 'capture');
   noticeActions([['다시 촬영', () => el(video ? 'shootVideo' : 'shoot').click(), true], ...(aux ? [['보조카메라로 찍기', openAuxCamera]] : [])]);
 }
 function removeDraftEntries(entries, all = false) {
@@ -1355,6 +1412,7 @@ async function sendPhotos() {
   }
 }
 function renderOriginals() {
+  renderCaptureLog();
   el('originalTransfers').hidden = !originals.length;
   el('originalTransferState').textContent = '원본 전송 대기 ' + originals.length + '장' + (originalRunning ? ' · 전송 중' : '');
   el('originalTransferList').replaceChildren(...originals.map(p => node('p', p.file.name + ' · ' + (p.error || '서버 원본 접수 대기'), 'hint')));
@@ -1535,7 +1593,7 @@ for (const [button, input] of [['shoot', 'shootInput'], ['shootVideo', 'videoInp
     nativeCapture(input);
   };
   el(input).onchange = () => addFiles(el(input).files, input === 'videoInput' || input === 'shootInput');
-  el(input).addEventListener('cancel', () => storage.set('capturePending', false));
+  el(input).addEventListener('cancel', () => clearCapturePending());
 }
 el('closeCamera').onclick = () => closeDialog('cameraDialog');
 el('flipCamera').onclick = async () => {
@@ -1565,7 +1623,8 @@ el('refreshHistory').onclick = loadHistory;
 el('message').oninput = () => { el('messageCount').textContent = el('message').value.length; persistDraft(); renderMessageChips(); }; el('keepMessage').onchange = () => persistDraft();
 el('email').oninput = () => rememberEmail(); el('clearEmail').onclick = clearEmail;
 setInterval(expireEmail, 30000);
-document.addEventListener('visibilitychange', () => { syncWakeLock(); if (document.hidden) beautyWarmup.clear(); else { resumeCapturedWarmup(); expireEmail(); resumeArchive(); } });
+document.addEventListener('visibilitychange', () => { syncWakeLock(); if (document.hidden) beautyWarmup.clear(); else { watchCaptureReturn(); resumeCapturedWarmup(); expireEmail(); resumeArchive(); } });
+el('clearCaptureLog').onclick = () => { storage.set('captureLog', []); storage.set('captureCount', 0); renderCaptureLog(); };
 for (const event of ['pointerdown', 'keydown', 'input']) document.addEventListener(event, () => beautyWarmup.touch(), { passive: true });
 window.addEventListener('beforeunload', event => { if ((busy && !backgroundActive) || originals.length) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('online', () => { notice('인터넷에 다시 연결되었습니다. 대기 사진을 확인하고 전송해 주세요.'); originals.forEach(p => p.error = ''); runOriginals(); loadHistory(); resumeArchive(); });
@@ -1598,7 +1657,7 @@ async function init() {
     } else if (draft?.lost) { notice('화면이 닫혀 올리던 사진 ' + draft.lost + '장이 대기 목록에서 빠졌습니다. 같은 사진을 다시 선택하면 이미 올라간 사진은 건너뛰고 나머지만 올립니다.', true);
     }
     // 대기 사진이 있어도 알린다. 사진이 도착했다면 addFiles 가 이 표시를 지웠을 것이다.
-    if (storage.get('capturePending')) { captureLostNotice(storage.get('capturePending')); storage.set('capturePending', false); }
+    checkCaptureInterrupted();
     if (settings?.target && settings.targetSource==='device'&&!storage.get('lastTarget')) rememberTarget(settings.target);
     storage.set('settings',settings);
     workStage='capture';navigation = { camera: true, page: 'work', depth: 0 }; history.replaceState(navigation, '');showWork(false);
