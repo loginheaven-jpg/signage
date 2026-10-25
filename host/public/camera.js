@@ -158,13 +158,13 @@ async function writeDraft() {
       const entryBytes = r.file.size + (r.beautyFile?.size || 0) + (r.aiFile?.size || 0);
       const keep = storedFiles.has(r.key) || !isArchiveEntry(r) || archiveBytes + entryBytes <= DRAFT_BUDGET;
       if (keep && isArchiveEntry(r) && !storedFiles.has(r.key)) archiveBytes += entryBytes;
-      if (keep) { files.set(r.key, r.file); if (r.previewFile) files.set(r.key + ':p', r.previewFile); if (r.beautyFile) files.set(r.key + ':b', r.beautyFile); if(r.aiFile)files.set(r.key+':a',r.aiFile); }
-      const { url, file, previewFile, beautyFile, aiFile, ...lean } = r; entries.push(lean);
+      if (keep) { files.set(r.key, r.file); if (r.previewFile) files.set(r.key + ':p', r.previewFile); if (r.beautyFile) files.set(r.key + ':b', r.beautyFile); if(r.aiFile)files.set(r.key+':a',r.aiFile); if (r.thumb) files.set(r.key + ':t', r.thumb); }
+      const { url, file, previewFile, beautyFile, aiFile, thumb, ...lean } = r; entries.push(lean);
     }
     for (const p of originals) files.set(p.key, p.file);
     await new Promise((resolve, reject) => {
       const tx = db.transaction(['drafts', 'files'], 'readwrite'), store = tx.objectStore('files');
-      for (const [key, blob] of files) if (!storedFiles.has(key) || key.endsWith(':b') || key.endsWith(':a')) store.put(blob, key);
+      for (const [key, blob] of files) if (!storedFiles.has(key) || key.endsWith(':b') || key.endsWith(':a') || key.endsWith(':t')) store.put(blob, key);
       for (const key of storedFiles) if (!files.has(key)) store.delete(key);
       tx.objectStore('drafts').put({ version: 2, settings, entries, originals: originals.map(({ file, ...p }) => p), message: el('message').value, keepMessage: el('keepMessage').checked, shareBatch }, 'current');
       tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
@@ -186,7 +186,7 @@ async function readDraft() {
     const store = db.transaction('files').objectStore('files');
     storedFiles = new Set(await settle(store.getAllKeys()));
     const total = draft.entries.length;
-    for (const r of draft.entries) if (storedFiles.has(r.key)) { r.file = await settle(store.get(r.key)); if (storedFiles.has(r.key + ':p')) r.previewFile = await settle(store.get(r.key + ':p')); if (storedFiles.has(r.key + ':b')) r.beautyFile = await settle(store.get(r.key + ':b')); if(storedFiles.has(r.key+':a'))r.aiFile=await settle(store.get(r.key+':a')); }
+    for (const r of draft.entries) if (storedFiles.has(r.key)) { r.file = await settle(store.get(r.key)); if (storedFiles.has(r.key + ':p')) r.previewFile = await settle(store.get(r.key + ':p')); if (storedFiles.has(r.key + ':b')) r.beautyFile = await settle(store.get(r.key + ':b')); if(storedFiles.has(r.key+':a'))r.aiFile=await settle(store.get(r.key+':a')); if (storedFiles.has(r.key + ':t')) r.thumb = await settle(store.get(r.key + ':t')); }
     for (const p of draft.originals) if (storedFiles.has(p.key)) p.file = await settle(store.get(p.key));
     draft.entries = draft.entries.filter(r => r.file); draft.originals = draft.originals.filter(p => p.file);
     draft.lost = total - draft.entries.length;
@@ -220,9 +220,10 @@ function renderEmail() {
     el('emailSuggestion').append(button);
   }
 }
+// 원본을 통째로 풀지 않고 긴 변 maxEdge 로 줄여 복호화한다(12MP 48MB, 50MP 200MB 순간 사용을 피함). 캔버스는 쓰고 바로 비운다.
 async function sharingFile(file, id, maxEdge = 3840, quality = 0.9) {
   let image;
-  try { image = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+  try { image = await createImageBitmap(file, await window.CameraBeauty.bitmapOptions(file, maxEdge)); }
   catch {
     const url = URL.createObjectURL(file);
     try { image = await new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = url; }); }
@@ -233,9 +234,28 @@ async function sharingFile(file, id, maxEdge = 3840, quality = 0.9) {
     const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale));
     canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+    canvas.width = canvas.height = 0;
     if (!blob) throw new Error('share conversion');
     return new File([blob], 'photo_' + id.slice(-12) + '.jpg', { type: 'image/jpeg' });
-  } finally { image.close?.(); }
+  } finally { image.close?.(); if (image instanceof HTMLImageElement) image.removeAttribute('src'); }
+}
+// 검토 목록용 작은 미리보기(긴 변 800px). 원본 대신 이것을 화면에 올려 사진이 쌓여도 메모리가 늘지 않게 한다.
+async function makeThumb(file) {
+  try { return await sharingFile(file, 'thumb', 800, 0.8); } catch { return null; }
+}
+// 미리보기 화면을 떠날 때(촬영·사진 추가·폰 카메라 앱 열기) 이미지 요소와 표시용 URL을 모두 거둔다.
+function releaseReviewMedia() {
+  for (const r of selected) if (r.url) { URL.revokeObjectURL(r.url); r.url = ''; }
+  el('selectedPhotos').replaceChildren();
+}
+// 공유용 축소본은 기기 저장소에도 있으므로 메모리 사본을 저장소의 것으로 바꿔 둔다(공유창에서 읽을 때 디스크에서 온다).
+async function offloadShareBatch() {
+  if (!shareBatch?.photos.length) return;
+  try {
+    const db = await openDb(), stored = await settle(db.transaction('drafts').objectStore('drafts').get('current'));
+    if (stored?.shareBatch?.key !== shareBatch.key) return;
+    for (const photo of shareBatch.photos) { const saved = stored.shareBatch.photos.find(p => p.id === photo.id); if (saved?.file && saved.file.size === photo.file.size) photo.file = saved.file; }
+  } catch {}
 }
 let beautyEntry = null, beautyPrepared = null, beautyLevel = 0, beautyEpoch = 0, beautyProcessing = false, beautyComparing = false;
 let beautyRenderFrame = 0, beautyBase = null, beautyTab = 'skin', beautyEffects = { color: 'none', frame: 'none' };
@@ -243,6 +263,7 @@ let beautyComposition = null, beautyCompositionKey = '', beautyAbort = null;
 let beautyFrameRenderTimer = null;
 let beautyAIFile = null, beautyAIKind = '';
 const beautyWarmup = new window.CameraBeautyWarmup();
+const WARM_STREAK_LIMIT = 2;   // 뽀샤시를 열지 않은 연속 촬영이 이만큼 되면 미리 준비를 쉰다
 let beautySkinJob = null;
 let beautyWarmCandidate = null;
 function resumeCapturedWarmup() {
@@ -380,6 +401,7 @@ function openBeauty(entry) {
   releaseBeautyComposition();const epoch=beautyEpoch;
   beautyBase = null; beautyTab = 'skin';
   beautyAIFile=entry.aiFile||null;beautyAIKind=entry.aiKind||'';
+  storage.set('warmStreak', 0);   // 뽀샤시를 썼으니 다음 촬영부터 다시 미리 준비한다
   beautySkinJob = beautyWarmup.take(beautyAIFile || entry.file);
   if (beautySkinJob) { beautyAbort = beautySkinJob.controller; watchBeautySkin(beautySkinJob, epoch); }
   const effects=window.CameraBeauty.normalizeEffects(entry.photoEffects);
@@ -461,9 +483,9 @@ el('applyBeauty').onclick = async () => {
     const edited=!!beautyAIFile||level>0||effects.color!=='none'||effects.frame!=='none'||!!effects.decorations?.length;
     const file = edited ? await exportEditorPhoto() : null;
     if (epoch !== beautyEpoch || !selected.includes(entry)) return;
-    URL.revokeObjectURL(entry.url); entry.beautyFile = file; entry.beautyLevel = level; entry.beautyScale = 100; entry.photoEffects = effects; delete entry.previewFile;
+    if (entry.url) URL.revokeObjectURL(entry.url); entry.url = ''; entry.beautyFile = file; entry.beautyLevel = level; entry.beautyScale = 100; entry.photoEffects = effects; delete entry.previewFile;
     entry.aiFile=beautyAIFile;entry.aiKind=beautyAIKind;
-    entry.url = URL.createObjectURL(file || entry.file); entry.error = '';
+    entry.thumb = await makeThumb(file || entry.file); entry.error = '';
     await persistDraft(); renderReview(); closeDialog('beautyDialog');
   } catch { if (epoch === beautyEpoch) el('beautyState').textContent = '보정 사진을 준비하지 못했습니다. 다시 시도하거나 원본을 선택해 주세요.'; }
   finally { if (epoch === beautyEpoch) { beautyProcessing = false; renderBeauty(); } }
@@ -916,7 +938,7 @@ async function addFiles(files, captured = false) {
       if (seconds > (config.maxVideoSeconds || 180) + 2) { notice(file.name + ': 영상은 3분까지 가능합니다. (' + Math.round(seconds) + '초)', true); continue; }
       date = localDate(file.lastModified || Date.now()); dateSource = captured ? 'capture' : 'fileModified';
       const requestId = uuid();
-      selected.push({ file, kind: 'video', seconds, requestId, key: requestId, date, dateSource, url: URL.createObjectURL(file), error: '' });
+      selected.push({ file, kind: 'video', seconds, requestId, key: requestId, date, dateSource, url: '', error: '' });
       continue;
     }
     try {
@@ -926,7 +948,7 @@ async function addFiles(files, captured = false) {
     } catch {}
     if (!date && file.lastModified) { date = localDate(file.lastModified); dateSource = captured ? 'capture' : 'fileModified'; }
     const requestId = uuid();
-    const entry = { file, requestId, key: requestId, date, dateSource, url: URL.createObjectURL(file), error: '' };
+    const entry = { file, requestId, key: requestId, date, dateSource, url: '', error: '', thumb: await makeThumb(file) };
     selected.push(entry); added.push(entry);
   }
   if (files.length > REVIEW_PAGE && files.length <= slots) notice('사진 ' + selected.length + '장을 선택했습니다.');
@@ -934,21 +956,21 @@ async function addFiles(files, captured = false) {
   if (selected.length) el('review').scrollIntoView({ behavior: 'smooth', block: 'start' });
   workStage='review';renderReview();
   // 폰 기본 카메라에서 확인을 눌러 돌아온 사진 한 장만 미리 준비한다.
+  // 뽀샤시를 열지 않고 연달아 찍고 있으면(연속 촬영) 준비를 쉰다. 메모리가 적은 기기도 쉰다. 뽀샤시를 열면 다시 준비한다.
   if (captured && added.length === 1 && files.length === 1 && selected.at(-1) === added[0]) {
-    beautyWarmCandidate = { entry: added[0], at: Date.now() }; resumeCapturedWarmup();
+    const streak = storage.get('warmStreak') || 0;
+    if (streak < WARM_STREAK_LIMIT && !(navigator.deviceMemory && navigator.deviceMemory <= 4)) {
+      storage.set('warmStreak', streak + 1);
+      beautyWarmCandidate = { entry: added[0], at: Date.now() }; resumeCapturedWarmup();
+    }
   }
 }
 function renderReview() {
   el('review').hidden = !selected.length;
-  const videos = selected.filter(r => r.kind === 'video').length, photos = selected.length - videos;
-  const countText = [photos ? '사진 ' + photos + '장' : '', videos ? '영상 ' + videos + '개' : ''].filter(Boolean).join(' · ');
-  el('reviewTitle').textContent = countText;
-  el('muteLabel').hidden = !videos || mode === 'archive'; el('muteVideo').disabled = busy;
-  el('reviewDestination').textContent = mode==='archive'?(settings.target?.folderName||settings.target?.eventName||'행사 선택 필요')+'에 보관':(settings.siteName||'등록할 때 보낼 화면 선택')+(mode==='both'?' · 원본도 보관':' · 화면에만 등록');
-  el('messageLabel').hidden = mode === 'archive'; el('keepMessageLabel').hidden = mode === 'archive';
-  el('messageCount').textContent = el('message').value.length;
-  renderMessageChips();
-  renderEmail();
+  renderReviewText();
+  // 검토 화면이 아니면(촬영 화면, 폰 카메라 앱이 뜬 동안) 사진 이미지는 그리지 않고 거둔다.
+  if (workStage !== 'review') { releaseReviewMedia(); renderFlow(); homeSummary(); return; }
+  for (const r of selected) if (!r.url) r.url = URL.createObjectURL(r.kind === 'video' ? r.file : (r.thumb || r.beautyFile || r.file));
   // 수백 장을 한꺼번에 그리면 휴대폰 메모리가 부족해지므로 앞에서부터 일부만 그린다.
   if (!selected.length) reviewShown = REVIEW_PAGE;
   el('selectedPhotos').classList.toggle('singlePhoto',selected.length===1);
@@ -980,10 +1002,22 @@ function renderReview() {
     more.onclick = () => { reviewShown += REVIEW_PAGE; renderReview(); };
     el('selectedPhotos').append(node('p', '목록에는 ' + reviewShown + '장만 표시합니다. 표시하지 않은 사진도 함께 전송합니다.', 'hint'), more);
   }
-  el('send').textContent = (selected.length>1?countText+' ':'')+(mode==='archive'?'이 사진 보관하기':'화면에 올리기');
-  el('discard').textContent = hasFrozen() ? '목록 비우기' : '전체 삭제';
   if(!selected.length&&workStage==='review')workStage='capture';
   renderFlow();homeSummary();
+}
+// 검토 화면의 글·입력칸 상태. 사진 이미지와 달리 어느 단계에서든 맞춰 둔다(옵션 창이 따로 열리므로).
+function renderReviewText() {
+  const videos = selected.filter(r => r.kind === 'video').length, photos = selected.length - videos;
+  const countText = [photos ? '사진 ' + photos + '장' : '', videos ? '영상 ' + videos + '개' : ''].filter(Boolean).join(' · ');
+  el('reviewTitle').textContent = countText;
+  el('muteLabel').hidden = !videos || mode === 'archive'; el('muteVideo').disabled = busy;
+  el('reviewDestination').textContent = mode==='archive'?(settings.target?.folderName||settings.target?.eventName||'행사 선택 필요')+'에 보관':(settings.siteName||'등록할 때 보낼 화면 선택')+(mode==='both'?' · 원본도 보관':' · 화면에만 등록');
+  el('messageLabel').hidden = mode === 'archive'; el('keepMessageLabel').hidden = mode === 'archive';
+  el('messageCount').textContent = el('message').value.length;
+  renderMessageChips();
+  renderEmail();
+  el('send').textContent = (selected.length>1?countText+' ':'')+(mode==='archive'?'이 사진 보관하기':'화면에 올리기');
+  el('discard').textContent = hasFrozen() ? '목록 비우기' : '전체 삭제';
 }
 // 화면 문구 고르기: 교회 공용 문구(서버 설정), 이 기기에서 보낸 최근 문구, 지금 행사 이름을 단추로 보여 준다.
 // 누르면 입력칸에 들어가고 그대로 고쳐 쓸 수 있다. 최근 문구는 이 기기에만 남는다(이름이 든 문구도 있어 서버에 보내지 않음).
@@ -1048,7 +1082,8 @@ async function openInPageCamera() {
     return true;
   } catch { cameraStream = null; return false; }
 }
-function nativeCapture(input) { storage.set('capturePending', input); el(input).value = ''; el(input).click(); }
+// 폰 카메라 앱·앨범을 열기 직전에 미리보기 이미지와 공유용 메모리 사본을 거둬, 뒤로 가는 이 화면이 가볍게 남게 한다.
+function nativeCapture(input) { releaseReviewMedia(); offloadShareBatch(); storage.set('capturePending', input); el(input).value = ''; el(input).click(); }
 // 사진기 품질의 정지 사진(ImageCapture)을 먼저 쓰고, 지원하지 않거나 기기 회전 정보 때문에 방향이 화면과 다르면
 // 화면에 보이는 그대로 찍는다(잘못 돌아간 사진보다 낫다). 셀카도 저장은 좌우를 뒤집지 않은 사진으로 한다.
 async function takeStill(video) {
@@ -1082,7 +1117,7 @@ function captureLostNotice(kind) {
   }
   const video = kind === 'videoInput', aux = !video && auxCameraAvailable();
   notice('카메라 앱을 다녀오는 동안 휴대폰 메모리가 부족해 이 화면이 다시 열렸고, 방금 찍은 ' + (video ? '영상' : '사진') + '을 받지 못했습니다. 카메라 앱으로 찍은 ' + (video ? '영상' : '사진') + '은 갤러리에 저장되지 않으니 다시 찍어 주세요.' +
-    (aux ? ' 같은 일이 반복되면 보조카메라로 찍으세요. 이 화면 안에서 찍어 사진이 사라지지 않습니다.' : ''), true, 'capture');
+    ' 카메라 앱을 12MP 기본 모드로 두면 메모리를 덜 써서 이런 일이 줄어듭니다.' + (aux ? ' 같은 일이 반복되면 보조카메라로 찍으세요. 이 화면 안에서 찍어 사진이 사라지지 않습니다.' : ''), true, 'capture');
   noticeActions([['다시 촬영', () => el(video ? 'shootVideo' : 'shoot').click(), true], ...(aux ? [['보조카메라로 찍기', openAuxCamera]] : [])]);
 }
 function removeDraftEntries(entries, all = false) {
@@ -1555,7 +1590,7 @@ async function init() {
     if(settings.target&&!settings.targetSource)settings.targetSource='device';
     mode=settings.mode;el('uploader').value=settings.uploaderName||'';el('site').value=settings.siteId||'';
     if (draft?.entries?.length && settings) {
-      selected = draft.entries.map(r => ({ ...r, url: URL.createObjectURL(r.beautyFile || r.file) }));
+      selected = draft.entries.map(r => ({ ...r, url: '' }));   // 표시용 URL 은 검토 화면을 그릴 때 만든다
       el('message').value = draft.message || ''; el('keepMessage').checked = !!draft.keepMessage;
       // 복원 안내는 실제 목록을 보여주는 resume 버튼 하나로 제공한다.
       // 일반 notice에 장수를 남겨 두면 삭제 후에도 오래된 안내가 남는다.

@@ -57,9 +57,18 @@ const ui=require('./helpers/camera-ui.cjs');
   await page.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pagehide')));
   assert.equal(await page.evaluate(()=>beautyWarmup.cached),null);
   await page.locator('#galleryInput').setInputFiles([photo('gallery1.jpg'),photo('gallery2.jpg')]);
+  await page.waitForFunction(()=>selected.length===5);   // 미리보기를 만드는 동안 다음 촬영이 겹치지 않게 기다린다
   assert.equal(await page.evaluate(()=>beautyWarmup.cached),null,'bulk gallery selection does not warm every photo');
+  // 뽀샤시를 열지 않고 연달아 두 장을 찍었으면(연속 촬영) 다음 사진은 미리 준비하지 않는다. 뽀샤시를 열면 다시 준비한다.
   await page.locator('#shootInput').setInputFiles(photo('fourth.jpg'));
-  await page.waitForFunction(()=>beautyWarmup.cached?.file.name==='fourth.jpg');
+  await page.waitForFunction(()=>selected.at(-1)?.file.name==='fourth.jpg'&&!document.getElementById('review').hidden);
+  assert.equal(await page.evaluate(()=>beautyWarmup.cached),null,'two captures in a row without opening the editor stop the speculative preparation');
+  assert.equal(await page.evaluate(()=>storage.get('warmStreak')),2);
+  await page.locator('.beautyEdit').last().click();await page.waitForFunction(()=>beautyBase&&!beautyProcessing);
+  assert.equal(await page.evaluate(()=>storage.get('warmStreak')),0,'opening the editor resumes preparation for the next capture');
+  await ui.click(page,'#closeBeauty');await page.locator('#beautyDialog').waitFor({state:'hidden'});
+  await page.locator('#shootInput').setInputFiles(photo('fourth-b.jpg'));
+  await page.waitForFunction(()=>beautyWarmup.cached?.file.name==='fourth-b.jpg');
   await ui.click(page,'#home');await page.waitForFunction(()=>beautyWarmup.cached===null);
   await page.evaluate(()=>Object.defineProperty(document,'hidden',{configurable:true,value:true}));
   await page.locator('#shootInput').setInputFiles(photo('late-visible.jpg'));

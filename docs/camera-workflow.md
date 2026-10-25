@@ -215,3 +215,15 @@ OAuth callback은 기존 signage.yebom.org에서 수행하고 기본 관리자 �
 - PC는 카메라 앱이 없으므로 예전처럼 `촬영하기`가 화면 안 카메라를 연다.
 
 검증: `node ../scripts/smoke-camera-capture.cjs`(가짜 카메라 + 안드로이드 사용자 에이전트). 실제 기기의 화질·회전·권한 창은 기기에서 따로 확인한다.
+
+## 촬영 중 메모리 줄이기 (2026-10-25)
+
+카메라 앱이 뜬 동안 이 화면이 닫히는 일은 휴대폰이 메모리를 보고 정하므로, 뒤로 가는 이 화면을 가볍게 둔다. 효과는 확률적이며 유실 0을 보장하는 것은 보조카메라뿐이다.
+
+- 검토 목록 미리보기: 사진을 추가할 때 축소 복호화(`CameraBeauty.bitmapOptions(file, 800)`)로 긴 변 800px JPEG(q0.8) 미리보기를 만들어 목록에는 그것만 그린다(원본 3~6MB → 수십~백 KB). 기기 저장소 `files` 의 `키:t` 에 함께 두어 다시 열 때 원본을 다시 풀지 않는다. 꾸민 사진은 결과물로 미리보기를 다시 만든다.
+- 검토 화면을 떠날 때(`workStage !== 'review'`)와 폰 카메라 앱·앨범을 열기 직전(`nativeCapture`)에 `releaseReviewMedia()` 가 이미지 요소를 비우고 표시용 객체 URL 을 회수한다. 표시용 URL 은 검토 화면을 그릴 때 다시 만든다. 공유용 축소본은 `offloadShareBatch()` 가 기기 저장소에 저장된 것으로 바꿔 메모리 사본을 놓는다.
+- 전송 축소(`sharingFile`)도 축소 복호화를 쓰고 캔버스를 쓰고 나면 바로 비운다. 50MP 사진에서 200MB 순간 사용이 사라진다.
+- 뽀샤시 미리 준비: 뽀샤시를 열지 않고 연달아 2장을 찍으면(`localStorage camera.warmStreak`) 연속 촬영으로 보고 쉰다. 뽀샤시를 열면 0으로 돌아가 다시 준비한다. `navigator.deviceMemory` 4GB 이하 기기는 처음부터 쉰다.
+- 사진 유실 안내에 카메라 앱을 12MP 기본 모드로 두라는 안내를 넣었다.
+
+검증: `node ../scripts/smoke-camera-memory.cjs`. 실제 효과는 갤럭시에서 개선 전후를 비교해야 한다: (A) 등록하지 않고 10장 연속 추가, (B) 한 장씩 등록하며 30회 반복. USB 연결이 되면 `adb shell dumpsys meminfo` 로 브라우저 렌더러(`com.android.chrome:sandboxed_process*`)의 메모리를 각 단계에서 읽고, 어려우면 화면이 다시 열린 횟수를 센다.

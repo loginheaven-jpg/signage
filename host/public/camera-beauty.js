@@ -34,7 +34,8 @@ window.CameraBeauty = (() => {
       catch (error) { finish(error); }
     });
   }
-  async function bitmapOptions(file) {
+  // 파일 머리에서 크기를 읽어, 원본을 통째로 풀지 않고 긴 변 maxEdge 로 줄여 복호화하게 하는 옵션
+  async function bitmapOptions(file, maxEdge = 2048) {
     const bytes=new DataView(await file.slice(0,512*1024).arrayBuffer());let width=0,height=0;
     if(bytes.byteLength>=24&&bytes.getUint32(0)===0x89504e47){width=bytes.getUint32(16);height=bytes.getUint32(20);}
     else if(bytes.byteLength>=4&&bytes.getUint16(0)===0xffd8){
@@ -47,10 +48,10 @@ window.CameraBeauty = (() => {
       }
     }
     const options={imageOrientation:'from-image'};
-    if(width&&height&&Math.max(width,height)>2048){
+    if(width&&height&&Math.max(width,height)>maxEdge){
       let orientation=1;try{orientation=await window.exifr?.orientation(file)||1;}catch{}
       if(orientation>=5)[width,height]=[height,width];
-      const scale=2048/Math.max(width,height);
+      const scale=maxEdge/Math.max(width,height);
       Object.assign(options,{resizeWidth:Math.max(1,Math.round(width*scale)),resizeHeight:Math.max(1,Math.round(height*scale)),resizeQuality:'high'});
     }
     return options;
@@ -202,5 +203,5 @@ window.CameraBeauty = (() => {
   async function releaseDetector() {
     for (const cancel of [...analysisJobs]) cancel();
   }
-  return { decode,prepare,paint,compose,exportPhoto,file,releaseDetector,normalizeEffects,drawDecorations };
+  return { decode,prepare,paint,compose,exportPhoto,file,releaseDetector,normalizeEffects,drawDecorations,bitmapOptions };
 })();
