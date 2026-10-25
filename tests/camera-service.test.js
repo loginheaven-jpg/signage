@@ -315,4 +315,7 @@ test('bulk archive: known request IDs are reported per device and a full server 
   delete process.env.CAMERA_MIN_FREE_BYTES;
   assert.equal((await f.upload({ requestId: second })).status, 200, 'the same request succeeds once space is available');
   assert.equal((await f.get('config').then(r => r.json())).maxArchiveBatch, 500);
+  assert.deepEqual((await f.get('config').then(r => r.json())).phrases, ['예봄교회 잘 오셨습니다', '새가족을 환영합니다.', '꽃보다 고운 님을 환영합니다.', '2026년 어느 좋은 날 예봄교회에서']);
+  f.config.settings.phrases = ['  주일예배를 환영합니다 ', '', 'x'.repeat(60)];
+  assert.deepEqual((await f.get('config').then(r => r.json())).phrases, ['주일예배를 환영합니다', 'x'.repeat(40)], 'phrases set later by an administrator are cleaned and replace the defaults');
 });

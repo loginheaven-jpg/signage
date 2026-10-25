@@ -947,6 +947,7 @@ function renderReview() {
   el('reviewDestination').textContent = mode==='archive'?(settings.target?.folderName||settings.target?.eventName||'행사 선택 필요')+'에 보관':(settings.siteName||'등록할 때 보낼 화면 선택')+(mode==='both'?' · 원본도 보관':' · 화면에만 등록');
   el('messageLabel').hidden = mode === 'archive'; el('keepMessageLabel').hidden = mode === 'archive';
   el('messageCount').textContent = el('message').value.length;
+  renderMessageChips();
   renderEmail();
   // 수백 장을 한꺼번에 그리면 휴대폰 메모리가 부족해지므로 앞에서부터 일부만 그린다.
   if (!selected.length) reviewShown = REVIEW_PAGE;
@@ -983,6 +984,45 @@ function renderReview() {
   el('discard').textContent = hasFrozen() ? '목록 비우기' : '전체 삭제';
   if(!selected.length&&workStage==='review')workStage='capture';
   renderFlow();homeSummary();
+}
+// 화면 문구 고르기: 교회 공용 문구(서버 설정), 이 기기에서 보낸 최근 문구, 지금 행사 이름을 단추로 보여 준다.
+// 누르면 입력칸에 들어가고 그대로 고쳐 쓸 수 있다. 최근 문구는 이 기기에만 남는다(이름이 든 문구도 있어 서버에 보내지 않음).
+const RECENT_MESSAGES = 6;
+function eventPhrase() {
+  const name = settings?.target?.folderName || settings?.target?.eventName || '';
+  return name.replace(/^\s*(\d{8}|\d{4}[-.]\d{2}[-.]\d{2})\s*/, '').trim().slice(0, 40);
+}
+function rememberMessage(text) {
+  text = String(text || '').trim();
+  if (!text || (config?.phrases || []).includes(text)) return;
+  storage.set('recentMessages', [text, ...(storage.get('recentMessages') || []).filter(m => m !== text)].slice(0, RECENT_MESSAGES));
+}
+function useMessage(text) {
+  if (el('message').disabled) return;
+  el('message').value = text; el('messageCount').textContent = text.length;
+  persistDraft(); renderMessageChips();
+}
+function renderMessageChips() {
+  const common = (config?.phrases || []).filter(Boolean);
+  const recent = (storage.get('recentMessages') || []).filter(m => !common.includes(m));
+  const event = eventPhrase(), current = el('message').value.trim(), disabled = el('message').disabled;
+  const chip = text => {
+    const button = node('button', text, 'messageChip'); button.type = 'button'; button.disabled = disabled;
+    button.setAttribute('aria-pressed', String(text === current)); button.onclick = () => useMessage(text);
+    return button;
+  };
+  const group = (title, items) => { const box = node('div'); box.append(node('p', title)); const row = node('div', undefined, 'chipRow'); row.append(...items); box.append(row); return box; };
+  const groups = [];
+  if (common.length) groups.push(group('교회 공용 문구', common.map(chip)));
+  if (recent.length) groups.push(group('최근에 쓴 문구', recent.map(text => {
+    const wrap = node('span', undefined, 'recentChip'), remove = node('button', '×', 'chipRemove');
+    remove.type = 'button'; remove.disabled = disabled; remove.setAttribute('aria-label', '최근 문구 지우기: ' + text);
+    remove.onclick = () => { storage.set('recentMessages', (storage.get('recentMessages') || []).filter(m => m !== text)); renderMessageChips(); };
+    wrap.append(chip(text), remove); return wrap;
+  })));
+  if (event && !common.includes(event) && !recent.includes(event)) groups.push(group('행사명 넣기', [chip(event)]));
+  el('messageChips').replaceChildren(...groups);
+  el('messageChips').hidden = mode === 'archive' || !groups.length;
 }
 function removeDraftEntries(entries, all = false) {
   if (busy || !entries.length) return;
@@ -1183,7 +1223,7 @@ async function sendPhotos() {
           form.append('muted', s.muted ? '1' : '0'); form.append('video', r.file, r.file.name);
           const label = (accepted + 1) + ' / ' + originalCount + ' · ' + r.file.name;
           await uploadVideo(form, ratio => { el('progress').textContent = label + (ratio < 1 ? ' 올리는 중 ' + Math.floor(ratio * 100) + '% · 화면을 닫지 마세요' : ' 서버에서 확인하는 중…'); });
-          accepted++; URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r);
+          accepted++; rememberMessage(s.message); URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r);
           await persistDraft(); continue;
         }
         if (s.fast && !r.previewFile) {
@@ -1195,7 +1235,7 @@ async function sendPhotos() {
         form.append('originalName', r.file.name); form.append('photo', transfer, transfer.name);
         const result = await api(s.fast ? 'preview' : 'photo', { method: 'POST', body: form });
         if (s.fast && s.mode === 'both' && !result.upload.cancelled && !originals.some(p => p.id === result.upload.id)) originals.push({ id: result.upload.id, key: r.key, file: r.file, target: result.upload.target || s.target, error: '' });
-        accepted++; URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r);
+        accepted++; rememberMessage(s.message); URL.revokeObjectURL(r.url); selected = selected.filter(x => x !== r);
         if (s.mode !== 'archive') {
           if (shareBatch?.key !== s.batchKey) shareBatch = { key: s.batchKey, mode: s.mode, ts: Date.now(), siteName: s.siteName, photos: [] };
           if (!result.upload?.cancelled && !shareBatch.photos.some(p => p.id === result.upload.id)) {
@@ -1425,7 +1465,7 @@ window.addEventListener('pagehide', () => { beautyWarmCandidate = null; beautyWa
 el('send').onclick = () => { beautyWarmCandidate = null; beautyWarmup.clear(); return sendPhotos(); };
 el('discard').onclick = () => removeDraftEntries([...selected], true);
 el('refreshHistory').onclick = loadHistory;
-el('message').oninput = () => { el('messageCount').textContent = el('message').value.length; persistDraft(); }; el('keepMessage').onchange = () => persistDraft();
+el('message').oninput = () => { el('messageCount').textContent = el('message').value.length; persistDraft(); renderMessageChips(); }; el('keepMessage').onchange = () => persistDraft();
 el('email').oninput = () => rememberEmail(); el('clearEmail').onclick = clearEmail;
 setInterval(expireEmail, 30000);
 document.addEventListener('visibilitychange', () => { syncWakeLock(); if (document.hidden) beautyWarmup.clear(); else { resumeCapturedWarmup(); expireEmail(); resumeArchive(); } });

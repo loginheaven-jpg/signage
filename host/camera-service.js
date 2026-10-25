@@ -11,6 +11,11 @@ const { CameraFolderCatalog } = require('./camera-folder-catalog');
 const { mountVideoUpload, MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS } = require('./camera-video');
 const MAX_BYTES = 50 * 1024 * 1024;
 const MAX_ARCHIVE_BATCH = 500;
+// 화면 문구 고르기에 보여 줄 교회 공용 문구. 라이브 설정(settings.phrases)에 값이 있으면 그것을 쓴다.
+// 관리 화면에서 고칠 수 있게 되면 휴대폰 화면은 바꾸지 않아도 된다.
+const DEFAULT_PHRASES = ['예봄교회 잘 오셨습니다', '새가족을 환영합니다.', '꽃보다 고운 님을 환영합니다.', '2026년 어느 좋은 날 예봄교회에서'];
+const phrasesOf = config => (Array.isArray(config.settings?.phrases) ? config.settings.phrases : DEFAULT_PHRASES)
+  .map(text => String(text || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 40)).filter(Boolean).slice(0, 12);
 
 // 원본은 Drive 저장을 확인할 때까지 서버 디스크에 머문다. 올리는 속도가 Drive 전송보다 빨라
 // 디스크가 차면 새 접수를 잠시 미루고, 휴대폰은 backlog 응답을 받으면 기다렸다가 이어서 보낸다.
@@ -80,7 +85,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
   app.get('/live/api/camera/config', (req, res) => res.json({ rootId: archive.folderId, year: new Date(Date.now() + 9 * 3600000).getUTCFullYear(),
     currentEvent: getCurrentEvent(),
     archiveEnabled: getConfig().archiveEnabled !== false, liveEnabled: getConfig().enabled, ready: archive.ready,
-    archiveError: archive.error ? errorText({ publicMessage: archive.error }) : '', sites: getSites(), maxBytes: MAX_BYTES, maxVideoBytes: MAX_VIDEO_BYTES, maxVideoSeconds: MAX_VIDEO_SECONDS, maxBatch: 30, maxArchiveBatch: MAX_ARCHIVE_BATCH, cancelSec: getConfig().settings.cancelSec, mail: !!mail?.configured }));
+    archiveError: archive.error ? errorText({ publicMessage: archive.error }) : '', sites: getSites(), maxBytes: MAX_BYTES, maxVideoBytes: MAX_VIDEO_BYTES, maxVideoSeconds: MAX_VIDEO_SECONDS, maxBatch: 30, maxArchiveBatch: MAX_ARCHIVE_BATCH, phrases: phrasesOf(getConfig()), cancelSec: getConfig().settings.cancelSec, mail: !!mail?.configured }));
 
   // 교회폴더 저장은 사진마다 내용·설정으로 요청 ID를 만든다. 앱이 꺼진 뒤 같은 사진을 다시 골라도
   // 이미 접수한 사진은 여기서 알려 주어 다시 올리지 않는다(본인 기기의 접수만 확인).
