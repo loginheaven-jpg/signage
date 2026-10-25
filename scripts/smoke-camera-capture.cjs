@@ -54,7 +54,7 @@ const ANDROID = 'Mozilla/5.0 (Linux; Android 14; SM-S921N) AppleWebKit/537.36 (K
     // 2. The page was reopened while the camera app was open: the notice shows even with photos waiting.
     await reopenedWhile(page, 'shootInput');
     assert.match(await page.locator('#notice').textContent(), /메모리가 부족해.*방금 찍은 사진을 받지 못했습니다.*보조카메라/s);
-    assert.deepEqual(await buttons(page), ['다시 촬영', '보조카메라로 찍기', '앨범에서 고르기']);
+    assert.deepEqual(await buttons(page), ['다시 촬영', '보조카메라로 찍기']);
     // "다시 촬영" goes back to the phone camera app.
     const again = page.waitForEvent('filechooser');
     await page.locator('#notice .noticeActions button', { hasText: '다시 촬영' }).click();
@@ -83,26 +83,26 @@ const ANDROID = 'Mozilla/5.0 (Linux; Android 14; SM-S921N) AppleWebKit/537.36 (K
     await page.reload(); await page.locator('#work').waitFor();
     await page.waitForFunction(() => selected.length === 3);
     assert.equal(await page.locator('#notice .noticeActions').count(), 0, 'no lost-photo notice after an aux camera shot');
-    // A video recorded in the camera app has no aux camera; an album pick says the album is untouched.
+    // A video recorded in the camera app has no aux camera; a gallery pick says the gallery is untouched.
     await reopenedWhile(page, 'videoInput');
-    assert.deepEqual(await buttons(page), ['다시 촬영', '앨범에서 고르기']);
+    assert.deepEqual(await buttons(page), ['다시 촬영']);
     await reopenedWhile(page, 'galleryInput');
-    assert.match(await page.locator('#notice').textContent(), /앨범의 사진은 그대로 있습니다/);
-    assert.deepEqual(await buttons(page), ['앨범에서 고르기']);
+    assert.match(await page.locator('#notice').textContent(), /갤러리의 사진은 그대로 있습니다/);
+    assert.deepEqual(await buttons(page), ['갤러리에서 다시 고르기']);
     assert.deepEqual(errors, []);
 
-    // 4. Without camera permission the aux camera cannot open; the phone camera and album stay one tap away.
+    // 4. Without camera permission the aux camera cannot open; the phone camera stays one tap away.
     const denied = await open([], []);
     await reopenedWhile(denied.page, 'shootInput');
     await denied.page.locator('#notice .noticeActions button', { hasText: '보조카메라로 찍기' }).click();
     await denied.page.waitForFunction(() => document.getElementById('notice').textContent.includes('보조카메라를 열지 못했습니다'));
-    assert.deepEqual(await buttons(denied.page), ['다시 촬영', '앨범에서 고르기']);
+    assert.deepEqual(await buttons(denied.page), ['다시 촬영']);
     const retry = denied.page.waitForEvent('filechooser');
     await denied.page.locator('#notice .noticeActions button', { hasText: '다시 촬영' }).click();
     await (await retry).setFiles(photo());
     await denied.page.waitForFunction(() => selected.length === 1);
     assert.deepEqual(denied.errors, []);
-    console.log('Chromium Android capture passed: the phone camera app stays the default; when the page reopens and the photo is lost the notice shows even with photos waiting and offers retake, aux camera and album; the aux camera fills the screen, flips, stores the shot before anything else; denied permission falls back to the camera app and album.');
+    console.log('Chromium Android capture passed: the phone camera app stays the default; when the page reopens and the photo is lost the notice shows even with photos waiting and offers retake and aux camera (gallery only for an interrupted gallery pick); the aux camera fills the screen, flips, stores the shot before anything else; denied permission falls back to the camera app.');
   } finally {
     for (const browser of browsers) await browser.close(); await preview.close();
   }

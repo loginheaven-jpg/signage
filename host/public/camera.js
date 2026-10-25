@@ -1033,8 +1033,8 @@ const auxCameraAvailable = () => isMobile && !!navigator.mediaDevices?.getUserMe
 async function openAuxCamera() {
   if (await openInPageCamera()) return;
   // 권한 창을 거치면 '사용자가 누른 동작'이 끝나 파일 창을 바로 열 수 없으므로 단추로 이어 준다.
-  notice('보조카메라를 열지 못했습니다. 브라우저 설정에서 이 사이트의 카메라 권한을 확인해 주세요. 지금은 폰 카메라나 앨범으로 다시 할 수 있습니다.', true, 'capture');
-  noticeActions([['다시 촬영', () => el('shoot').click(), true], ['앨범에서 고르기', () => el('choose').click()]]);
+  notice('보조카메라를 열지 못했습니다. 브라우저 설정에서 이 사이트의 카메라 권한을 확인해 주세요. 지금은 폰 카메라로 다시 찍을 수 있습니다.', true, 'capture');
+  noticeActions([['다시 촬영', () => el('shoot').click(), true]]);
 }
 async function openInPageCamera() {
   try {
@@ -1077,13 +1077,13 @@ function noticeActions(actions) {
 // 폰 카메라 앱·앨범을 다녀오는 사이 화면이 다시 열린 경우. 받지 못한 것은 되찾을 수 없으니 곧바로 다시 하게 한다.
 function captureLostNotice(kind) {
   if (kind === 'galleryInput') {
-    notice('사진을 고르는 동안 휴대폰이 이 화면을 다시 열었습니다. 다시 골라 주세요. 앨범의 사진은 그대로 있습니다.', true, 'capture');
-    return noticeActions([['앨범에서 고르기', () => el('choose').click(), true]]);
+    notice('사진을 고르는 동안 휴대폰이 이 화면을 다시 열었습니다. 다시 골라 주세요. 갤러리의 사진은 그대로 있습니다.', true, 'capture');
+    return noticeActions([['갤러리에서 다시 고르기', () => el('choose').click(), true]]);
   }
   const video = kind === 'videoInput', aux = !video && auxCameraAvailable();
-  notice('카메라 앱을 다녀오는 동안 휴대폰 메모리가 부족해 이 화면이 다시 열렸고, 방금 찍은 ' + (video ? '영상' : '사진') + '을 받지 못했습니다. 카메라 앱으로 찍은 것은 앨범에 남지 않을 수 있으니 다시 찍어 주세요.' +
+  notice('카메라 앱을 다녀오는 동안 휴대폰 메모리가 부족해 이 화면이 다시 열렸고, 방금 찍은 ' + (video ? '영상' : '사진') + '을 받지 못했습니다. 카메라 앱으로 찍은 ' + (video ? '영상' : '사진') + '은 갤러리에 저장되지 않으니 다시 찍어 주세요.' +
     (aux ? ' 같은 일이 반복되면 보조카메라로 찍으세요. 이 화면 안에서 찍어 사진이 사라지지 않습니다.' : ''), true, 'capture');
-  noticeActions([['다시 촬영', () => el(video ? 'shootVideo' : 'shoot').click(), true], ...(aux ? [['보조카메라로 찍기', openAuxCamera]] : []), ['앨범에서 고르기', () => el('choose').click()]]);
+  noticeActions([['다시 촬영', () => el(video ? 'shootVideo' : 'shoot').click(), true], ...(aux ? [['보조카메라로 찍기', openAuxCamera]] : [])]);
 }
 function removeDraftEntries(entries, all = false) {
   if (busy || !entries.length) return;
