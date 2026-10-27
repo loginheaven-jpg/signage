@@ -5,6 +5,8 @@ let requestSequence = 0;
 let toastTimer;
 let lastGridSignature = '';
 let connectionFailure = '';
+const selectedPhotos = new Map();
+let pagePhotos = [], assignmentPreview = null, assignmentBusy = false;
 const filterStorageKey = 'signage.photos.filters.v1';
 const emptyFilters = () => ({ year: '', yearId: '', eventId: '', eventName: '', scope: '', kind: '', date: '' });
 let filters = emptyFilters();
@@ -50,6 +52,7 @@ function rememberFilters() {
   try { localStorage.setItem(filterStorageKey, JSON.stringify(filters)); } catch { /* Optional preference. */ }
 }
 function changeFilters(changes) {
+  selectedPhotos.clear(); renderSelection();
   filters = { ...filters, ...changes }; offset = 0;
   rememberFilters(); renderFolderFilters(); load();
 }
@@ -260,6 +263,17 @@ function card(photo) {
     });
     actions.append(remove);
   }
+  if (photo.canAssign) {
+    const label = node('label', 'meta', ' 행사 배정 선택');
+    const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.dataset.photoId = photo.id;
+    checkbox.checked = selectedPhotos.has(photo.id); checkbox.setAttribute('aria-label', photo.name + ' 행사 배정 선택');
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked && selectedPhotos.size >= 500) { checkbox.checked = false; return toast('한 번에 500개까지 배정할 수 있습니다.'); }
+      if (checkbox.checked) selectedPhotos.set(photo.id, photo.name); else selectedPhotos.delete(photo.id);
+      renderSelection();
+    });
+    label.prepend(checkbox); details.prepend(label);
+  }
   details.append(actions); wrap.append(image, details); return wrap;
 }
 async function load() {
@@ -270,6 +284,9 @@ async function load() {
     const data = await api('/api/photos?' + new URLSearchParams({ date: filters.date, year: filters.year, yearId: filters.yearId, eventId: filters.eventId, scope: filters.scope, kind: filters.kind, offset }));
     if (seq !== requestSequence) return;
     if (offset && offset >= data.total) { offset = Math.max(0, Math.floor((data.total - 1) / 40) * 40); return load(); }
+    pagePhotos = data.photos;
+    for (const photo of pagePhotos) if (!photo.canAssign) selectedPhotos.delete(photo.id);
+    renderSelection();
     renderStatus(data.status);
     acceptFolders(data.folders); reconcileFolderSelection(); renderFolderFilters();
     if (selection !== folderSelectionKey()) { offset = 0; rememberFilters(); return load(); }
@@ -286,6 +303,79 @@ async function load() {
   } catch (e) { if (seq === requestSequence) { $('listError').textContent = '목록을 불러오지 못했습니다. ' + e.message; $('listError').hidden = false; } }
   finally { if (seq === requestSequence) $('grid').setAttribute('aria-busy', 'false'); }
 }
+function renderSelection() {
+  $('selectionCount').textContent = selectedPhotos.size + '개 선택';
+  $('assignSelected').disabled = !selectedPhotos.size;
+  document.querySelectorAll('[data-photo-id]').forEach(input => { input.checked = selectedPhotos.has(input.dataset.photoId); });
+}
+$('selectPage').onclick = () => {
+  for (const photo of pagePhotos.filter(photo => photo.canAssign)) if (selectedPhotos.size < 500) selectedPhotos.set(photo.id, photo.name);
+  renderSelection();
+};
+$('clearSelection').onclick = () => { selectedPhotos.clear(); renderSelection(); };
+$('selectUnassigned').onclick = async () => {
+  const button = $('selectUnassigned'); button.disabled = true;
+  try {
+    const first = await api('/api/photos?scope=awaiting_target');
+    if (first.total > 500) throw new Error('위치 미지정이 500개를 넘습니다. 페이지별로 선택해 배정해 주세요.');
+    const photos = [...first.photos];
+    for (let start = first.photos.length; start < first.total; start += 40) {
+      const data = await api('/api/photos?scope=awaiting_target&offset=' + start); photos.push(...data.photos);
+    }
+    selectedPhotos.clear();
+    for (const photo of photos.slice(0, first.total)) if (photo.canAssign) selectedPhotos.set(photo.id, photo.name);
+    renderSelection(); toast(selectedPhotos.size + '개 선택했습니다. 다음 단계에서 원본을 확인합니다.');
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = false; }
+};
+function resetAssignment() { assignmentPreview = null; $('confirmAssignment').disabled = true; $('assignmentState').textContent = ''; $('assignmentResults').replaceChildren(); }
+function assignmentFolderId() {
+  const text = $('assignmentLink').value.trim();
+  if (!text) return $('assignmentFolder').value;
+  try { const url = new URL(text); if (url.protocol !== 'https:' || url.hostname !== 'drive.google.com') return ''; return /^\/drive\/folders\/([\w-]+)\/?$/.exec(url.pathname)?.[1] || ''; }
+  catch { return /^[\w-]{1,128}$/.test(text) ? text : ''; }
+}
+function assignmentControls(busy) {
+  assignmentBusy = busy;
+  for (const id of ['assignmentFolder', 'assignmentLink', 'previewAssignment', 'closeAssignment']) $(id).disabled = busy;
+  $('confirmAssignment').disabled = busy || !assignmentPreview?.ids.length;
+}
+$('assignSelected').onclick = () => {
+  resetAssignment(); $('assignmentLink').value = '';
+  $('assignmentFolder').replaceChildren(new Option('행사 선택', ''), ...folders.years.flatMap(year => year.events.map(event => new Option(year.year + ' / ' + event.name + ' · ' + event.id.slice(-8), event.id))));
+  $('assignmentState').textContent = selectedPhotos.size + '개 선택 · 행사 폴더를 선택하거나 링크를 입력해 주세요.';
+  $('assignmentDialog').showModal();
+};
+$('assignmentFolder').onchange = () => { $('assignmentLink').value = ''; resetAssignment(); };
+$('assignmentLink').oninput = resetAssignment;
+$('closeAssignment').onclick = () => $('assignmentDialog').close();
+$('assignmentDialog').addEventListener('cancel', event => { if (assignmentBusy) event.preventDefault(); });
+$('previewAssignment').onclick = async () => {
+  resetAssignment(); assignmentControls(true); $('assignmentState').textContent = '서버 원본과 행사 폴더를 확인하고 있습니다…';
+  try {
+    const data = await api('/api/photos/assign/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [...selectedPhotos.keys()], folderId: assignmentFolderId() }) });
+    const ids = data.results.filter(item => ['eligible', 'already_assigned'].includes(item.status)).map(item => item.id);
+    assignmentPreview = { ids, folderId: data.target.eventId, label: data.target.year + ' / ' + data.target.folderName };
+    $('assignmentState').textContent = assignmentPreview.label + ' · 배정 가능 ' + ids.length + '개 · 확인 실패 ' + (data.results.length - ids.length) + '개';
+    $('assignmentResults').replaceChildren(...data.results.filter(item => item.status === 'failed').map(item => node('li', '', (selectedPhotos.get(item.id) || item.id) + ': ' + item.error)));
+  } catch (error) { $('assignmentState').textContent = error.message; }
+  finally { assignmentControls(false); }
+};
+$('confirmAssignment').onclick = async () => {
+  if (!assignmentPreview?.ids.length || assignmentBusy) return;
+  if (!confirm(assignmentPreview.ids.length + '개를 ' + assignmentPreview.label + '에 배정할까요? 서버 원본은 유지합니다.')) return;
+  const snapshot = assignmentPreview; assignmentControls(true);
+  try {
+    const data = await api('/api/photos/assign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(snapshot) });
+    const accepted = data.results.filter(item => ['assigned', 'already_assigned'].includes(item.status));
+    for (const item of accepted) selectedPhotos.delete(item.id);
+    renderSelection();
+    $('assignmentState').textContent = accepted.length + '개 배정 접수 · 실패 ' + (data.results.length - accepted.length) + '개. Drive 보관 완료 여부는 목록에서 확인해 주세요.';
+    $('assignmentResults').replaceChildren(...data.results.map(item => node('li', '', item.id + ': ' + (item.status === 'failed' ? item.error : '배정 접수'))));
+    assignmentPreview = null; await load();
+  } catch (error) { $('assignmentState').textContent = error.message + ' 같은 선택으로 다시 시도할 수 있습니다.'; }
+  finally { assignmentControls(false); renderSelection(); }
+};
 $('year').addEventListener('change', () => {
   const value = $('year').value;
   const group = folders.years.find(group => group.id === value);
@@ -321,4 +411,4 @@ if (connection === 'select-folder') {
   history.replaceState(null, '', '/photos');
 }
 renderFolderFilters(); load(); loadFolders();
-setInterval(() => { if (!document.hidden && !$('preview').open && !$('eventDialog').open && !document.querySelector('.actions button:disabled')) { load(); loadFolders(); } }, 15000);
+setInterval(() => { if (!document.hidden && !$('preview').open && !$('eventDialog').open && !$('assignmentDialog').open && !document.querySelector('.actions button:disabled')) { load(); loadFolders(); } }, 15000);

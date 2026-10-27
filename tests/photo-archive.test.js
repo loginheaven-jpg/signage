@@ -26,7 +26,7 @@ function fixture(t, { shared = true } = {}) {
       const file = remote.get(p.fileId);
       if (!file) throw Object.assign(new Error('Missing'), { code: 404 });
       if (p.alt === 'media') return { data: Readable.from(file.bytes) };
-      return { data: { ...file } };
+      return { data: { ...file, ...(file.bytes ? { size: String(file.bytes.length), md5Checksum: require('node:crypto').createHash('md5').update(file.bytes).digest('hex') } : {}) } };
     },
     create: async p => {
       calls.creates.push(p.requestBody.id);

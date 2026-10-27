@@ -956,7 +956,6 @@ require('./camera-service').mountCameraService(app, {
   archive: photoArchive,
   auth: { check: checkLiveToken, sameOrigin: browserAuth.sameOrigin },
   getConfig: () => liveConfig,
-  getCurrentEvent: () => cameraDefaultEvent.get(),
   getSites: () => sites.map(s => ({ id: s.id, name: s.name, icon: s.icon || '📺',
     online: Array.from(clients.values()).some(c => c.approved && c.siteId === s.id && c.ws.readyState === WebSocket.OPEN) })),
   publish: (photo, media, site) => {

@@ -26,7 +26,6 @@ async function startPreview({ email = false, ai = { env: {} } } = {}) {
   app.get('/camera-exif.js', (req, res) => res.sendFile(path.resolve(__dirname, '../host/node_modules/exifr/dist/full.umd.js')));
   mountCameraService(app, { archive: f.archive, auth: { check: () => true, sameOrigin: req => !req.get('origin') || new URL(req.get('origin')).host === req.get('host') },
     getConfig: () => config, getSites: () => [{ id: 'offline', name: '1F 로비', online: false }, { id: 'screen', name: '본당 로비', online: true }],
-    getCurrentEvent: () => currentEvent.get(),
     publish: (photo, bytes) => { published.push({ photo, bytes }); return 1; },
     delivery: id => published.some(p => p.photo.id === id) ? [{ name: '본당 로비', online: true, status: 'displayed' }] : [],
     cancel: id => { const i = published.findIndex(p => p.photo.id === id); if (i >= 0) published.splice(i, 1); }, mail, ai });

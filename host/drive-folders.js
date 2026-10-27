@@ -21,6 +21,17 @@ function targetInput(value) {
     folderName: eventDate ? eventDate.replace(/-/g, '') + ' ' + eventName : eventName };
 }
 
+// Freeze the fallback year at acceptance/capture time, never when the Drive worker retries.
+function unclassifiedTarget(capturedAt, acceptedAt = Date.now()) {
+  const stamp = Number.isFinite(capturedAt) && capturedAt > 0 ? capturedAt : acceptedAt;
+  return targetInput({ year: String(new Date(stamp + 9 * 3600000).getUTCFullYear()), eventName: '미분류' });
+}
+function requestedTarget(body) {
+  if (['common', 'automatic'].includes(body.targetSource)) return null;
+  const value = typeof body.target === 'string' ? JSON.parse(body.target || '{}') : body.target;
+  return value && Object.keys(value).length ? targetInput(value) : null;
+}
+
 // Call mutations through PhotoArchive.serialize: the journal also survives ambiguous
 // Drive responses and process restarts. One persistent writer per DATA_DIR is required.
 class DriveFolders {
@@ -90,4 +101,4 @@ class DriveFolders {
     await this.verify(record.folderId, year.id);
   }
 }
-module.exports = { DriveFolders, targetInput, normalized, fail, FOLDER };
+module.exports = { DriveFolders, targetInput, normalized, fail, FOLDER, unclassifiedTarget, requestedTarget };

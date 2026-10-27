@@ -6,7 +6,7 @@ const multer = require('multer');
 const sharp = require('sharp');
 const exifr = require('exifr');
 const { atomicJSON, cameraErrorText: errorText } = require('./photo-archive');
-const { targetInput, fail } = require('./drive-folders');
+const { targetInput, fail, unclassifiedTarget, requestedTarget } = require('./drive-folders');
 const { CameraFolderCatalog } = require('./camera-folder-catalog');
 const { mountVideoUpload, MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS } = require('./camera-video');
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -34,7 +34,7 @@ function parsePhotoDate(value) {
   return ts;
 }
 
-function mountCameraService(app, { archive, auth, getConfig, getSites, publish, delivery, cancel, mail, ai = {}, getCurrentEvent = () => null }) {
+function mountCameraService(app, { archive, auth, getConfig, getSites, publish, delivery, cancel, mail, ai = {} }) {
   const folderCatalog = new CameraFolderCatalog(archive);
   const staging = path.join(archive.root, 'camera-staging');
   const receiptsDir = path.join(archive.root, 'camera-receipts');
@@ -49,6 +49,10 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
   for (const filename of fs.readdirSync(receiptsDir).filter(n => /^[\w-]+\.json$/.test(n))) {
     const r = JSON.parse(fs.readFileSync(path.join(receiptsDir, filename), 'utf8')); receipts.set(r.id, r);
     const record = archive.records.get(r.id);
+    // The archive journal is authoritative after an administrator assignment.
+    if (record?.target && !r.cancelled && (JSON.stringify(r.target) !== JSON.stringify(record.target) || r.targetSource !== record.targetSource)) {
+      r.target = record.target; r.targetSource = record.targetSource; atomicJSON(path.join(receiptsDir, r.id + '.json'), r);
+    }
     if (r.pipeline && !r.cancelled && r.target && record?.status === 'awaiting_target') {
       Object.assign(record, { target: targetInput(r.target), status: 'pending', nextAttempt: 0 }); archive.save(record);
     }
@@ -83,7 +87,7 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
   require('./camera-ai').mountCameraAI(app, { root: archive.root, ...ai });
   const safe = fn => (req, res) => Promise.resolve().then(() => fn(req, res)).catch(error => res.status(error.status || 503).json({ error: errorText(error) }));
   app.get('/live/api/camera/config', (req, res) => res.json({ rootId: archive.folderId, year: new Date(Date.now() + 9 * 3600000).getUTCFullYear(),
-    currentEvent: getCurrentEvent(),
+    currentEvent: unclassifiedTarget(null), defaultArchivePolicy: 'capture-year-unclassified',
     archiveEnabled: getConfig().archiveEnabled !== false, liveEnabled: getConfig().enabled, ready: archive.ready,
     archiveError: archive.error ? errorText({ publicMessage: archive.error }) : '', sites: getSites(), maxBytes: MAX_BYTES, maxVideoBytes: MAX_VIDEO_BYTES, maxVideoSeconds: MAX_VIDEO_SECONDS, maxBatch: 30, maxArchiveBatch: MAX_ARCHIVE_BATCH, phrases: phrasesOf(getConfig()), cancelSec: getConfig().settings.cancelSec, mail: !!mail?.configured }));
 
@@ -134,10 +138,10 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
       // Waiting-for-location records are excluded from the Drive worker, so the
       // initial assignment never waits behind Google. Original upload reads this
       // durable receipt if the location is assigned before it arrives.
-      r.target = input; save(r);
+      r.target = input; r.targetSource = 'device'; save(r);
       const record = archive.records.get(r.id);
       if (record && record.status === 'awaiting_target') {
-        Object.assign(record, { target: input, status: 'pending', error: '', nextAttempt: 0 }); archive.save(record);
+        Object.assign(record, { target: input, targetSource: 'device', status: 'pending', error: '', nextAttempt: 0 }); archive.save(record);
         wakeArchive(r.id);
       }
       return res.status(202).json({ success: true, upload: row(r) });
@@ -146,8 +150,8 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
       if (!row(r).canChangeTarget) throw fail('Drive 전송 전 저장 위치 오류가 난 사진만 변경할 수 있습니다.', 409);
       await archive.initialize(); if (!archive.ready) throw fail(archive.error || 'Google 연결을 확인해 주세요.', 503);
       const target = await archive.folders.resolve(input), record = archive.records.get(r.id);
-      Object.assign(record, { target, targetResolved: true, folderId: target.eventId, status: 'pending', error: '', nextAttempt: 0 });
-      archive.save(record); r.target = target; save(r);
+      Object.assign(record, { target, targetSource: 'device', targetResolved: true, folderId: target.eventId, status: 'pending', error: '', nextAttempt: 0 });
+      archive.save(record); r.target = target; r.targetSource = 'device'; save(r);
     });
     archive.cycle().catch(() => {}); res.status(202).json({ success: true });
   }));
@@ -239,7 +243,8 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
         const mode = String(req.body.mode || '');
         if (!['archive', 'live', 'both'].includes(mode)) throw fail('사용 목적을 선택해 주세요.');
         if (mode !== 'live') requireArchiveSpace(archive.root);
-        const target = mode === 'live' ? null : targetInput(JSON.parse(req.body.target || '{}'));
+        const requested = mode === 'live' ? null : requestedTarget(req.body);
+        let target = requested;
         const uploaderName = String(req.body.uploaderName || '').normalize('NFC').replace(/[\x00-\x1f\x7f]/g, '').trim();
         if (!uploaderName || [...uploaderName].length > 20) throw fail('업로더 이름을 1~20자로 입력해 주세요.');
         const requestId = String(req.body.requestId || '');
@@ -279,7 +284,8 @@ function mountCameraService(app, { archive, auth, getConfig, getSites, publish, 
         const photo = { id, ts: record?.ts || Date.now(), owner: req.cameraOwner, uploaderId: req.cameraOwner, uploaderName,
           capturedAt, dateSource, originalName: String(req.file.originalname).slice(0, 255), message, requestId, fingerprint,
           siteId: site?.id || '', siteName: site?.name || '', batchTotal: Math.min(30, Math.max(1, parseInt(req.body.batchTotal, 10) || 1)) };
-        if (mode !== 'live' && !record) record = archive.enqueueCamera(photo, source, target);
+        if (mode !== 'live') target = record?.target || requested || unclassifiedTarget(capturedAt, photo.ts);
+        if (mode !== 'live' && !record) record = archive.enqueueCamera(photo, source, target, { targetSource: requested ? 'device' : 'automatic' });
         const receipt = { ...photo, mode, target, live: mode === 'archive' ? 'none' : 'pending' };
         if (mode === 'live') { receipt.localName = id + '.' + kind.ext; fs.copyFileSync(source, path.join(liveOriginals, receipt.localName)); }
         save(receipt); // Persist before the side effect: response loss never republishes.

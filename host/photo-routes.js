@@ -36,6 +36,16 @@ function mountPhotoRoutes(app, archive, removeFromScreen) {
     const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
     res.json({ ...archive.list({ date, year, yearId, eventId, scope, kind, offset }), status: archive.status() });
   });
+  // Inherits administrator authentication and same-origin checks from server.js.
+  for (const [route, preview] of [['/api/photos/assign/preview', true], ['/api/photos/assign', false]]) {
+    app.post(route, async (req, res) => {
+      try {
+        const result = await require('./photo-assignment').assignPhotos(archive, req.body, preview);
+        if (!preview && result.results.some(item => item.status === 'assigned')) archive.cycle().catch(() => {});
+        res.status(preview ? 200 : 202).json(result);
+      } catch (error) { res.status(error.status || 503).json({ error: require('./photo-archive').cameraErrorText(error) }); }
+    });
+  }
   app.post('/api/photos/sync', (req, res) => {
     archive.cycle(true).catch(() => {});
     res.status(202).json({ success: true });

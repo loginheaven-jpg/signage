@@ -40,13 +40,21 @@ button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible,su
   <div class="filter-bottom"><nav id="folderPath" class="breadcrumb" aria-label="선택한 보관 경로"></nav><span class="count" id="count" aria-live="polite"></span></div>
   <details id="dateFilters" class="date-filters"><summary id="dateSummary">등록 날짜로 더 좁히기</summary><div class="date-controls"><label>등록 날짜 <input id="date" type="date"></label><button id="all">전체 날짜</button></div><p class="date-note">연도는 보관 폴더 기준입니다. 등록 날짜는 보관함에 등록된 날이며 행사 날짜와 다를 수 있습니다.</p></details>
 </section>
-<div class="toolbar"><button id="refresh" class="refresh">새로고침</button></div>
+<div class="toolbar"><button id="selectPage">이 페이지 미지정 선택</button><button id="selectUnassigned">위치 미지정 전체 선택</button><button id="clearSelection">선택 해제</button><span id="selectionCount" role="status">0개 선택</span><button id="assignSelected" class="primary" disabled>선택 사진 행사 배정</button><button id="refresh" class="refresh">새로고침</button></div>
 <div id="listError" class="list-error" role="alert" hidden></div>
 <div id="grid" class="grid" aria-live="polite"></div>
 <div class="pagination"><button id="prev">이전</button><span id="page"></span><button id="next">다음</button></div>
 <footer>등록일시는 한국 시간 기준입니다. 라이브 송출을 종료해도 보관 사진은 유지됩니다.<br>삭제한 드라이브 파일은 휴지통으로 이동합니다. 사진 복사는 이미지 붙여넣기를 지원하는 앱에서 사용할 수 있습니다.<br><a href="/privacy" target="_blank" rel="noopener">개인정보 처리 안내</a> · <a href="/terms" target="_blank" rel="noopener">이용약관</a></footer>
 </main>
 <dialog id="eventDialog" aria-labelledby="eventDialogTitle"><div class="dialog-heading"><h2 id="eventDialogTitle">행사 선택</h2><button id="closeEvents" aria-label="행사 선택 닫기">닫기</button></div><input id="eventSearch" type="search" placeholder="행사 이름 검색" aria-label="행사 이름 검색"><div id="eventList" class="event-list"></div></dialog>
+<dialog id="assignmentDialog" aria-labelledby="assignmentTitle" style="width:560px;padding:22px">
+<h2 id="assignmentTitle">위치 미지정 사진 행사 배정</h2>
+<p>원본을 확인한 사진만 배정합니다. 배정 후 Drive 보관은 별도로 진행하며, 복구 대상 서버 원본은 유지합니다.</p>
+<label class="filter-field">기존 행사 폴더<select id="assignmentFolder"><option value="">행사 선택</option></select></label>
+<label class="filter-field" style="margin-top:16px">또는 Drive 행사 폴더 링크<input id="assignmentLink" type="text" placeholder="https://drive.google.com/drive/folders/…"></label>
+<p id="assignmentState" role="status" style="overflow-wrap:anywhere"></p><ul id="assignmentResults" style="max-height:35vh;overflow:auto;padding-left:20px;overflow-wrap:anywhere"></ul>
+<div class="actions"><button id="previewAssignment">원본·저장 위치 확인</button><button id="confirmAssignment" class="primary" disabled>확인한 사진 배정</button><button id="closeAssignment">닫기</button></div>
+</dialog>
 <dialog id="preview"><img id="previewImage" alt="사진 크게 보기"><button id="closePreview">닫기</button></dialog>
 <div id="toast" class="toast" role="status" hidden></div>
 <script src="/admin-session.js"></script>

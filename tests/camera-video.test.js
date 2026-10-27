@@ -107,3 +107,15 @@ test('videos over three minutes and files that are not videos are refused', { ti
   assert.equal(notVideo.status, 400); assert.match((await notVideo.json()).error, /영상/);
   assert.equal(f.published.length, 0); assert.equal(f.archive.records.size, 0);
 });
+
+
+test('archive-only video without a chosen folder uses the capture-year unclassified folder', async t => {
+  const f = await service(t);
+  const bytes = clip(f.root, 'unclassified.mp4', ['-f', 'lavfi', '-i', 'color=c=blue:s=64x64:d=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p']);
+  const response = await f.upload({ bytes, mode: 'archive', target: null, capturedAt: '2025-12-31T23:59:59' });
+  assert.equal(response.status, 200); const { upload } = await response.json();
+  await f.archive.cycle(true);
+  const record = f.archive.get(upload.id);
+  assert.equal(record.status, 'saved'); assert.ok(record.verifiedAt); assert.equal(record.target.year, '2025'); assert.equal(record.target.eventName, '미분류');
+  assert.deepEqual(f.remote.get(record.driveId).bytes, bytes); assert.equal(f.published.length, 0);
+});

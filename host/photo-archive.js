@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { fileIntegrity } = require('./photo-integrity');
 const { finished } = require('node:stream/promises');
 const { google } = require('googleapis');
 
@@ -297,7 +298,7 @@ class PhotoArchive {
       return {
         id: r.id, message: r.message, ts: r.ts, siteName: r.siteName, name: r.name,
         year: group?.year || r.target?.year, yearId: group?.id || r.target?.yearId, eventId: r.target?.eventId, eventName: event?.name || r.target?.eventName, uploaderName: r.uploaderName, capturedAt: r.capturedAt,
-        status: r.status, error: r.error || '', video: String(r.mimeType || '').startsWith('video/'), url: '/api/photos/' + encodeURIComponent(r.id) + '/image'
+        status: r.status, error: r.error || '', video: String(r.mimeType || '').startsWith('video/'), canAssign: r.status === 'awaiting_target' && !r.target && !r.driveId, url: '/api/photos/' + encodeURIComponent(r.id) + '/image'
       };
     }) };
   }
@@ -311,6 +312,8 @@ class PhotoArchive {
     if (r.splitUpload && !r.target) throw new Error('Archive target required');
     const file = this.localPath(r);
     if (!file) throw new Error('Missing local photo');
+    const integrity = await fileIntegrity(file);
+    if (!integrity.size || (r.originalHash && r.originalHash !== integrity.sha256)) throw Object.assign(new Error('Original integrity mismatch'), { publicMessage: '서버 원본의 크기·체크섬이 다릅니다. 원본은 삭제하지 않았습니다.' });
     if (r.target && !r.targetResolved) {
       r.target = await this.folders.resolve(r.target);
       r.folderId = r.target.eventId; r.targetResolved = true; this.save(r);
@@ -338,12 +341,15 @@ class PhotoArchive {
       const { data } = await this.drive.files.get({ fileId: r.driveId, supportsAllDrives: true, fields: FIELDS }, REQUEST);
       if (data.trashed || !data.parents?.includes(r.folderId) || data.appProperties?.signagePhotoId !== r.id) throw e;
     } finally { body.destroy(); await closed; }
+    const { data: verified } = await this.drive.files.get({ fileId: r.driveId, supportsAllDrives: true, fields: 'id,parents,trashed,size,md5Checksum,appProperties' }, REQUEST);
+    if (verified.trashed || !verified.parents?.includes(r.folderId) || verified.appProperties?.signagePhotoId !== r.id || Number(verified.size) !== integrity.size || verified.md5Checksum !== integrity.md5) throw Object.assign(new Error('Drive integrity mismatch'), { publicMessage: 'Drive 원본 확인이 완료되지 않았습니다. 서버 원본을 유지하고 다시 확인합니다.' });
+    r.verifiedAt = Date.now();
     const deleting = r.status === 'deleting';
     r.status = deleting ? 'deleting' : 'saved'; r.error = ''; r.attempts = 0; r.savedAt = Date.now();
     this.save(r);
     if (deleting) return this.trash(r);
     // Live keeps a separate copy. Saved archive media can be streamed from Drive.
-    try { fs.unlinkSync(file); } catch {} // Remote save is already durable; cleanup failure is not upload failure.
+    try { if (!r.assignment) fs.unlinkSync(file); } catch {} // Remote save is already durable; cleanup failure is not upload failure.
   }
 
   markDelete(id) {

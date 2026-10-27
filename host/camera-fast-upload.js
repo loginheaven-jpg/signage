@@ -4,7 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const sharp = require('sharp');
 const exifr = require('exifr');
-const { targetInput, fail } = require('./drive-folders');
+const { fail, unclassifiedTarget, requestedTarget } = require('./drive-folders');
 const ALLOWED = new Set(['jpg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'tif']);
 
 function mountFastUpload(app, { archive, getConfig, getSites, publish, cancel, mail, upload,
@@ -38,7 +38,7 @@ function mountFastUpload(app, { archive, getConfig, getSites, publish, cancel, m
     if (!/^[\w-]{16,80}$/.test(requestId)) throw fail('전송 요청을 다시 시작해 주세요.');
     const uploaderName = String(req.body.uploaderName || '').normalize('NFC').replace(/[\x00-\x1f\x7f]/g, '').trim();
     if (!uploaderName || [...uploaderName].length > 20) throw fail('업로더 이름을 1~20자로 입력해 주세요.');
-    const target = mode === 'both' && req.body.target && req.body.target !== '{}' && req.body.target !== 'null' ? targetInput(JSON.parse(req.body.target)) : null;
+    const target = mode === 'both' ? requestedTarget(req.body) : null;
     const capturedAt = parsePhotoDate(req.body.capturedAt);
     if (!capturedAt && req.body.capturedAt) throw fail('사진 날짜를 확인해 주세요.');
     const message = String(req.body.message || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 40);
@@ -59,7 +59,8 @@ function mountFastUpload(app, { archive, getConfig, getSites, publish, cancel, m
     let display;
     try { display = await sharp(source, { limitInputPixels: 80000000 }).rotate()
       .resize({ width: 2560, height: 2560, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer(); } catch {}
-    const r = { id, ts: Date.now(), mode, pipeline: true, target, owner: req.cameraOwner, uploaderId: req.cameraOwner,
+    const ts = Date.now();
+    const r = { id, ts, mode, pipeline: true, target: mode === 'both' ? target || unclassifiedTarget(capturedAt || Number(req.body.lastModified), ts) : null, targetSource: target ? 'device' : 'automatic', owner: req.cameraOwner, uploaderId: req.cameraOwner,
       uploaderName, capturedAt, dateSource: String(req.body.dateSource || 'unknown'), originalName,
       lastModified: Number(req.body.lastModified) || 0, requestId, fingerprint, message, siteId: site.id, siteName: site.name,
       batchTotal: Math.min(30, Math.max(1, parseInt(req.body.batchTotal, 10) || 1)), live: display ? 'pending' : 'error' };
@@ -106,9 +107,10 @@ function mountFastUpload(app, { archive, getConfig, getSites, publish, cancel, m
       } catch {}
     }
     if (!capturedAt && r.lastModified > 0 && r.lastModified < Date.now() + 86400000) { capturedAt = r.lastModified; dateSource = 'fileModified'; }
+    if (!r.target || r.targetSource === 'automatic') { r.target = unclassifiedTarget(capturedAt, r.ts); r.targetSource = 'automatic'; }
     r.originalHash = hash; save(r);
     archive.enqueueCamera({ ...r, capturedAt, dateSource }, source, r.target, {
-      status: r.target ? 'pending' : 'awaiting_target', splitUpload: true, originalHash: hash
+      status: r.target ? 'pending' : 'awaiting_target', splitUpload: true, originalHash: hash, targetSource: r.targetSource
     });
     // Durable local original receipt, not a claim of Google Drive completion.
     if (r.target) wakeArchive(r.id);

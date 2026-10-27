@@ -674,16 +674,9 @@ button.cue-pick { flex: none; padding: 4px 8px; font-size: 12px; }
       </div>
 
       <div class="panel" id="currentCameraEventPanel">
-        <div class="panel-header"><span class="panel-title">카메라 공통 현재 행사</span></div>
-        <p style="font-size:13px;line-height:1.7">각 폰에서 마지막으로 선택한 행사가 우선입니다. 선택한 행사가 없는 폰에는 아래 공통 행사를 적용합니다. 이미 등록한 사진의 보관 위치는 바꾸지 않습니다.</p>
-        <p id="currentEventSummary" style="font-size:13px;font-weight:600">설정 확인 중…</p>
-        <div class="settings-grid">
-          <label>연도<input id="currentEventYear" type="number" min="1900" max="2199" style="display:block;width:100%;padding:10px;margin-top:6px"></label>
-          <label id="currentEventYearFolderLabel" hidden>같은 연도 폴더<select id="currentEventYearFolder" style="display:block;width:100%;padding:10px;margin-top:6px"></select></label>
-          <label>기존 행사 폴더<select id="currentEventFolder" style="display:block;width:100%;padding:10px;margin-top:6px" disabled><option value="">목록 확인 중</option></select></label>
-        </div>
-        <p id="currentEventState" style="font-size:12px;line-height:1.7" role="status"></p>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"><button id="saveCurrentEvent" class="btn btn-primary" disabled>공통 현재 행사로 지정</button><button id="clearCurrentEvent" class="btn btn-secondary">공통 행사 해제</button><button id="reloadCurrentEvents" class="btn btn-secondary">목록 다시 확인</button></div>
+        <div class="panel-header"><span class="panel-title">카메라 기본 보관 위치</span></div>
+        <p style="font-size:13px;line-height:1.7">촬영자가 선택한 행사가 우선입니다. 선택하지 않으면 촬영 연도의 <strong>미분류</strong> 폴더로 자동 보관합니다. 연도·미분류 폴더는 없으면 생성하며, Drive 연결이 끊겨도 원본은 서버에 보관하고 다시 전송합니다.</p>
+        <a href="/photos">사진 보관함에서 기존 위치 미지정 사진 배정하기 →</a>
       </div>
 
       <div class="panel">
@@ -2393,6 +2386,6 @@ function showToast(msg, action) {
 </script>
 <script src="/admin-session.js"></script>
 <script src="/content-preview.js"></script>
-<script src="/camera-default-event-admin.js"></script>
+
 </body>
 </html>

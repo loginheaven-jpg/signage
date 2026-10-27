@@ -46,9 +46,9 @@ const { startPreview } = require('./camera-preview.cjs');
     await page.waitForFunction(() => originals.length === 0);
     await cameraUI.click(page,'#refreshHistory');
     assert.equal(preview.archive.records.size, 2);
-    assert.ok([...preview.archive.records.values()].every(r => r.status === 'awaiting_target'));
-    assert.equal(preview.calls.creates.length, 0);
-    assert.ok((await page.locator('#pendingLocation').textContent()).includes('2장'));
+    await preview.archive.cycle(true);
+    assert.ok([...preview.archive.records.values()].every(r => r.status === 'saved' && r.target.eventName === '미분류' && r.verifiedAt));
+    assert.equal(await page.evaluate(() => storage.get('lastTarget')), null, 'automatic archive is not a personal selection');
     releaseFolders(); await page.waitForFunction(() => foldersReady);
     await cameraUI.click(page,'#chooseFolder'); await cameraUI.click(page,'[data-folder-id=event-2026]');
     await page.locator('#folderDialog').waitFor({ state: 'hidden' }); await cameraUI.click(page,'#saveLocation');
@@ -68,7 +68,7 @@ const { startPreview } = require('./camera-preview.cjs');
     await cameraUI.click(page,'#withdrawBatch'); await page.waitForFunction(() => document.querySelector('#withdrawBatch').hidden);
     assert.equal(preview.published.length, 0); assert.ok([...preview.archive.records.values()].every(r => r.status === 'saved'));
     assert.deepEqual(errors, []);
-    console.log('Chromium fast flow passed: blocked folders do not block capture; reduced display payload; another publication interrupts original transfer; restart resumes originals without republishing; folder assignment saves both exact originals; publication-only cancellation preserves archive. Local first display request completed in ' + firstMs + 'ms (' + previewSize + ' display bytes vs ' + image.length + ' original bytes).');
+    console.log('Chromium fast flow passed: blocked folders do not block capture; reduced display payload; another publication interrupts original transfer; restart resumes originals without republishing; automatic unclassified fallback saves both exact originals despite blocked folder UI; later personal selection never retargets them; publication-only cancellation preserves archive. Local first display request completed in ' + firstMs + 'ms (' + previewSize + ' display bytes vs ' + image.length + ' original bytes).');
   } finally {
     releaseFolders?.(); releaseOriginals?.(); if (browser) await browser.close(); await preview.close();
   }

@@ -21,7 +21,7 @@ function fixture(t, existingRoot) {
       const file = remote.get(p.fileId);
       if (!file || file.trashed) throw Object.assign(new Error('Missing'), { code: 404 });
       if (p.alt === 'media') return { data: options.responseType === 'arraybuffer' ? file.bytes : Readable.from(file.bytes) };
-      return { data: { ...file } };
+      return { data: { ...file, ...(file.bytes ? { size: String(file.bytes.length), md5Checksum: require('node:crypto').createHash('md5').update(file.bytes).digest('hex') } : {}) } };
     },
     list: async p => {
       calls.lists.push(p.q);

@@ -177,7 +177,9 @@ test('real HTTP/WebSocket: upload, delayed readiness, reconnect, acknowledgement
   assert.equal(fastRows.uploads.find(r => r.id === fastPhoto.id).delivery[0].status, 'displayed');
   const originalForm = new FormData(); originalForm.set('photo', new Blob([original], { type: 'image/png' }), 'original.png');
   const originalUpload = await fetch(base + '/live/api/camera/uploads/' + fastPhoto.id + '/original', { method: 'POST', headers: cameraHeaders, body: originalForm });
-  assert.equal(originalUpload.status, 200); assert.equal((await originalUpload.json()).upload.archive, 'awaiting_target');
+  assert.equal(originalUpload.status, 200); const receivedOriginal = (await originalUpload.json()).upload;
+  assert.ok(['pending', 'error'].includes(receivedOriginal.archive));
+  assert.equal(receivedOriginal.target.eventName, '미분류');
   const fastUrl = reconnected.messages.find(m => m.photo?.id === fastPhoto.id).photo.url;
   const withdraw = await fetch(base + '/live/api/camera/uploads/' + fastPhoto.id + '/withdraw', { method: 'DELETE', headers: cameraHeaders });
   assert.equal(withdraw.status, 200);

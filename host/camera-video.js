@@ -6,7 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const multer = require('multer');
-const { targetInput, fail } = require('./drive-folders');
+const { fail, unclassifiedTarget, requestedTarget } = require('./drive-folders');
 
 const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
 const MAX_VIDEO_SECONDS = 180;
@@ -115,8 +115,8 @@ function mountVideoUpload(app, { archive, getConfig, getSites, publish, receipts
         const renamed = source + '.' + kind.ext; fs.renameSync(source, renamed); source = renamed;
         const mode = String(req.body.mode || '');
         if (!['archive', 'live', 'both'].includes(mode)) throw fail('사용 목적을 선택해 주세요.');
-        const target = mode === 'live' || !req.body.target || ['{}', 'null'].includes(req.body.target) ? null : targetInput(JSON.parse(req.body.target));
-        if (mode === 'archive' && !target) throw fail('저장할 폴더를 선택해 주세요.');
+        const requested = mode === 'live' ? null : requestedTarget(req.body);
+        let target = requested;
         if (mode !== 'live') requireArchiveSpace(archive.root);
         const uploaderName = String(req.body.uploaderName || '').normalize('NFC').replace(/[\x00-\x1f\x7f]/g, '').trim();
         if (!uploaderName || [...uploaderName].length > 20) throw fail('업로더 이름을 1~20자로 입력해 주세요.');
@@ -149,7 +149,8 @@ function mountVideoUpload(app, { archive, getConfig, getSites, publish, receipts
         const photo = { id, ts: record?.ts || Date.now(), owner: req.cameraOwner, uploaderId: req.cameraOwner, uploaderName,
           capturedAt, dateSource, originalName: String(req.file.originalname).slice(0, 255), message, requestId, fingerprint,
           siteId: site?.id || '', siteName: site?.name || '', batchTotal: 1 };
-        if (mode !== 'live' && !record) record = archive.enqueueCamera(photo, source, target, target ? {} : { status: 'awaiting_target', splitUpload: true });
+        if (mode !== 'live') target = record?.target || requested || unclassifiedTarget(capturedAt, photo.ts);
+        if (mode !== 'live' && !record) record = archive.enqueueCamera(photo, source, target, { targetSource: requested ? 'device' : 'automatic' });
         const receipt = { ...photo, mode, target, pipeline: mode === 'both', kind: 'video', muted, durationMs: Math.round(info.seconds * 1000), live: mode === 'archive' ? 'none' : 'pending' };
         if (mode !== 'archive') {
           if (!getConfig().enabled) { receipt.live = 'error'; receipt.liveError = '모니터 표출 접수가 닫혀 있습니다.'; }

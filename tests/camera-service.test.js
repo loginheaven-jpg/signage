@@ -71,7 +71,11 @@ test('split receipts and private originals survive server restart, including int
   const f = await service(t); f.config.enabled = true;
   const requestId = crypto.randomUUID();
   const posted = (await f.preview({ requestId }).then(r => r.json())).upload;
+  f.drive.files.get = async () => { throw Object.assign(new Error('offline'), { code: 403 }); };
   await f.original(posted.id);
+  await f.archive.cycle(); // Finish any in-flight attempt before simulating a legacy journal.
+  const legacy = f.archive.records.get(posted.id);
+  Object.assign(legacy, { target: null, targetSource: undefined, status: 'awaiting_target', driveId: undefined }); f.archive.save(legacy);
   const receiptFile = path.join(f.archive.root, 'camera-receipts', posted.id + '.json');
   const receipt = JSON.parse(fs.readFileSync(receiptFile, 'utf8'));
   receipt.target = { year: '2027', eventName: '재시작 예배' };
@@ -89,30 +93,27 @@ test('split receipts and private originals survive server restart, including int
   assert.equal(record.status, 'saved'); assert.deepEqual(restarted.remote.get(record.driveId).bytes, f.png);
 });
 
-test('preview publishes without Google or an original; folder-free original stays private and target assignment is durable before Drive', async t => {
+test('preview needs no Google; default original survives offline Drive and resumes into capture-year unclassified without user assignment', async t => {
   const f = await service(t, { email: true }); f.config.enabled = true;
-  const requestId = crypto.randomUUID();
+  const requestId = crypto.randomUUID(), input = { requestId, email: 'guest@example.com' };
   const getFile = f.drive.files.get; let googleCalls = 0;
   f.drive.files.get = async () => { googleCalls++; throw Object.assign(new Error('Google offline'), { code: 403 }); };
-  const response = await f.preview({ requestId, email: 'guest@example.com' }); assert.equal(response.status, 200);
-  const posted = (await response.json()).upload;
-  assert.equal(posted.archive, 'awaiting_original'); assert.equal(posted.original, 'pending');
-  assert.equal(f.published.length, 1); assert.equal(googleCalls, 0); assert.equal(f.archive.records.size, 0);
-  assert.equal((await f.preview({ requestId, email: 'guest@example.com' }).then(r => r.json())).replay, true);
-  assert.equal(f.published.length, 1); assert.equal(f.mail.jobOf(posted.id).photos.length, 1);
+  const posted = (await f.preview(input).then(r => r.json())).upload;
+  assert.equal(posted.archive, 'awaiting_original'); assert.equal(posted.target.year, '2027'); assert.equal(posted.target.eventName, '미분류');
+  assert.equal(f.published.length, 1); assert.equal(googleCalls, 0);
+  assert.equal((await f.preview(input).then(r => r.json())).replay, true);
+  assert.equal(f.mail.jobOf(posted.id).photos.length, 1);
   const received = await f.original(posted.id).then(r => r.json());
-  assert.equal(received.upload.original, 'received'); assert.equal(received.upload.archive, 'awaiting_target');
-  assert.equal(googleCalls, 0); assert.equal(f.calls.creates.length, 0);
-  assert.deepEqual(fs.readFileSync(f.archive.localPath(f.archive.get(posted.id))), f.png);
-  assert.equal((await f.original(posted.id).then(r => r.json())).replay, true);
+  assert.equal(received.upload.original, 'received'); assert.notEqual(received.upload.archive, 'awaiting_target');
+  await f.archive.cycle();
   const rebuilt = new PhotoArchive({ dataDir: f.root, folderId: 'root', drive: f.drive, authMode: 'oauth' });
-  assert.equal(rebuilt.get(posted.id).status, 'awaiting_target');
-  const target = { year: '2027', eventName: '신년예배' };
-  assert.equal((await f.get('uploads/' + posted.id + '/target', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(target) })).status, 202);
-  assert.equal(f.archive.get(posted.id).status, 'pending');
-  await f.archive.cycle(); f.drive.files.get = getFile; await f.archive.cycle(true);
-  const saved = f.archive.get(posted.id); assert.equal(saved.status, 'saved');
+  assert.equal(rebuilt.get(posted.id).target.eventName, '미분류');
+  assert.deepEqual(fs.readFileSync(rebuilt.localPath(rebuilt.get(posted.id))), f.png);
+  assert.equal((await f.original(posted.id).then(r => r.json())).replay, true);
+  f.drive.files.get = getFile; await f.archive.cycle(true);
+  const saved = f.archive.get(posted.id); assert.equal(saved.status, 'saved'); assert.ok(saved.verifiedAt);
   assert.deepEqual(f.remote.get(saved.driveId).bytes, f.png); assert.equal(f.published.length, 1);
+  assert.equal(f.remote.get(saved.target.yearId).name, '2027'); assert.equal(f.remote.get(saved.folderId).name, '미분류');
   assert.equal((await f.original(posted.id, Buffer.from('different bytes'))).status, 400);
 });
 
@@ -145,7 +146,8 @@ test('preview decoding failure preserves the separate original archive workflow'
   const posted = (await response.json()).upload;
   assert.equal(posted.live, 'error'); assert.equal(posted.archive, 'awaiting_original'); assert.equal(f.published.length, 0);
   assert.equal((await f.original(posted.id, bytes)).status, 200);
-  assert.equal(f.archive.get(posted.id).status, 'awaiting_target');
+  assert.notEqual(f.archive.get(posted.id).status, 'awaiting_target');
+  assert.equal(f.archive.get(posted.id).target.eventName, '미분류');
   assert.deepEqual(fs.readFileSync(f.archive.localPath(f.archive.get(posted.id))), bytes);
 });
 
@@ -318,4 +320,19 @@ test('bulk archive: known request IDs are reported per device and a full server 
   assert.deepEqual((await f.get('config').then(r => r.json())).phrases, ['예봄교회 잘 오셨습니다', '새가족을 환영합니다.', '꽃보다 고운 님을 환영합니다.', '2026년 어느 좋은 날 예봄교회에서']);
   f.config.settings.phrases = ['  주일예배를 환영합니다 ', '', 'x'.repeat(60)];
   assert.deepEqual((await f.get('config').then(r => r.json())).phrases, ['주일예배를 환영합니다', 'x'.repeat(40)], 'phrases set later by an administrator are cleaned and replace the defaults');
+});
+
+test('server ignores inherited common targets, freezes capture year and preserves explicit personal selections', async t => {
+  const f = await service(t); f.config.enabled = true;
+  const inherited = { year: '2026', eventName: '옛 공통 행사' };
+  const posted = (await f.preview({ target: inherited, targetSource: 'common', capturedAt: '2025-12-31T23:59:59' }).then(r => r.json())).upload;
+  assert.equal(posted.target.year, '2025'); assert.equal(posted.target.eventName, '미분류');
+  await f.original(posted.id); await f.archive.cycle(true);
+  assert.equal(f.archive.get(posted.id).target.year, '2025');
+  const general = await f.upload({ target: null, capturedAt: '2027-01-01T00:00:00' }).then(r => r.json());
+  await f.archive.cycle(true); assert.equal(f.archive.get(general.upload.id).target.eventName, '미분류');
+  assert.equal(f.archive.get(general.upload.id).target.year, '2027');
+  const explicit = (await f.preview({ target: { year: '2026', eventName: '개인 선택' }, capturedAt: '2025-12-31T23:59:59' }).then(r => r.json())).upload;
+  await f.original(explicit.id); await f.archive.cycle(true);
+  assert.equal(f.archive.get(explicit.id).target.eventName, '개인 선택'); assert.equal(f.archive.get(explicit.id).target.year, '2026');
 });

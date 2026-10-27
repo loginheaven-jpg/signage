@@ -614,7 +614,7 @@ async function openLocation(){
   el('archiveLocationFields').append(el('archiveSetup'));el('archiveSetup').hidden=false;el('archiveSetup').disabled=false;
   const target=settings.target||targetDefault().target;
   el('year').value=target?.year||config.year;el('eventName').value=target?.eventId?'':target?.eventName||'';el('eventDate').value=target?.eventDate||'';el('eventSearch').value='';
-  el('locationSource').textContent=settings.targetSource==='common'?'관리자 공통 행사를 사용 중입니다. 여기서 선택하면 이 폰의 최근 행사로 기억합니다.':'이 폰에서 선택한 행사를 우선 사용합니다. 선택이 없으면 관리자 공통 행사를 사용합니다.';
+  el('locationSource').textContent=settings.targetSource==='common'?'촬영 연도의 미분류 폴더에 자동 보관합니다. 여기서 선택하면 이 폰의 최근 행사로 기억합니다.':'이 폰에서 선택한 행사를 우선 사용합니다. 선택이 없으면 촬영 연도의 미분류 폴더에 자동 보관합니다.';
   el('locationError').textContent='';openDialog('locationDialog');
   await loadFolders(target?.yearId||'',target?.eventId||(target?.eventName?'__new__':''));
 }
@@ -1251,7 +1251,7 @@ function untilActive() {
 }
 function submissionForm(r) {
   const s = r.submission, form = new FormData();
-  for (const [key, value] of Object.entries({ mode: s.mode, target: JSON.stringify(s.target || {}), uploaderName: s.uploaderName,
+  for (const [key, value] of Object.entries({ mode: s.mode, target: JSON.stringify(s.target || {}), targetSource: s.targetSource || '', uploaderName: s.uploaderName,
     requestId: r.requestId, siteId: s.siteId, message: s.message, email: s.email, batchTotal: s.batchTotal,
     capturedAt: s.date, dateSource: s.dateSource, lastModified: r.file.lastModified || '' })) form.append(key, String(value ?? ''));
   return form;
